@@ -99,6 +99,10 @@ pub struct Env {
     pub outputs: Vec<OutputInfo>,
     /// Whether a click outside a popup can be heard (`hyprland_focus_grab_v1`).
     pub focus_grab: bool,
+    /// The output each surface is on, by name, once the compositor has put it
+    /// somewhere: which is how a program that left the choice to the
+    /// compositor (an output of `None`) finds out where it ended up.
+    pub placements: HashMap<window::Id, String>,
 }
 
 /// What a layer surface looks like to the compositor. Lengths are in virtual
@@ -252,6 +256,9 @@ pub struct Surface {
     pub applied: Option<Geometry>,
     destination: Option<(u32, u32)>,
     buffer_scale: i32,
+    /// The output it is on: the one asked for, then the one the compositor
+    /// says it entered.
+    pub output_name: Option<String>,
     /// Bumped whenever the shell has to look at the surface again.
     pub version: u64,
 }
@@ -467,6 +474,14 @@ impl Wl {
         outputs
     }
 
+    /// The output each surface is on, where that is known.
+    pub fn placements(&self) -> HashMap<window::Id, String> {
+        self.surfaces
+            .iter()
+            .filter_map(|(id, surface)| Some((*id, surface.output_name.clone()?)))
+            .collect()
+    }
+
     pub fn has_focus_grab(&self) -> bool {
         self.grab_manager.is_some()
     }
@@ -549,6 +564,10 @@ impl Wl {
             );
         }
 
+        let output_name = output
+            .as_ref()
+            .and_then(|output| self.output_state.info(output)?.name);
+
         let hint = output.as_ref().and_then(|output| self.output_scale(output));
         let scale = hint.unwrap_or(1.0);
 
@@ -604,6 +623,7 @@ impl Wl {
                 applied: Some(geometry),
                 destination: None,
                 buffer_scale: 1,
+                output_name: output_name.clone(),
                 version: 0,
             },
         );
@@ -817,6 +837,11 @@ impl CompositorHandler for Wl {
         };
 
         let guess = self.output_scale(output);
+        let name = self.output_state.info(output).and_then(|info| info.name);
+
+        if let (Some(name), Some(surface)) = (name, self.surfaces.get_mut(&id)) {
+            surface.output_name = Some(name);
+        }
 
         if let (Some(guess), Some(surface)) = (guess, self.surfaces.get_mut(&id)) {
             if !surface.scale_known && (surface.scale - guess).abs() > 1e-6 {

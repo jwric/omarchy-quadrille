@@ -121,6 +121,60 @@ the same on demand.
   panel (Tokyo Night's is 1.6:1 against its ground; quadrille-terminal's is 4.9:1).
 - With a missing or unreadable file the host uses Terminal.
 
+### As a service beside the QML bar: `--no-bar`
+
+`quadrille-bar --no-bar` (alias `--panels-only`) is the host with no bar: no bar
+surface, no exclusive zone, no `wl_surface` at all, and none of the bar's
+timers (no clock, no gauge reading). The process sits on its control socket and
+the theme watcher, and nothing else, until a panel is summoned.
+
+- **Where a panel opens.** With `{"output":"eDP-2"}` on that output. Without it,
+  the surface is made with no output and the compositor puts it on the output
+  that has the focus (Hyprland follows the pointer: in the nested test a panel
+  summoned with the pointer on QB opened on QB, with the pointer on QA on QA).
+  The shell learns where it ended up from `wl_surface.enter` and tells the
+  program (`Env::placements`), which is what `ctl list` prints (`visible on QA`).
+  The per-output scale is taken from the surface's own `preferred_scale`, so the
+  size is exact there: 288 x 549 logical at 1.6667, 320 x 610 at 1 (both
+  crisp, tested). A panel dismisses on an outside click like any other.
+- **What it holds.** When the last surface goes the shell drops the compositor
+  (the renderer, the softbuffer context), and the fonts are loaded into the font
+  system once for the life of the process, not once for every compositor (the
+  font system outlives it, so loading them again would add copies of them on
+  every summon). `quadrille::settings()` is not called at start: besides the
+  settings it makes Departure Mono the fallback family, which touches the global
+  font system and so reads every font installed; `src/graphics.rs` has the same
+  settings (a unit test holds it to `quadrille::settings()`) and does the rest
+  when the first surface is built.
+- **Idle numbers** (the release build on the real session, which is safe: no
+  surface is made, nothing is drawn): resident 9.8 MB before the font change,
+  **8.3 MB** after it, **7.8 MB** (PSS 5.0 MB) for the `service` profile that
+  `tools/install.sh` builds (fat LTO, one codegen unit, stripped). 5 threads (main,
+  the executor, the timer thread, `ipc`, `theme-watch`), 7 ms of CPU in all to
+  start (it was 35 ms), and **0 CPU and no wakeups over ten seconds** after.
+  In the nested test: 8 MB and 0 to 64 us of CPU in three seconds before a panel
+  has ever been shown, and **12 MB** and 0 us afterwards (the font system is
+  loaded and stays). Quickshell on the same machine is 345 MB.
+- **`ctl` with no host** says so and exits 1: `quadrille-bar: the host is not
+  running (there is no socket at ...)`, or `(nothing listens at ...: it is left
+  from a host that died)`, and how to start one.
+- **`tools/install.sh`** builds the `service` profile and installs it to
+  `~/.local/bin/quadrille-bar` (`QUADRILLE_PREFIX` moves it; `--uninstall`
+  removes it): no sudo, no system path, and nothing else touched. It prints the
+  lines to add and leaves them to you:
+
+  ```lua
+  -- ~/.config/hypr/autostart.lua
+  o.launch_on_start("quadrille-bar --no-bar")
+
+  -- ~/.config/hypr/bindings.lua
+  o.bind("SUPER + CTRL + M", "System monitor", "quadrille-bar ctl toggle sysmon")
+  ```
+
+  (`o.launch_on_start` wraps the command in `uwsm-app --`; SUPER + CTRL + M is
+  not bound by Omarchy's defaults.) The installer was run against a scratch
+  prefix, not `~/.local`.
+
 ### How it was tested, and the rules it was tested under
 
 Nothing in this work clicks or types on the real session. Input was tested in a
@@ -139,7 +193,7 @@ Nothing in this work clicks or types on the real session. Input was tested in a
   tool) refuses to run unless `QUADRILLE_NESTED` names the display it was started
   on, which only `nested.sh run` sets. `nested.sh down` is a `kill`, never a
   `hyprctl` (with a lost signature `hyprctl` would talk to the real session).
-- `tools/nested-test.sh` is the whole run: 52 checks, all passing on the final
+- `tools/nested-test.sh` is the whole run: 82 checks, all passing on the final
   build, with screenshots and logs. It covers a bar per output with the right
   size and exclusive zone and crisp pixels on both scales (`tools/crisp.py`:
   few colours, every colour change on the pixel grid); summon and dismissal by a
@@ -150,12 +204,26 @@ Nothing in this work clicks or types on the real session. Input was tested in a
   matches each theme's) through a copy of the state directory, so the real one
   is never touched; a live scale change on a running output (1, 2, 1.25 and
   back to 1.666667: the bar re-sizes to 50, 50, 60 and 45 logical, exact and
-  crisp each time); an output removed (its panel moves) and created again.
+  crisp each time); an output removed (its panel moves) and created again; and
+  the `--no-bar` host: no surface and no reserved space, idle RSS and CPU,
+  a panel on a named output, a panel on the focused output (pointer on QB, QA,
+  QB again: each time on that output, at that output's exact size, crisp),
+  outside-click dismissal, a live theme change, quiet again afterwards, and
+  `ctl` with no host.
 - Not covered: touch, IME, clipboard (none in the shell); the exclusive-keyboard
   fallback against a compositor without the focus grab; more than one seat.
-- Unit tests (`cargo test`, 31): the size rule, the theme mapping, the `/proc`
+- Unit tests (`cargo test`, 38): the size rule, the theme mapping, the `/proc`
   parsers, the sampler, and the host's decisions (surfaces per output, panel
-  placement, keyboard modes, commands and their errors).
+  placement, keyboard modes, commands and their errors, and with `--no-bar`:
+  no surface until a panel, the compositor's choice of output, where a panel
+  goes when its output goes).
+- One flake, compositor side: in one run the nested compositor filtered
+  QB's whole output by half a pixel horizontally for the rest of the run (the
+  bar's screenshot had a blended column at each edge). The host's log in that
+  run is the same as in the passing ones (buffer 3440 x 50, destination
+  3440 x 50, scale 1.0), and five more starts in both creation orders and two
+  more full runs did not show it. When a crispness check fails the test keeps
+  `crisp-failures.log` (monitors and layers at that moment) to diagnose it.
 
 ### Measurements: hidden against shown
 
@@ -458,13 +526,15 @@ Omarchy's bar, decide how the stock one is turned off.
 cd layershell
 cargo build --release
 ./target/release/quadrille-bar                        # a bar on every output
+./target/release/quadrille-bar --no-bar               # panels only, beside another bar
+tools/install.sh                                       # ~/.local/bin, and the lines to add
 ./target/release/quadrille-bar ctl toggle sysmon      # summon, hide, list, ...
 tools/nested-test.sh                                   # the whole input test (about a minute)
 cargo test
 ```
 
-Options of `quadrille-bar`: `--output NAME` (repeatable; the outputs that get a
-bar), `--backend tiny-skia|wgpu`, `--bar-tick-ms MS` (0: the bar's gauges are
+Options of `quadrille-bar`: `--no-bar` / `--panels-only` (no bar: see above),
+`--output NAME` (repeatable; the outputs that get a bar), `--backend tiny-skia|wgpu`, `--bar-tick-ms MS` (0: the bar's gauges are
 never read), `--no-exclusive`, `--height VPX`, `--keyboard-exclusive`,
 `--passive` (panels take no keyboard and no grab: for screenshots on a desktop
 in use), `--theme-dir DIR`, `--open PANEL`, `--exit-after SECS`.

@@ -24,3 +24,12 @@ iced_renderer = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-sc
 opt-level = 3
 lto = "thin"
 debug = "line-tables-only"
+
+# What tools/install.sh builds: smaller and denser, which is a megabyte less
+# resident for a host that sits idle. Slower to build, so it is not the default.
+[profile.service]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = true
+debug = false

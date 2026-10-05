@@ -538,6 +538,7 @@ where
     ));
 
     let mut compositor: Option<Comp<P>> = None;
+    let mut fonts_loaded = false;
     let mut windows: FxHashMap<window::Id, Window<P>> = FxHashMap::default();
     let mut bus = shell::Bus::new();
     let mut declared: HashMap<window::Id, SurfaceSettings> = HashMap::new();
@@ -552,6 +553,7 @@ where
         let env = Env {
             outputs: wl.outputs(),
             focus_grab: wl.has_focus_grab(),
+            placements: wl.placements(),
         };
 
         let wanted: HashMap<_, _> = instance.surfaces(&env).into_iter().collect();
@@ -615,6 +617,15 @@ where
                 .any(|(id, settings)| settings.grab == Grab::Popup && up(id));
 
             wl.sync_grab(&qh, &members, popup);
+        }
+
+        // With no window left there is nothing to draw with: let the graphics
+        // go, so that a host with nothing on screen holds nothing. It is made
+        // again when the next window opens.
+        if windows.is_empty() && compositor.is_some() {
+            log::debug!("no window left: dropping the graphics");
+
+            compositor = None;
         }
 
         // 2. Sleep until something happens: a Wayland event, an action from
@@ -777,8 +788,14 @@ where
 
                 let mut created = created;
 
-                for font in &fonts {
-                    let _ = created.load_font(font.clone());
+                // The font system outlives the compositor, so the fonts go in
+                // once, not once for every time the compositor is made again.
+                if !fonts_loaded {
+                    for font in &fonts {
+                        let _ = created.load_font(font.clone());
+                    }
+
+                    fonts_loaded = true;
                 }
 
                 log::info!("graphics: {:?}", created.information());

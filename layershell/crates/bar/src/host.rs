@@ -76,6 +76,9 @@ pub enum Message {
 pub struct Options {
     /// The outputs that get a bar (and panels); every one does when empty.
     pub outputs: Vec<String>,
+    /// No bar at all: no surface, no exclusive zone, no timer, until a panel is
+    /// summoned. The host is a service for the panels, beside another bar.
+    pub no_bar: bool,
     pub backend: Option<String>,
     /// How often the bar's gauges are read, in milliseconds; 0 never.
     pub bar_tick_ms: u64,
@@ -96,6 +99,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             outputs: Vec::new(),
+            no_bar: false,
             backend: None,
             bar_tick_ms: 2000,
             exclusive: true,
@@ -364,9 +368,7 @@ impl Host {
         for def in PANELS {
             let state = match &self.open {
                 Some(open) if open.panel == def.id => {
-                    let output = self.target(open).unwrap_or_else(|| "?".to_owned());
-
-                    format!("visible on {output}")
+                    format!("visible on {}", self.placed(open))
                 }
                 _ => "hidden".to_owned(),
             };
@@ -388,8 +390,10 @@ impl Host {
         text
     }
 
-    /// The output an open panel is on: where it was asked for if there is a
-    /// bar there, else the first output that has one.
+    /// The output an open panel is asked to be on: where it was asked for if
+    /// that output is there, else the first output that has a bar. With no bar
+    /// there is no first output to prefer, and the answer is `None`: the
+    /// compositor puts the panel on the output that has the focus.
     fn target(&self, open: &Open) -> Option<String> {
         let env = self.env.borrow();
 
@@ -399,11 +403,38 @@ impl Host {
             .filter(|output| self.wants(&output.name))
             .collect();
 
-        open.output
+        let asked = open
+            .output
             .as_ref()
             .filter(|name| outputs.iter().any(|output| &output.name == *name))
-            .cloned()
-            .or_else(|| outputs.first().map(|output| output.name.clone()))
+            .cloned();
+
+        if self.options.no_bar {
+            asked
+        } else {
+            asked.or_else(|| outputs.first().map(|output| output.name.clone()))
+        }
+    }
+
+    /// Where an open panel is, for `list`: the output it was put on, or the
+    /// one the compositor chose for it.
+    fn placed(&self, open: &Open) -> String {
+        if let Some(output) = self.target(open) {
+            return output;
+        }
+
+        let id = self
+            .ids
+            .borrow()
+            .get(&Self::panel_key(open.panel, None))
+            .copied();
+
+        id.and_then(|id| self.env.borrow().placements.get(&id).cloned())
+            .unwrap_or_else(|| "the focused output".to_owned())
+    }
+
+    fn panel_key(panel: &str, output: Option<&str>) -> String {
+        format!("panel:{panel}:{}", output.unwrap_or("*"))
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -419,8 +450,12 @@ impl Host {
                 _ => None,
             }),
             Subscription::run(|| ipc::requests().map(Message::Request)),
-            Subscription::run(minutes),
         ];
+
+        // The bar's clock and gauges, which a host with no bar does not have.
+        if !self.options.no_bar {
+            subscriptions.push(Subscription::run(minutes));
+        }
 
         let theme_dir = self.options.theme_dir.clone();
 
@@ -428,7 +463,7 @@ impl Host {
             theme::changes(dir.clone()).map(|()| Message::ThemeChanged)
         }));
 
-        if self.options.bar_tick_ms > 0 {
+        if self.options.bar_tick_ms > 0 && !self.options.no_bar {
             subscriptions.push(
                 time::every(Duration::from_millis(self.options.bar_tick_ms)).map(|_| Message::Tick),
             );
@@ -478,7 +513,9 @@ impl Host {
             .filter(|output| self.wants(&output.name))
             .collect();
 
-        let mut surfaces: Vec<_> = outputs
+        let bars: &[_] = if self.options.no_bar { &[] } else { &outputs };
+
+        let mut surfaces: Vec<_> = bars
             .iter()
             .map(|output| {
                 (
@@ -511,10 +548,16 @@ impl Host {
 
         if let Some(open) = &self.open {
             let def = panel(open.panel).expect("An open panel is a known one");
+            let output = self.target(open);
 
-            if let Some(output) = self.target(open) {
+            // With a bar on every output there is somewhere to put it; with
+            // none, the compositor decides (an output of `None`).
+            if output.is_some() || self.options.no_bar {
                 surfaces.push((
-                    self.id(format!("panel:{}:{output}", def.id), Role::Panel(def.id)),
+                    self.id(
+                        Self::panel_key(def.id, output.as_deref()),
+                        Role::Panel(def.id),
+                    ),
                     SurfaceSettings {
                         namespace: format!("quadrille-{}", def.id),
                         layer: Layer::Overlay,
@@ -530,7 +573,7 @@ impl Host {
                         } else {
                             KeyboardInteractivity::Exclusive
                         },
-                        output: Some(output),
+                        output,
                         grab: if grab { Grab::Popup } else { Grab::None },
                     },
                 ));
@@ -541,6 +584,9 @@ impl Host {
     }
 
     pub fn view(&self, window: window::Id) -> Element<'_, Message, Theme, iced_renderer::Renderer> {
+        // The first surface is the first time text is measured.
+        crate::graphics::fall_back_to_departure();
+
         let role = self.roles.borrow().get(&window).cloned();
 
         match role {
@@ -688,6 +734,7 @@ mod tests {
         Env {
             outputs: vec![output("A", 1.6667), output("B", 1.0)],
             focus_grab,
+            placements: Default::default(),
         }
     }
 
@@ -921,5 +968,111 @@ mod tests {
         let _ = host.update(Message::CloseRequested(surfaces[0].0));
 
         assert_eq!(panels(&host, &env(true)).len(), 1);
+    }
+
+    fn without_a_bar() -> Options {
+        Options {
+            no_bar: true,
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn without_a_bar_there_is_no_surface_until_a_panel_is_summoned() {
+        let mut host = host(without_a_bar());
+
+        assert!(host.surfaces(&env(true)).is_empty());
+
+        let _ = host.command("summon sysmon");
+
+        assert_eq!(host.surfaces(&env(true)).len(), 1);
+
+        let _ = host.command("hide");
+
+        assert!(host.surfaces(&env(true)).is_empty());
+    }
+
+    #[test]
+    fn without_a_bar_a_panel_is_left_to_the_compositor() {
+        let mut host = host(without_a_bar());
+        host.surfaces(&env(true));
+        let _ = host.command("summon sysmon");
+
+        let panels = panels(&host, &env(true));
+
+        assert_eq!(panels.len(), 1);
+        // The compositor puts it on the output that has the focus.
+        assert_eq!(panels[0].output, None);
+        assert_eq!(panels[0].grab, Grab::Popup);
+        assert_eq!(panels[0].exclusive, Exclusive::None);
+    }
+
+    #[test]
+    fn without_a_bar_a_panel_goes_where_it_is_told() {
+        let mut host = host(without_a_bar());
+        host.surfaces(&env(true));
+        let _ = host.command("summon sysmon {\"output\":\"B\"}");
+
+        assert_eq!(panels(&host, &env(true))[0].output.as_deref(), Some("B"));
+
+        // If that output goes, the compositor's choice stands in.
+        let mut remaining = env(true);
+        remaining.outputs.retain(|output| output.name != "B");
+
+        assert_eq!(panels(&host, &remaining)[0].output, None);
+    }
+
+    #[test]
+    fn a_panel_of_every_kind_is_one_window_per_place() {
+        let mut host = host(without_a_bar());
+        host.surfaces(&env(true));
+
+        let _ = host.command("summon sysmon");
+        let anywhere = host.surfaces(&env(true))[0].0;
+
+        let _ = host.command("summon sysmon {\"output\":\"A\"}");
+        let on_a = host.surfaces(&env(true))[0].0;
+
+        let _ = host.command("summon sysmon");
+
+        assert_ne!(
+            anywhere, on_a,
+            "a panel on another output is another window"
+        );
+        assert_eq!(host.surfaces(&env(true))[0].0, anywhere);
+    }
+
+    #[test]
+    fn list_tells_where_the_compositor_put_a_panel() {
+        let mut host = host(without_a_bar());
+        host.surfaces(&env(true));
+        let _ = host.command("summon sysmon");
+
+        assert!(
+            host.command("list")
+                .0
+                .contains("visible on the focused output")
+        );
+
+        let (id, _) = host.surfaces(&env(true)).remove(0);
+
+        let mut placed = env(true);
+        let _ = placed.placements.insert(id, "B".to_owned());
+
+        host.surfaces(&placed);
+
+        assert!(host.command("list").0.contains("visible on B"));
+    }
+
+    #[test]
+    fn a_click_outside_closes_a_panel_with_no_bar() {
+        let mut host = host(without_a_bar());
+        host.surfaces(&env(true));
+        let _ = host.command("summon demo");
+
+        let (id, _) = host.surfaces(&env(true)).remove(0);
+        let _ = host.update(Message::CloseRequested(id));
+
+        assert!(host.surfaces(&env(true)).is_empty());
     }
 }

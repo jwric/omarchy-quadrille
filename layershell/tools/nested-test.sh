@@ -96,7 +96,14 @@ hex_rgb() { python3 -c "h='$1'.lstrip('#'); print(','.join(str(int(h[i:i+2],16))
 toml() { grep -E "^$2 = " "$OUT/current/theme/colors.toml" | cut -d'"' -f2; }
 
 # Whether a screenshot region is pixel-crisp: few colours, every change on the grid.
-crisp() { python3 "$HERE/tools/crisp.py" "$OUT/$1.png" "$2" "$3" "$1" --check | tee -a "$OUT/crisp.log" >/dev/null; return "${PIPESTATUS[0]}"; }
+crisp() {
+  python3 "$HERE/tools/crisp.py" "$OUT/$1.png" "$2" "$3" "$1" --check | tee -a "$OUT/crisp.log" >/dev/null
+  local status=${PIPESTATUS[0]}
+  if [ "$status" != 0 ]; then
+    { echo "== $1 not crisp"; "$N" ctl monitors; "$N" ctl layers; } >> "$OUT/crisp-failures.log" 2>&1
+  fi
+  return "$status"
+}
 
 cleanup() {
   ctl quit >/dev/null 2>&1; sleep 0.5
@@ -108,6 +115,11 @@ echo "== nested compositor"
 "$N" up || exit 1
 sleep 0.5
 for o in QA QB; do echo "   $o: $(monitor $o)"; done
+
+echo "== ctl with no host running"
+NOHOST=$(ctl list 2>&1); NOHOST_STATUS=$?
+echo "   $(echo "$NOHOST" | head -1)"
+check "ctl says the host is not running, and exits 1" "[ $NOHOST_STATUS = 1 ] && echo \"\$NOHOST\" | grep -q 'the host is not running'"
 
 echo "== a bar on every output, at that output's scale"
 mkdir -p "$OUT/current/theme"
@@ -258,6 +270,94 @@ check "quit answers" "ctl quit | grep -q bye"
 sleep 1
 check "the process exited" "! pgrep -f 'quadrille-bar --output QA' >/dev/null"
 check "the socket is gone" "[ ! -e \"$RUNTIME/$SOCK\" ]"
+
+
+# ------------------------------------------------------------ panels only
+
+# Physical box, "x0,y0,x1,y1", of a surface on an output, and its pixel scale.
+box_of() {
+  local output=$1 namespace=$2
+  read -r _ _ _ _ scale < <(monitor "$output")
+  read -r x y w h < <(surface "$output" "$namespace")
+  python3 -c "s=$scale; print(round($x*s), round($y*s), round(($x+$w)*s), round(($y+$h)*s))" | tr ' ' ','
+}
+pixscale() { read -r _ _ _ _ scale < <(monitor "$1"); python3 -c "print(round(2 * $scale))"; }
+rss_kb() { awk '/VmRSS/ {print $2}' "/proc/$1/status"; }
+cpu_ns() { cat /proc/$1/task/*/schedstat 2>/dev/null | awk '{s+=$1} END {print s+0}'; }
+ours_on_nested() { "$N" ctl layers | grep -c 'namespace: quadrille'; }
+
+echo "== --no-bar: a service for the panels, beside another bar"
+(
+  "$N" run env QUADRILLE_BAR_SOCKET=$SOCK RUST_LOG=iced_layer=debug,quadrille_bar=info \
+    "$BIN/quadrille-bar" --no-bar --theme-dir "$OUT/current" > "$OUT/nobar.log" 2>&1 &
+)
+for _ in $(seq 1 50); do ctl list >/dev/null 2>&1 && break; sleep 0.1; done
+sleep 1.5
+PID=$(pgrep -fn -- '--no-bar --theme-dir')
+check "the host is up" "[ -n \"$PID\" ] && ctl list | grep -q 'output QA'"
+check "no surface of ours on any output" "[ \"\$(ours_on_nested)\" = 0 ]"
+check "no space is claimed on QA or QB" "! \"$N\" ctl monitors | awk '/^Monitor (QA|QB)/{f=1} /^Monitor WAYLAND/{f=0} f&&/reserved/' | grep -qv 'reserved: 0 0 0 0'"
+C0=$(cpu_ns "$PID"); sleep 3; C1=$(cpu_ns "$PID")
+IDLE_RSS=$(rss_kb "$PID")
+echo "   idle, nothing ever shown: RSS $((IDLE_RSS / 1024)) MB, $(( (C1 - C0) / 1000 )) us of CPU in 3 s, $(ls /proc/$PID/task | wc -l) threads"
+check "idle: no CPU to speak of" "[ $(( (C1 - C0) / 1000 )) -lt 2000 ]"
+check "idle: under 10 MB resident" "[ $IDLE_RSS -lt 10240 ]"
+check "ctl list names the outputs and the theme" "ctl list | grep -q 'QB .*scale 1.0000' && ctl list | grep -q 'theme'"
+
+echo "== --no-bar: a panel on a named output, at that output's scale"
+ctl summon sysmon '{"output":"QA"}' >/dev/null
+sleep 1.4
+check "the panel is 288x549 logical on QA" "[ \"\$(surface QA quadrille-sysmon | cut -d' ' -f3-)\" = '288 549' ]"
+check "it is the only surface of ours" "[ \"\$(ours_on_nested)\" = 1 ]"
+shot QA nb_qa_sysmon
+check "the panel is crisp on QA" "crisp nb_qa_sysmon \$(box_of QA quadrille-sysmon) $(pixscale QA)"
+check "list says where it is" "ctl list | grep -q 'sysmon .*visible on QA'"
+check "it asked for a focus grab" "grep -q 'focus grab on' '$OUT/nobar.log'"
+read -r PX PY PW PH < <(surface QA quadrille-sysmon)
+check "a click inside keeps it" "click QA $((PX + 100)) $((PY + 200)) && ctl list | grep -q 'sysmon .*visible'"
+click QA 300 700
+sleep 0.6
+check "a click outside dismisses it" "grep -q 'focus grab cleared' '$OUT/nobar.log' && ctl list | grep -q 'sysmon .*hidden'"
+check "and nothing of ours is left on screen" "[ \"\$(ours_on_nested)\" = 0 ]"
+
+echo "== --no-bar: with no output named, on the output that has the focus"
+for target in QB QA QB; do
+  read -r w h < <(extent "$target")
+  VPTR_EXTENT="${w}x${h}" "$N" run "$BIN/vptr" "$target" move $((w / 2)) $((h / 2)) sleep 300
+  ctl summon sysmon >/dev/null
+  sleep 1.4
+  where=$(ctl list | sed -n 's/^panel  sysmon .*visible on \([A-Za-z0-9-]*\).*/\1/p')
+  echo "   pointer on $target: the panel is on ${where:-?}: $(surface "$target" quadrille-sysmon)"
+  check "pointer on $target: the panel is on $target" "[ \"$where\" = $target ] && [ -n \"\$(surface $target quadrille-sysmon)\" ]"
+  shot "$target" "nb_${target}_focus"
+  want=$([ "$target" = QA ] && echo '288 549' || echo '320 610')
+  check "pointer on $target: it is $want logical, the exact size at that scale" "[ \"\$(surface $target quadrille-sysmon | cut -d' ' -f3-)\" = '$want' ]"
+  check "pointer on $target: it is crisp" "crisp nb_${target}_focus \$(box_of $target quadrille-sysmon) $(pixscale $target)"
+  ctl hide >/dev/null
+  sleep 0.5
+done
+
+echo "== --no-bar: the theme, and what is held afterwards"
+ctl summon sysmon '{"output":"QA"}' >/dev/null
+sleep 1.2
+set_theme tokyo-night
+sleep 1.0
+shot QA nb_qa_tokyo
+read -r PX PY PW PH < <(surface QA quadrille-sysmon)
+check "a panel restyles live (the ground is tokyo-night's)" "[ \"\$(pixel nb_qa_tokyo $((PX + 5)) $((PY + 5)) 1.6666666)\" = 36,40,59 ]"
+set_theme quadrille-terminal
+sleep 0.5
+ctl hide >/dev/null
+sleep 1.0
+C0=$(cpu_ns "$PID"); sleep 3; C1=$(cpu_ns "$PID")
+WARM_RSS=$(rss_kb "$PID")
+echo "   idle after showing panels: RSS $((WARM_RSS / 1024)) MB, $(( (C1 - C0) / 1000 )) us of CPU in 3 s, $(ls /proc/$PID/task | wc -l) threads"
+check "idle again: no CPU to speak of" "[ $(( (C1 - C0) / 1000 )) -lt 2000 ]"
+check "nothing of ours is on screen" "[ \"\$(ours_on_nested)\" = 0 ]"
+check "no space is claimed" "! \"$N\" ctl monitors | awk '/^Monitor (QA|QB)/{f=1} /^Monitor WAYLAND/{f=0} f&&/reserved/' | grep -qv 'reserved: 0 0 0 0'"
+check "quit answers" "ctl quit | grep -q bye"
+sleep 1
+check "the process exited" "! kill -0 $PID 2>/dev/null"
 
 echo
 echo "screenshots and logs in $OUT"

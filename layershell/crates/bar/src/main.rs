@@ -1,5 +1,6 @@
 //! A panel host: a bar on every output, and panels summoned over a socket,
 //! drawn by quadrille on layer-shell surfaces.
+mod graphics;
 mod host;
 mod ipc;
 mod sys;
@@ -16,6 +17,8 @@ usage: quadrille-bar [OPTIONS]
        quadrille-bar ctl COMMAND
 
 options:
+  --no-bar, --panels-only  no bar: no surface, no exclusive zone and no timer
+                         until a panel is summoned (a service beside another bar)
   --output NAME          a bar on this output only; repeat for several (default: all)
   --backend NAME         tiny-skia (the default here) or wgpu
   --bar-tick-ms MS       how often the bar's gauges are read; 0 never (2000)
@@ -50,6 +53,7 @@ fn parse() -> Result<Options, String> {
                     .parse()
                     .map_err(|_| "--bar-tick-ms needs a number")?
             }
+            "--no-bar" | "--panels-only" => options.no_bar = true,
             "--no-exclusive" => options.exclusive = false,
             "--height" => {
                 options.height = value("--height")?
@@ -92,7 +96,25 @@ fn main() {
                 }
             }
             Err(error) => {
-                eprintln!("quadrille-bar is not listening: {error}");
+                let path = ipc::socket_path();
+
+                let why = match error.kind() {
+                    std::io::ErrorKind::NotFound => {
+                        format!("there is no socket at {}", path.display())
+                    }
+                    std::io::ErrorKind::ConnectionRefused => {
+                        format!(
+                            "nothing listens at {}: it is left from a host that died",
+                            path.display()
+                        )
+                    }
+                    _ => format!("{error} at {}", path.display()),
+                };
+
+                eprintln!(
+                    "quadrille-bar: the host is not running ({why}).\n\
+                     Start it with `quadrille-bar --no-bar` (panels only) or `quadrille-bar` (bars and panels)."
+                );
                 std::process::exit(1);
             }
         }
@@ -117,7 +139,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut settings = quadrille::settings();
+    // quadrille::settings(), without reading every font on the machine yet.
+    let mut settings = graphics::settings();
 
     // A panel is a few hundred thousand pixels that change once a second: the
     // CPU is the right place to draw them.
