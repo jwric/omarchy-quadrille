@@ -1373,13 +1373,14 @@ Item {
 
   Component { id: emptyModuleComponent; Item { implicitWidth: 0; implicitHeight: 0; visible: false } }
 
-  // Stock widgets replaced outright by pixel-drawn ones.
+  // Stock widgets replaced outright by pixel-drawn ones. (Workspaces are
+  // drawn for a horizontal bar only; a vertical bar keeps the stock widget.)
   Component { id: menuReplacement; QMenu { } }
   Component { id: workspacesReplacement; QWorkspaces { } }
   function replacementFor(id) {
     switch (id) {
       case "omarchy.menu": return menuReplacement
-      case "omarchy.workspaces": return workspacesReplacement
+      case "omarchy.workspaces": return root.vertical ? null : workspacesReplacement
       default: return null
     }
   }
@@ -1781,7 +1782,8 @@ Item {
     readonly property var moduleSettings: root.entrySettings(entry)
     readonly property string customType: root.customModuleType(entry)
     readonly property var registryMetadata: root.barWidgetRegistry.metadataFor(root.canonicalWidgetId(moduleName))
-    readonly property bool firstParty: registryMetadata && registryMetadata.firstParty === true
+    readonly property bool firstParty: (registryMetadata && registryMetadata.firstParty === true)
+      || root.replacementFor(root.canonicalWidgetId(moduleName)) !== null
     readonly property string pluginApiId: registered ? root.canonicalWidgetId(moduleName) : "bar-entry:" + moduleName
     // Re-evaluate when the registry mutates (Component reference changes,
     // plugin enabled/disabled, etc.). Reading the `widgets` property creates
@@ -1791,9 +1793,10 @@ Item {
       if (customType) return null
       var registryName = root.canonicalWidgetId(moduleName)
       var stock = w[registryName] ? w[registryName].component : null
-      // A replacement stands in for a stock widget only where the stock widget
-      // is on the bar, and only on a horizontal bar.
-      var mine = stock && !root.vertical ? root.replacementFor(registryName) : null
+      // A replacement stands in for its stock widget on a horizontal bar. It
+      // does not need the stock widget to be loaded (a cloned menu takes
+      // omarchy.menu's bar button away with it), so it does not wait for it.
+      var mine = root.replacementFor(registryName)
       return mine ? mine : stock
     }
     // A pixel face drawn over a stock widget that keeps running hidden.

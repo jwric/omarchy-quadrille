@@ -1,6 +1,6 @@
 import QtQuick
 import qs.Commons
-import "../Q"
+import "."
 
 // The bar's click contract, drawn by quadrille. A drop-in for what the bar's
 // slot expects of a button (see Ui/WidgetButton.qml): it registers itself as a

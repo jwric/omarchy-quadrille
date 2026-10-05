@@ -8,8 +8,8 @@ BarWidget {
   id: root
   moduleName: "omarchy.menu"
 
-  implicitWidth: (7 + 2 * 4) * Px.unit
-  implicitHeight: barSize
+  implicitWidth: vertical ? barSize : (7 + 2 * 4) * Px.unit
+  implicitHeight: vertical ? (7 + 2 * 4) * Px.unit : barSize
 
   BarButton {
     id: button
@@ -23,8 +23,10 @@ BarWidget {
     }
 
     Rectangle {
-      x: 0; y: Px.px(2)
-      width: parent.width; height: Px.px(12)
+      x: root.vertical ? Px.centre(parent.width, width) : 0
+      y: root.vertical ? 0 : Px.px(2)
+      width: root.vertical ? Px.px(12) : parent.width
+      height: root.vertical ? parent.height : Px.px(12)
       antialiasing: false
       color: button.down ? Role.hover : (button.hovered ? Role.raised : "transparent")
     }

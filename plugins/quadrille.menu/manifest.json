@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.menu",
+  "name": "Quadrille menu",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The Omarchy command menu on the pixel grid: the body face on whole cells, compact rows, the row under the cursor an inverse block, a pixel chevron for a submenu.",
+  "kinds": ["menu"],
+  "keepLoaded": true,
+  "entryPoints": { "menu": "Menu.qml" },
+  "omarchy": { "clonedFrom": "omarchy.menu" }
+}

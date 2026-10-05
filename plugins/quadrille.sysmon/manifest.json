@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.sysmon",
+  "name": "System gauges",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "Processor and memory load as two labelled stepped gauges. Reads /proc/stat and /proc/meminfo; runs nothing.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Widget.qml" },
+  "barWidget": {
+    "displayName": "System gauges",
+    "description": "CPU and memory load as stepped gauges",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": { "interval": 2000 },
+    "schema": [
+      { "key": "interval", "type": "number", "label": "Sample interval (ms)" }
+    ]
+  }
+}

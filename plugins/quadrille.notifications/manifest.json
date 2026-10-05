@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.notifications",
+  "name": "Quadrille notifications",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The notification daemon and popups, the card redrawn on the pixel grid: a hairline zone, the app in muted caps, the summary in ink, the body wrapped on whole cells.",
+  "kinds": ["service"],
+  "keepLoaded": true,
+  "entryPoints": { "service": "Service.qml" },
+  "omarchy": { "clonedFrom": "omarchy.notifications" }
+}

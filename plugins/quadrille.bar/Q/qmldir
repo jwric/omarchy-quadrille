@@ -3,6 +3,7 @@ singleton Px 1.0 Px.qml
 singleton Role 1.0 Role.qml
 singleton Sprites 1.0 Sprites.qml
 PixelText 1.0 PixelText.qml
+PixelParagraph 1.0 PixelParagraph.qml
 Sprite 1.0 Sprite.qml
 Hairline 1.0 Hairline.qml
 Lamp 1.0 Lamp.qml
@@ -12,3 +13,4 @@ Inverse 1.0 Inverse.qml
 Tab 1.0 Tab.qml
 Group 1.0 Group.qml
 Pressable 1.0 Pressable.qml
+BarButton 1.0 BarButton.qml

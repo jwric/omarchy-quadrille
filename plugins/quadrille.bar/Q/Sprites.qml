@@ -194,6 +194,79 @@ QtObject {
     "......."
   ]
 
+  readonly property var microphoneMuted: [
+    "!.###..",
+    ".!###..",
+    "..!##..",
+    "#.#!#.#",
+    ".###!#.",
+    "...#.!.",
+    "..###.!"
+  ]
+  readonly property var keyboard: [
+    ".......",
+    "#.#.#.#",
+    ".......",
+    "#.#.#.#",
+    ".......",
+    ".#####.",
+    "......."
+  ]
+  readonly property var power: [
+    "...#...",
+    ".#.#.#.",
+    "#..#..#",
+    "#..#..#",
+    "#.....#",
+    ".#...#.",
+    "..###.."
+  ]
+  readonly property var play: [
+    ".#.....",
+    ".##....",
+    ".###...",
+    ".####..",
+    ".###...",
+    ".##....",
+    ".#....."
+  ]
+  readonly property var pause: [
+    ".......",
+    ".##.##.",
+    ".##.##.",
+    ".##.##.",
+    ".##.##.",
+    ".##.##.",
+    "......."
+  ]
+  readonly property var next: [
+    "#....#.",
+    "##...#.",
+    "###..#.",
+    "####.#.",
+    "###..#.",
+    "##...#.",
+    "#....#."
+  ]
+  readonly property var previous: [
+    ".#....#",
+    ".#...##",
+    ".#..###",
+    ".#.####",
+    ".#..###",
+    ".#...##",
+    ".#....#"
+  ]
+  readonly property var lock: [
+    "..###..",
+    ".#...#.",
+    ".#...#.",
+    "#######",
+    "###.###",
+    "###.###",
+    "#######"
+  ]
+
   // The runs of lit pixels of `rows`, row by row, for a Repeater of
   // rectangles: [{ x, y, w, kind }] with kind 0 lit, 1 dim, 2 accent.
   function runs(rows, level) {

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.osd",
+  "name": "Quadrille on-screen display",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "Volume, brightness and status overlays as a pixel-grid card: a 2x pixel icon, a stepped gauge and a readout in the body face.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": { "panel": "Osd.qml" },
+  "omarchy": { "clonedFrom": "omarchy.osd" }
+}
