@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.background",
+  "name": "Quadrille background",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The desktop background with the graticule wallpaper drawn at each output's own pixel grid, so its dither and lines are whole device pixels on every screen; other wallpapers are shown as the stock background shows them.",
+  "kinds": ["service"],
+  "entryPoints": { "service": "Background.qml" },
+  "omarchy": { "clonedFrom": "omarchy.background" }
+}
