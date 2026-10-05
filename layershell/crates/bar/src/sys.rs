@@ -94,15 +94,56 @@ pub fn battery_percent() -> Option<u8> {
     })
 }
 
-/// Local hours, minutes and seconds.
-pub fn local_time() -> (u8, u8, u8) {
-    // SAFETY: `time` and `localtime_r` are given valid pointers.
-    unsafe {
-        let now = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
+/// The local time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LocalTime {
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    /// 0 is Sunday.
+    pub weekday: u8,
+    pub day: u8,
+    /// 0 is January.
+    pub month: u8,
+}
 
-        let _ = libc::localtime_r(&now, &mut tm);
+impl LocalTime {
+    pub fn now() -> Self {
+        // SAFETY: `time` and `localtime_r` are given valid pointers.
+        unsafe {
+            let now = libc::time(std::ptr::null_mut());
+            let mut tm: libc::tm = std::mem::zeroed();
 
-        (tm.tm_hour as u8, tm.tm_min as u8, tm.tm_sec as u8)
+            let _ = libc::localtime_r(&now, &mut tm);
+
+            Self {
+                hour: tm.tm_hour as u8,
+                minute: tm.tm_min as u8,
+                second: tm.tm_sec as u8,
+                weekday: tm.tm_wday as u8,
+                day: tm.tm_mday as u8,
+                month: tm.tm_mon as u8,
+            }
+        }
+    }
+
+    /// `MON 05 OCT`.
+    pub fn date(&self) -> String {
+        const DAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+        const MONTHS: [&str; 12] = [
+            "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+        ];
+
+        format!(
+            "{} {:02} {}",
+            DAYS[usize::from(self.weekday) % 7],
+            self.day,
+            MONTHS[usize::from(self.month) % 12]
+        )
+    }
+
+    /// How long until the minute changes.
+    pub fn until_next_minute(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(60 - self.second.min(59)))
     }
 }

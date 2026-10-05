@@ -39,6 +39,9 @@ use smithay_client_toolkit::{
     delegate_registry, delegate_seat, delegate_shm, registry_handlers,
 };
 
+use crate::focus_grab::protocol::hyprland_focus_grab_manager_v1::HyprlandFocusGrabManagerV1;
+use crate::focus_grab::protocol::hyprland_focus_grab_v1::{self, HyprlandFocusGrabV1};
+
 pub use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 
 use std::collections::HashMap;
@@ -61,6 +64,43 @@ pub enum Exclusive {
     Ignore,
 }
 
+/// A surface's part in a focus grab.
+///
+/// While a [`Popup`](Grab::Popup) is shown, the compositor limits input to the
+/// grab's surfaces (the popups and the [`Member`](Grab::Member)s, a bar whose
+/// button opens the popup, say) and a click anywhere else clears the grab: the
+/// popups then get a `CloseRequested` event. Where the compositor has no focus
+/// grab protocol nothing happens and the program should ask for an exclusive
+/// keyboard instead, which [`Env::focus_grab`] tells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Grab {
+    #[default]
+    None,
+    /// Stays usable while a popup holds the grab.
+    Member,
+    /// Held by the grab, and closed when it is cleared.
+    Popup,
+}
+
+/// An output, as far as a program needs to know it to put surfaces on it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutputInfo {
+    pub name: String,
+    /// The scale it is shown at, which the compositor may refine per surface.
+    pub scale: f64,
+    /// Its size in logical pixels.
+    pub logical_size: (i32, i32),
+}
+
+/// What the shell can tell a program about the compositor it runs on.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Env {
+    /// The outputs there are, by name.
+    pub outputs: Vec<OutputInfo>,
+    /// Whether a click outside a popup can be heard (`hyprland_focus_grab_v1`).
+    pub focus_grab: bool,
+}
+
 /// What a layer surface looks like to the compositor. Lengths are in virtual
 /// pixels: the shell turns them into the logical pixels the protocol speaks,
 /// at the scale of the output the surface is on.
@@ -79,6 +119,7 @@ pub struct SurfaceSettings {
     /// The output to appear on, by name (`eDP-2`); the compositor's choice
     /// when `None`.
     pub output: Option<String>,
+    pub grab: Grab,
 }
 
 impl Default for SurfaceSettings {
@@ -92,6 +133,7 @@ impl Default for SurfaceSettings {
             margin: [0; 4],
             keyboard: KeyboardInteractivity::None,
             output: None,
+            grab: Grab::None,
         }
     }
 }
@@ -267,6 +309,17 @@ pub enum Event {
 
 pub struct FractionalData(window::Id);
 
+struct ActiveGrab {
+    grab: HyprlandFocusGrabV1,
+    members: Vec<window::Id>,
+}
+
+impl Drop for ActiveGrab {
+    fn drop(&mut self) {
+        self.grab.destroy();
+    }
+}
+
 pub struct Wl {
     pub registry_state: RegistryState,
     pub seat_state: SeatState,
@@ -276,6 +329,12 @@ pub struct Wl {
     pub shm: Shm,
     viewporter: Option<WpViewporter>,
     fractional_manager: Option<WpFractionalScaleManagerV1>,
+    grab_manager: Option<HyprlandFocusGrabManagerV1>,
+    grab: Option<ActiveGrab>,
+    /// The members of the grab that was cleared last, so that the same popup
+    /// is not grabbed again until the program has had its say.
+    grab_cleared_for: Option<Vec<window::Id>>,
+    grab_cleared: bool,
     loop_handle: LoopHandle<'static, Wl>,
 
     pub surfaces: HashMap<window::Id, Surface>,
@@ -308,11 +367,13 @@ impl Wl {
 
         let viewporter = globals.bind(qh, 1..=1, GlobalData).ok();
         let fractional_manager = globals.bind(qh, 1..=1, GlobalData).ok();
+        let grab_manager = globals.bind(qh, 1..=1, GlobalData).ok();
 
         log::info!(
-            "wp_viewporter: {}, wp_fractional_scale_manager_v1: {}",
+            "wp_viewporter: {}, wp_fractional_scale_manager_v1: {}, hyprland_focus_grab_manager_v1: {}",
             viewporter.is_some(),
-            fractional_manager.is_some()
+            fractional_manager.is_some(),
+            grab_manager.is_some()
         );
 
         Ok(Self {
@@ -324,6 +385,10 @@ impl Wl {
             shm,
             viewporter,
             fractional_manager,
+            grab_manager,
+            grab: None,
+            grab_cleared_for: None,
+            grab_cleared: false,
             loop_handle,
             surfaces: HashMap::new(),
             by_wl: HashMap::new(),
@@ -376,10 +441,90 @@ impl Wl {
     }
 
     pub fn output_names(&self) -> Vec<String> {
-        self.output_state
-            .outputs()
-            .filter_map(|output| self.output_state.info(&output)?.name)
+        self.outputs()
+            .into_iter()
+            .map(|output| output.name)
             .collect()
+    }
+
+    /// The outputs there are, by name.
+    pub fn outputs(&self) -> Vec<OutputInfo> {
+        let mut outputs: Vec<_> = self
+            .output_state
+            .outputs()
+            .filter_map(|output| {
+                let info = self.output_state.info(&output)?;
+
+                Some(OutputInfo {
+                    name: info.name?,
+                    scale: self.output_scale(&output).unwrap_or(1.0),
+                    logical_size: info.logical_size.unwrap_or((0, 0)),
+                })
+            })
+            .collect();
+
+        outputs.sort_by(|a, b| a.name.cmp(&b.name));
+        outputs
+    }
+
+    pub fn has_focus_grab(&self) -> bool {
+        self.grab_manager.is_some()
+    }
+
+    /// Makes the focus grab the one the program asks for: one while a popup is
+    /// up, holding `members`, and none otherwise. A grab is made again when its
+    /// surfaces change, and a cleared one is gone until the program shows a
+    /// popup again.
+    pub fn sync_grab(&mut self, qh: &QueueHandle<Self>, members: &[window::Id], popup: bool) {
+        let Some(manager) = &self.grab_manager else {
+            return;
+        };
+
+        let wanted = popup && !members.is_empty();
+
+        if !wanted || self.grab_cleared_for.as_deref() != Some(members) {
+            self.grab_cleared_for = None;
+        }
+
+        // A grab that was cleared stays cleared while the same surfaces are up.
+        if wanted && self.grab.is_none() && self.grab_cleared_for.is_some() {
+            return;
+        }
+
+        match &self.grab {
+            Some(active) if wanted && active.members == members => return,
+            None if !wanted => return,
+            _ => {}
+        }
+
+        // Dropping the old grab destroys it.
+        self.grab = None;
+
+        if !wanted {
+            return;
+        }
+
+        let grab = manager.create_grab(qh, GlobalData);
+
+        for id in members {
+            if let Some(surface) = self.surfaces.get(id) {
+                grab.add_surface(surface.wl_surface());
+            }
+        }
+
+        grab.commit();
+
+        log::debug!("focus grab on {members:?}");
+
+        self.grab = Some(ActiveGrab {
+            grab,
+            members: members.to_vec(),
+        });
+    }
+
+    /// Whether the compositor cleared the focus grab since the last call.
+    pub fn take_grab_cleared(&mut self) -> bool {
+        std::mem::take(&mut self.grab_cleared)
     }
 
     pub fn create_surface(
@@ -1029,6 +1174,45 @@ impl Dispatch<WpFractionalScaleV1, FractionalData> for Wl {
     ) {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
             state.set_scale(data.0, f64::from(scale) / 120.0);
+        }
+    }
+}
+
+impl Dispatch<HyprlandFocusGrabManagerV1, GlobalData> for Wl {
+    fn event(
+        _: &mut Self,
+        _: &HyprlandFocusGrabManagerV1,
+        _: <HyprlandFocusGrabManagerV1 as Proxy>::Event,
+        _: &GlobalData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<HyprlandFocusGrabV1, GlobalData> for Wl {
+    fn event(
+        state: &mut Self,
+        grab: &HyprlandFocusGrabV1,
+        event: hyprland_focus_grab_v1::Event,
+        _: &GlobalData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let hyprland_focus_grab_v1::Event::Cleared = event;
+
+        {
+            log::debug!("focus grab cleared");
+
+            // Only the grab we hold counts; one we already replaced is noise.
+            if state
+                .grab
+                .as_ref()
+                .is_some_and(|active| &active.grab == grab)
+            {
+                state.grab = None;
+                state.grab_cleared = true;
+            }
         }
     }
 }

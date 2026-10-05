@@ -3,7 +3,7 @@
 //! for surfaces that are declared by the program instead of opened by it.
 use crate::handle::Handle;
 use crate::keys;
-use crate::wl::{self, SurfaceSettings, Wl};
+use crate::wl::{self, Env, Grab, SurfaceSettings, Wl};
 
 use iced_core as core;
 use iced_core::mouse;
@@ -50,7 +50,11 @@ pub trait Layered: Program {
     /// The surfaces that exist while the program is in `state`. The shell
     /// opens the ones that are new, applies changed settings to the ones that
     /// persist, and closes the ones that are gone.
-    fn surfaces(&self, state: &Self::State) -> Vec<(window::Id, SurfaceSettings)>;
+    ///
+    /// `env` is what the compositor offers: the outputs there are (a bar per
+    /// output is a loop over them) and whether a popup can hear a click
+    /// outside of it.
+    fn surfaces(&self, state: &Self::State, env: &Env) -> Vec<(window::Id, SurfaceSettings)>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -183,8 +187,8 @@ impl<P: Layered> Instance<P> {
         self.program.style(&self.state, theme)
     }
 
-    fn surfaces(&self) -> Vec<(window::Id, SurfaceSettings)> {
-        self.program.surfaces(&self.state)
+    fn surfaces(&self, env: &Env) -> Vec<(window::Id, SurfaceSettings)> {
+        self.program.surfaces(&self.state, env)
     }
 }
 
@@ -545,7 +549,12 @@ where
 
     while running {
         // 1. Make the surfaces that exist the ones the program declares.
-        let wanted: HashMap<_, _> = instance.surfaces().into_iter().collect();
+        let env = Env {
+            outputs: wl.outputs(),
+            focus_grab: wl.has_focus_grab(),
+        };
+
+        let wanted: HashMap<_, _> = instance.surfaces(&env).into_iter().collect();
 
         for id in declared.keys().copied().collect::<Vec<_>>() {
             if !wanted.contains_key(&id) {
@@ -584,6 +593,30 @@ where
             }
         }
 
+        // The focus grab holds the surfaces that are up (a surface that has
+        // not been drawn yet is not mapped, and cannot be grabbed).
+        {
+            let up = |id: &window::Id| windows.contains_key(id);
+
+            // The popups first: the compositor hands the keyboard to the first
+            // surface of a grab, and that should not be the bar.
+            let mut members: Vec<_> = declared
+                .iter()
+                .filter(|(id, settings)| settings.grab != Grab::None && up(id))
+                .map(|(id, settings)| (settings.grab != Grab::Popup, *id))
+                .collect();
+
+            members.sort();
+
+            let members: Vec<_> = members.into_iter().map(|(_, id)| id).collect();
+
+            let popup = declared
+                .iter()
+                .any(|(id, settings)| settings.grab == Grab::Popup && up(id));
+
+            wl.sync_grab(&qh, &members, popup);
+        }
+
         // 2. Sleep until something happens: a Wayland event, an action from
         //    the runtime, or the next time a window wants to be redrawn.
         let timeout = if more_work {
@@ -620,6 +653,19 @@ where
             .map_err(|error| Error::EventLoop(error.to_string()))?;
 
         actions.extend(pending.borrow_mut().drain(..));
+
+        // A click outside the popups of a focus grab: they are asked to close.
+        if wl.take_grab_cleared() {
+            for (id, settings) in &declared {
+                if settings.grab == Grab::Popup {
+                    if let Some(window) = windows.get_mut(id) {
+                        window
+                            .events
+                            .push(Event::Window(window::Event::CloseRequested));
+                    }
+                }
+            }
+        }
 
         // 3. Wayland events: surfaces closed, resized, rescaled; input.
         for (id, event) in std::mem::take(&mut wl.events) {

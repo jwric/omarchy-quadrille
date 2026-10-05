@@ -1,3 +1,5 @@
+//! Refuses to touch anything but a nested compositor (see `main`).
+//!
 //! `vptr OUTPUT move X Y [click [left|right]] [sleep MS] [scroll DY] ...`
 //!
 //! X and Y are logical pixels on the output. Used to drive the spike on a live
@@ -89,6 +91,19 @@ impl Dispatch<ZwlrVirtualPointerV1, ()> for State {
 }
 
 fn main() {
+    // This moves a pointer. It must never be the real one: the display has to
+    // be a nested compositor's, and tools/nested.sh says so by setting
+    // QUADRILLE_NESTED to its name.
+    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
+
+    if display.is_empty() || std::env::var("QUADRILLE_NESTED").as_deref() != Ok(display.as_str()) {
+        eprintln!(
+            "vptr: refusing to run: WAYLAND_DISPLAY={display:?} is not marked as a nested \
+             compositor (QUADRILLE_NESTED). Use tools/nested.sh run vptr ..."
+        );
+        std::process::exit(3);
+    }
+
     let mut args = std::env::args().skip(1);
     let output_name = args.next().expect("usage: vptr OUTPUT COMMAND...");
     let commands: Vec<String> = args.collect();

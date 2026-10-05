@@ -6,6 +6,7 @@
 //! surfaces, so the fork's virtual pixels and nearest-neighbour upscale work
 //! as they do in a window.
 mod app;
+mod focus_grab;
 mod handle;
 mod keys;
 mod shell;
@@ -14,6 +15,6 @@ mod wl;
 pub use app::{Application, application};
 pub use shell::{Error, Layered, run};
 pub use wl::{
-    Anchor, Exclusive, Geometry, KeyboardInteractivity, Layer, SurfaceSettings, geometry, is_exact,
-    logical_for,
+    Anchor, Env, Exclusive, Geometry, Grab, KeyboardInteractivity, Layer, OutputInfo,
+    SurfaceSettings, geometry, is_exact, logical_for,
 };

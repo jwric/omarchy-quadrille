@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="hyprland_focus_grab_v1">
+  <!--
+    Interface of hyprland_focus_grab_v1 as Hyprland implements it, written out
+    from the generated header it installs (/usr/include/hyprland/protocols/
+    hyprland-focus-grab-v1.hpp): the order of requests and events, and their
+    argument types, are what the wire format depends on. The upstream XML is in
+    the hyprland-protocols project, and is the reference.
+  -->
+
+  <description summary="limit input focus to a set of surfaces">
+    This protocol allows clients to grab input focus: while a grab is active,
+    pointer and keyboard focus is limited to the surfaces added to it, and a
+    click anywhere else clears the grab. It is what a popup menu built on a
+    layer surface needs to be dismissed by clicking outside of it.
+
+  </description>
+
+  <interface name="hyprland_focus_grab_manager_v1" version="1">
+    <description summary="manager for focus grabs"/>
+
+    <request name="create_grab">
+      <description summary="create a focus grab"/>
+      <arg name="grab" type="new_id" interface="hyprland_focus_grab_v1"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager"/>
+    </request>
+  </interface>
+
+  <interface name="hyprland_focus_grab_v1" version="1">
+    <description summary="a set of surfaces that hold the focus while active"/>
+
+    <request name="add_surface">
+      <description summary="add a surface to the whitelist"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="remove_surface">
+      <description summary="remove a surface from the whitelist"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="commit">
+      <description summary="commit the whitelist and activate the grab"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the grab"/>
+    </request>
+
+    <event name="cleared">
+      <description summary="the grab was cleared by a click outside of it"/>
+    </event>
+  </interface>
+</protocol>

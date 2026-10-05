@@ -1,6 +1,188 @@
-# quadrille on wlr-layer-shell: feasibility spike
+# quadrille on wlr-layer-shell: the spike and the panel host
 
-## Verdict
+Two stages. Stage 2, the panel host, is first; stage 1, the feasibility spike
+that it grew from (the approaches compared, what the fork needs, fractional
+scale), follows unchanged in substance.
+
+## Stage 2: a panel host with a system monitor
+
+`quadrille-bar` (`crates/bar`) is a bar on every output, and panels that are
+summoned over a socket, on tiny-skia, drawn with quadrille's widgets. It runs
+on `crates/iced_layer`, the layer-shell shell of stage 1, which gained a focus
+grab, an output list and per-output surfaces for it.
+
+### What it does
+
+- **A bar per output**, each at that output's own scale: 25 virtual pixels
+  tall, the compositor's exclusive zone, with a brand block, the clock and
+  date, CPU/MEM/BAT gauges, a NET lamp and a SYS button. On the laptop
+  (1.666667) a virtual pixel is 3 physical pixels and the bar is 1536 x 45
+  logical (exact); on the ultrawide (1) it is 2 and the bar is 3440 x 50. Bars
+  follow the compositor's output list: an output that goes takes its bar, one
+  that comes gets one.
+- **Panels**, one at a time, as overlay popups at the top right, below whatever
+  has claimed the top of the output (exclusive zone 0, so the compositor places
+  them under every bar, quadrille's and Omarchy's alike): `sysmon`, 160 x 305
+  virtual pixels (a multiple of 5, so exact at 1.666667), and `demo`, which has
+  a text field to test the keyboard with.
+- **The control socket**, `$XDG_RUNTIME_DIR/quadrille-bar.sock` (or
+  `$QUADRILLE_BAR_SOCKET`), for a Hyprland binding or an Omarchy menu action:
+
+  ```sh
+  quadrille-bar ctl toggle sysmon            # show it, or hide it if it is shown
+  quadrille-bar ctl summon sysmon '{"output":"eDP-2"}'
+  quadrille-bar ctl hide [sysmon|all]
+  quadrille-bar ctl list                     # panels, outputs (with scale), theme
+  quadrille-bar ctl reload-theme
+  quadrille-bar ctl quit
+  ```
+
+  The answer comes back on the socket and is printed; an `error:` answer makes
+  `ctl` exit with 1. Without an output in the JSON a panel opens on the output
+  whose bar the pointer was last over, else the first. A panel whose output goes
+  away moves to the first. The SYS button toggles `sysmon` on its own output.
+- **Dismissal by a click outside**, through `hyprland_focus_grab_v1`; Escape
+  and the X button close a panel as well.
+- **The theme follows Omarchy**, live.
+- **`sysmon`**: CPU per core as bar gauges (22 here, in three columns, red past
+  90 %), RAM and swap, the network over the last minute as a strip chart
+  (received in the live colour, sent in the accent, the scale round and printed),
+  battery/power if there is one (percent, status, watts), and the four busiest
+  processes (the biggest, when nothing is busy). All from `/proc` and `/sys`:
+  `/proc/stat`, `/proc/meminfo`, `/proc/net/dev`, `/proc/PID/stat`,
+  `/sys/class/power_supply`. It samples once a second **only while it is shown**:
+  its subscription exists only then, so a hidden panel has no timer, no thread
+  work and no state to keep current. It starts from a baseline taken when it is
+  shown and reads again 250 ms later, so the first rates arrive at once.
+
+### The focus grab
+
+Hyprland implements `hyprland_focus_grab_v1` (it installs the generated header;
+Quickshell's `HyprlandFocusGrab` is built on it). The XML is not installed, so
+`crates/iced_layer/protocols/hyprland-focus-grab-v1.xml` is written out from
+that header (order of requests and events, argument types: the wire format
+depends on nothing else), with wayland-scanner generating the bindings; the
+upstream XML is the reference. A surface declares a part in the grab
+(`SurfaceSettings::grab`: `Popup`, `Member`, `None`) and the shell holds one
+grab while a popup is up. What was found, against a real Hyprland:
+
+- A click outside a grabbed surface sends `cleared`; the click itself goes to
+  the popup (with coordinates outside it), not to what is under it. The shell
+  gives the popups a `CloseRequested` event, and the host hides the panel.
+- **The grab gives the keyboard to an arbitrary surface of the grab** if the
+  popup does not already have it: with the bar in the grab as a member, the
+  keyboard went to the bar. So only the popup is in the grab, and the keyboard
+  then stays on it (typing into the demo panel's field works, Escape closes).
+- The SYS button therefore toggles without being a member: clicking it while a
+  panel is open is a click outside, which clears the grab and hides the panel;
+  clicking it with none open opens one.
+- A cleared grab is not made again while the same popup stays up, whatever the
+  program does with `CloseRequested`.
+- Where the protocol is absent (`Env::focus_grab` is false) a panel takes the
+  keyboard exclusively instead (Escape or X to close; no outside click), as it
+  does with `--keyboard-exclusive`. That branch is unit-tested; it was not run
+  against a compositor that lacks the protocol, because none was at hand.
+
+### The theme
+
+`~/.local/state/omarchy/current/theme.name` names the theme and
+`current/theme/colors.toml` has its colours. `omarchy theme set` stages a
+directory, removes `theme`, moves the staged one in and writes the name, so the
+host watches the `current` directory with inotify (one thread blocked in
+`read`, nothing while nothing changes), waits for a burst of events to end
+(120 ms), reads both again and redraws every surface. `ctl reload-theme` does
+the same on demand.
+
+- `quadrille-terminal`, `-paper`, `-phosphor`, `-amber`, `-lcd` are quadrille's
+  own themes, used as they are.
+- Any other theme gets a palette built from its `colors.toml` (the roles
+  Omarchy themes all have; `tools/gen_themes.py` writes the same ones from
+  quadrille's palettes, and the mapping is its reverse):
+
+  | palette role | from `colors.toml` |
+  |---|---|
+  | `void` | `background` |
+  | `ground` | `lighter_background` (5 % from `background` towards the ink if missing or the same) |
+  | `raised`, `hover` | the ground, 8 % and 16 % of the way to the ink |
+  | `edge` | `selection`, or 22 % to the ink if that is too close to the ground to see |
+  | `ink` | `foreground` |
+  | `muted`, `faint` | the ground, 70 % and 35 % of the way to the ink |
+  | `line` | the ground, 45 % of the way to the ink |
+  | `accent` | `accent` |
+  | `on_accent` | `background` or `foreground`, whichever is further from the accent |
+  | `highlight` | the ground, 35 % of the way to the accent |
+  | `live`, `caution`, `alarm` | `green`, `yellow`, `red` |
+
+  The steps are the proportions quadrille's own palettes use, so
+  `quadrille-terminal`'s `colors.toml` run through the mapping comes back to
+  `Palette::TERMINAL` exactly in the roles the file carries, and within a few
+  levels in the rest (unit-tested). `muted` and `faint` are mixed rather than
+  taken from the file because Omarchy's `muted` is often too dark to read on a
+  panel (Tokyo Night's is 1.6:1 against its ground; quadrille-terminal's is 4.9:1).
+- With a missing or unreadable file the host uses Terminal.
+
+### How it was tested, and the rules it was tested under
+
+Nothing in this work clicks or types on the real session. Input was tested in a
+**nested Hyprland**, started by `tools/nested.sh`:
+
+- Hyprland 0.56 has no headless-only mode (`CBackend::create()` fails without a
+  DRM session), so a nested one is a *window of the real session* while it runs
+  (about a minute for the whole test). Inside it, `hyprctl output create
+  headless` makes outputs that are not windows: `QA` (2560 x 1600 at 1.666667,
+  like the laptop) and `QB` (3440 x 1440 at 1, like the ultrawide), both placed
+  by `hl.monitor` rules in a Lua config (the legacy `.conf` makes Hyprland draw a
+  deprecation banner into every screenshot). `grim` and the virtual pointer and
+  keyboard clients work on them.
+- `tools/nested.sh run CMD` points a command at the nested compositor, and
+  refuses if that is not up or is the real display. `vptr` (the virtual pointer
+  tool) refuses to run unless `QUADRILLE_NESTED` names the display it was started
+  on, which only `nested.sh run` sets. `nested.sh down` is a `kill`, never a
+  `hyprctl` (with a lost signature `hyprctl` would talk to the real session).
+- `tools/nested-test.sh` is the whole run: 52 checks, all passing on the final
+  build, with screenshots and logs. It covers a bar per output with the right
+  size and exclusive zone and crisp pixels on both scales (`tools/crisp.py`:
+  few colours, every colour change on the pixel grid); summon and dismissal by a
+  click outside, a click inside keeping the panel, SYS toggling; the control
+  socket's commands and errors; the panel moving between outputs; the keyboard
+  (typing into the demo field, Escape); live `omarchy theme set`-style changes
+  (tokyo-night, quadrille-paper, quadrille-terminal, white: the bar's ground
+  matches each theme's) through a copy of the state directory, so the real one
+  is never touched; a live scale change on a running output (1, 2, 1.25 and
+  back to 1.666667: the bar re-sizes to 50, 50, 60 and 45 logical, exact and
+  crisp each time); an output removed (its panel moves) and created again.
+- Not covered: touch, IME, clipboard (none in the shell); the exclusive-keyboard
+  fallback against a compositor without the focus grab; more than one seat.
+- Unit tests (`cargo test`, 31): the size rule, the theme mapping, the `/proc`
+  parsers, the sampler, and the host's decisions (surfaces per output, panel
+  placement, keyboard modes, commands and their errors).
+
+### Measurements: hidden against shown
+
+On the real session, rendering only (`--passive`: no keyboard, no grab, and no
+input of mine), eDP-2 at 1.666667, release build, 25 s after a 7 s settle. The
+bar's gauges are read every 2 s by default (`--bar-tick-ms`); the clock ticks
+once a minute, on the minute.
+
+| case | CPU | ctx switches | RSS (PSS) | threads |
+|---|---|---|---|---|
+| tiny-skia, sysmon hidden, gauges off | **0.000 %** | 0/s | 12.4 MB (9.2) | 5 |
+| tiny-skia, sysmon hidden, gauges every 2 s | 0.060 % (0.6 ms/s) | 7/s | 13.5 MB | 5 |
+| tiny-skia, sysmon shown, gauges off | 0.90 % (9.0 ms/s) | 16/s | 17.4 MB (12.1) | 5 |
+| tiny-skia, sysmon shown, gauges every 2 s | 1.00 % (10 ms/s) | 19/s | 17.4 MB | 5 |
+| wgpu, sysmon hidden | 0.010 % | 0.1/s | 120 MB (77) | 12 |
+| wgpu, sysmon shown | 0.92 % | 15/s | 126 MB (83) | 13 |
+
+Hidden, with nothing ticking, the host does not run: 0 CPU and 0 wakeups.
+Shown, a sample and a redraw cost about 9 ms a second (0.9 % of a core), most of
+it reading some 600 `/proc/PID/stat` files; the redraw itself is 0.7 ms (median
+`prepare` 46 us, `draw` 20 us, `present` 0.9 ms at 480 x 915 physical pixels).
+The processes could be read every other sample to halve that; it was left at a
+fixed one-second cadence, as asked.
+
+## Stage 1: the feasibility spike
+
+### Verdict
 
 **Feasible, and it already works.** A quadrille application runs as a
 layer-shell bar plus a popup on Hyprland 0.56, crisp at the laptop's 1.6667
@@ -23,9 +205,9 @@ re-expressed for surfaces that the program declares.
 
 The recommendation is tiny-skia for panels (see "Measurements").
 
-## What I evaluated, and why I chose what I chose
+### What I evaluated, and why I chose what I chose
 
-### 1. `iced_layershell` 0.19.1 (waycrate): rejected, by reading its source
+#### 1. `iced_layershell` 0.19.1 (waycrate): rejected, by reading its source
 
 - It builds on the **crates.io iced 0.14** crates (`iced_core = "0.14"`,
   `iced_runtime`, `iced_renderer`, `iced_graphics`, `iced_program`). The fork
@@ -42,7 +224,7 @@ The recommendation is tiny-skia for panels (see "Measurements").
 - It does confirm the architecture: it also drives iced's own compositors from
   raw handles and uses `wp_viewporter` + `wp_fractional_scale`.
 
-### 2. `layershellev` 0.19.1 (its windowing core): viable fallback, not used
+#### 2. `layershellev` 0.19.1 (its windowing core): viable fallback, not used
 
 It is independent of iced (sctk 0.20, calloop 0.14, xkbcommon, fractional
 scale, viewporter, cursor shape, popups; 3.2k lines) and exposes raw handles
@@ -52,20 +234,20 @@ to own that, and because its callback loop wants to own the event loop. If
 maintaining sctk glue turns out to be a chore, this is what to try in place of
 `wl.rs`.
 
-### 3. Own sctk shell on the fork's compositors: chosen
+#### 3. Own sctk shell on the fork's compositors: chosen
 
 `wl.rs` is the Wayland side and knows nothing about iced; `shell.rs` is the
 iced side. Both renderers work with the same code, so **GPU and CPU rendering
 are one flag apart** (`--backend`).
 
-### 4. Bypass: tiny-skia into our own wl_shm buffers: not needed
+#### 4. Bypass: tiny-skia into our own wl_shm buffers: not needed
 
 `iced_tiny_skia`'s compositor already draws the virtual-pixel framebuffer on
 the CPU and upscales it by the integer pixel scale into a softbuffer
 (`wl_shm`) buffer, only the damaged region. Given a raw `wl_surface` it does
 exactly what the bypass would. Writing it again would only add code.
 
-## What the fork needs
+### What the fork needs
 
 Nothing. Things I ran into, none a blocker:
 
@@ -85,7 +267,7 @@ Nothing. Things I ran into, none a blocker:
   SurfaceSettings)>`), and the shell opens, updates and closes them to match.
   A popup is `if state.popup { surfaces.push(..) }`: Elm-shaped, no window tasks.
 
-## How it works (`crates/iced_layer`)
+### How it works (`crates/iced_layer`)
 
 - `wl.rs`: sctk + calloop. Binds `zwlr_layer_shell_v1`, `wp_viewporter`,
   `wp_fractional_scale_manager_v1`, seats (keyboard with repeat; pointer with
@@ -103,15 +285,16 @@ Nothing. Things I ran into, none a blocker:
   `wayland-backend` is built with `client_system` so the pointers are
   libwayland's, which wgpu (Vulkan WSI) and softbuffer both need.
 - `keys.rs`: xkb keysyms to iced keys. `app.rs`: an
-  `application(boot, update, view, surfaces)` builder.
-- `crates/bar`: the demo (`quadrille-bar`): a bar with brand block, workspace
-  tabs, clock, CPU/MEM/BAT gauges, NET/MIC lamps and a SYS button that opens
-  the popup (gauges, a theme selector, a text field), plus a unix socket
-  (`ctl`) to summon it. `crates/vptr`: a test tool that moves and clicks a
-  `wlr-virtual-pointer`, since nothing else here could drive a pointer on a
-  live compositor.
+  `application(boot, update, view, surfaces)` builder, where `surfaces` gets an
+  `Env` (the outputs, and whether the focus grab exists) and says which
+  surfaces there should be. `focus_grab.rs`: the generated bindings of
+  `hyprland_focus_grab_v1` (stage 2).
+- `crates/bar`: `quadrille-bar`, the host of stage 2 (in the spike, a bar and a
+  popup with a socket to summon it). `crates/vptr`: a test tool that moves and
+  clicks a `wlr-virtual-pointer`; it refuses to run except against a nested
+  compositor (see stage 2).
 
-## Fractional scale: what actually happens at 1.6667
+### Fractional scale: what actually happens at 1.6667
 
 Hyprland tells every surface `wp_fractional_scale_v1.preferred_scale(200)`
 (200/120). The shell does what the protocol asks: buffer scale stays 1, the
@@ -160,7 +343,7 @@ change under a running surface. The code path is there (a new preferred scale
 re-derives the geometry, asks for a new size, rebuilds the viewport and
 `configure_surface`s) but it was not exercised.
 
-## Input
+### Input
 
 - **Pointer**: enter/leave/motion/buttons/axis, converted from surface-local
   logical pixels to layout pixels with `x x scale / viewport.scale_factor()`.
@@ -173,22 +356,19 @@ re-derives the geometry, asks for a new size, rebuilds the viewport and
   (text-input-v3), touch, drag and drop, accessibility.
 
 Keyboard focus on Hyprland is where behaviour is not what a bar author would
-guess:
+guess (found in the spike, on the real session):
 
 - Hyprland gives a new `on_demand` layer surface keyboard focus when it maps,
   but with `follow_mouse` it **takes it away again as soon as the pointer is
   elsewhere**. A popup summoned over IPC while the mouse was over another
   window got its focus and lost it within a frame. So "close on unfocus", the
-  obvious way to dismiss a popup, closes an IPC-summoned one at once. It is
-  `--close-on-unfocus` here, off by default.
-- Layer-shell has no "click outside". For a keyboard-driven panel use
-  `KeyboardInteractivity::Exclusive` (`--keyboard exclusive`, which I used to
-  type into the popup safely). For a mouse-driven popup that should go away when
-  clicked off, Hyprland implements `hyprland_focus_grab_v1` (it ships the
-  generated header; Quickshell's `HyprlandFocusGrab` is built on it). That is
-  the right thing to add next, and a small protocol.
+  obvious way to dismiss a popup, closes an IPC-summoned one at once; the host
+  does not use it.
+- Layer-shell has no "click outside": that is what the focus grab of stage 2
+  is for. For a keyboard-driven panel `KeyboardInteractivity::Exclusive` is the
+  other way.
 
-## Measurements
+### Measurements
 
 Machine: Intel Core Ultra 9 185H (Arc iGPU) + RTX 4060; eDP-2 at 1.6667,
 2560 x 1600; the bar is 1536 x 45 logical = 2560 x 75 physical.
@@ -241,48 +421,57 @@ Reading it:
   my tests) but the order of magnitude holds: an iced/quadrille panel is a few
   percent of its memory.
 
-## Not done, and risks
+### Not done, and risks
 
-- **Scale change under a live surface**: coded, not exercised.
-- **Output hotplug / `closed`**: the shell drops a surface the compositor
-  closes and recreates it half a second later while the program still declares
-  it; not exercised. A real bar wants one surface per output, declared from the
-  output list (`Wl::output_names` is there for that).
+Stage 1 listed a scale change under a live surface, output hotplug, a focus
+grab and a surface per output as not done: stage 2 did them, and tested them in
+a nested compositor. What is left:
+
 - **wgpu on a hidden output**: Vulkan WSI on Wayland can block `present` until a
   frame callback that a switched-off output never sends, freezing the
   single-threaded loop. Not observed (default `AutoVsync`); `vsync: false` is the
-  mitigation. Moot on tiny-skia.
-- **Focus grab**, **clipboard**, **IME**, as above.
-- Layer ordering is the compositor's: while Omarchy's own `omarchy-bar` holds
-  the top 32 px this bar sits under it and exclusive zones add up (checked: the
-  reserved area grew by the bar's 50 px on the ultrawide and went back on exit).
-  A real replacement would hide the stock bar's surface first.
+  mitigation. Moot on tiny-skia, which the host uses by default.
+- **Clipboard** (requests are dropped, so a text field cannot copy or paste),
+  **IME**, touch, drag and drop, accessibility: not in the shell.
+- **The real Omarchy bar**: while `omarchy-bar` holds the top 32 px quadrille's
+  bar sits under it and exclusive zones add up. Replacing it means hiding that
+  surface (the shell's own configuration), which this work does not touch.
+- **A compositor that closes a surface** (an output that disappears) drops it
+  and the host asks for it again half a second later if its output is still
+  listed; with the output gone the host stops declaring it, which is what the
+  hotplug test exercises.
+- **No other compositor was tried.** The focus grab is Hyprland's; sway and the
+  like would take the exclusive-keyboard fallback, which is unit-tested only.
 
-## Recommended next step
+### Recommended next step
 
-Turn this into a panel host: keep `iced_layer` and tiny-skia; add
-`hyprland_focus_grab_v1` (outside-click dismissal, and a solid IPC-summoned
-flow), one surface per output, and a `summon <id> <json>` command on the
-existing socket; then put one real panel (the clock/calendar or the audio
-mixer) behind `omarchy-shell shell summon`. Keep wgpu as a flag.
+Pick the next real panel from the Omarchy shell's list (the audio mixer, the
+calendar, the notification centre) and port it the way `sysmon` was done:
+a module with a sampler (or a subscription) that exists only while the panel is
+shown, a view built from quadrille's widgets, and an entry in `PANELS`. Wire
+`quadrille-bar ctl toggle <id>` to the existing menu actions. Before replacing
+Omarchy's bar, decide how the stock one is turned off.
 
-## Running it
+### Running it
 
 ```sh
 cd layershell
 cargo build --release
-./target/release/quadrille-bar --output eDP-2 --backend tiny-skia --no-exclusive
-./target/release/quadrille-bar ctl toggle-popup   # also open-popup, close-popup, quit
+./target/release/quadrille-bar                        # a bar on every output
+./target/release/quadrille-bar ctl toggle sysmon      # summon, hide, list, ...
+tools/nested-test.sh                                   # the whole input test (about a minute)
+cargo test
 ```
 
-Options: `--output NAME`, `--backend wgpu|tiny-skia`, `--tick-ms MS` (0 =
-static), `--popup`, `--no-exclusive`, `--height VPX`, `--keyboard
-exclusive|on-demand`, `--close-on-unfocus`, `--exit-after SECS` (checked on
-ticks). `RUST_LOG=iced_layer=debug` logs geometry and focus;
-`ICED_LAYER_STATS=1` prints timings on exit. Escape closes the popup.
-`crates/vptr` (`vptr eDP-2 move X Y click`) drives a virtual pointer for
-testing; it moves the real cursor, so mind what is under it.
+Options of `quadrille-bar`: `--output NAME` (repeatable; the outputs that get a
+bar), `--backend tiny-skia|wgpu`, `--bar-tick-ms MS` (0: the bar's gauges are
+never read), `--no-exclusive`, `--height VPX`, `--keyboard-exclusive`,
+`--passive` (panels take no keyboard and no grab: for screenshots on a desktop
+in use), `--theme-dir DIR`, `--open PANEL`, `--exit-after SECS`.
+`RUST_LOG=iced_layer=debug` logs geometry, focus and grabs;
+`ICED_LAYER_STATS=1` prints timings on exit.
 
-Reproducing the crispness check: `grim -o eDP-2 out.png`, then over the bar's
-rows count the distinct colours (7 for a crisp bar) and check that every colour
-change falls on a multiple of the pixel scale from the surface's origin.
+`tools/crisp.py IMAGE X0,Y0,X1,Y1 PIXEL_SCALE` is the crispness check of the
+tests: over a region of a `grim` screenshot, the number of distinct colours (7 to
+10 for a bar or a panel) and whether every colour change falls on a multiple of
+the pixel scale from the surface's own origin.

@@ -1,6 +1,6 @@
 //! A builder for programs that live on layer surfaces.
 use crate::shell::{self, Error, Layered};
-use crate::wl::SurfaceSettings;
+use crate::wl::{Env, SurfaceSettings};
 
 use iced_core::theme;
 use iced_core::window;
@@ -14,7 +14,7 @@ type Boot<State, Message> = Box<dyn Fn() -> (State, Task<Message>)>;
 type Update<State, Message> = Box<dyn Fn(&mut State, Message) -> Task<Message>>;
 type View<State, Message, Theme> =
     Box<dyn for<'a> Fn(&'a State, window::Id) -> Element<'a, Message, Theme, Renderer>>;
-type Surfaces<State> = Box<dyn Fn(&State) -> Vec<(window::Id, SurfaceSettings)>>;
+type Surfaces<State> = Box<dyn Fn(&State, &Env) -> Vec<(window::Id, SurfaceSettings)>>;
 
 /// The shape of an application whose windows are layer surfaces: what a
 /// `iced::daemon` is, with the windows declared by the state instead of
@@ -37,7 +37,7 @@ pub fn application<State, Message, Theme>(
     boot: impl Fn() -> (State, Task<Message>) + 'static,
     update: impl Fn(&mut State, Message) -> Task<Message> + 'static,
     view: impl for<'a> Fn(&'a State, window::Id) -> Element<'a, Message, Theme, Renderer> + 'static,
-    surfaces: impl Fn(&State) -> Vec<(window::Id, SurfaceSettings)> + 'static,
+    surfaces: impl Fn(&State, &Env) -> Vec<(window::Id, SurfaceSettings)> + 'static,
 ) -> Application<State, Message, Theme>
 where
     State: 'static,
@@ -139,7 +139,7 @@ where
     Message: Send + 'static,
     Theme: theme::Base + 'static,
 {
-    fn surfaces(&self, state: &Self::State) -> Vec<(window::Id, SurfaceSettings)> {
-        (self.surfaces)(state)
+    fn surfaces(&self, state: &Self::State, env: &Env) -> Vec<(window::Id, SurfaceSettings)> {
+        (self.surfaces)(state, env)
     }
 }

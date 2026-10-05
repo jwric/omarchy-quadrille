@@ -15,6 +15,7 @@ iced_renderer.workspace = true
 
 smithay-client-toolkit = { version = "0.20", default-features = true }
 wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-scanner = "0.31"
 wayland-client = "0.31"
 calloop = "0.14"
 raw-window-handle = "0.6"
