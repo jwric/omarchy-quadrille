@@ -1404,8 +1404,20 @@ Item {
   Component { id: audioSkin; AudioSkin { } }
   Component { id: monitorSkin; MonitorSkin { } }
   Component { id: powerSkin; PowerSkin { } }
+  // Popup clones (plugins/quadrille.audio ... : the host's own panels redrawn on
+  // the pixel grid) stand in for the stock widget of the same name. They wear
+  // its skin, and, like the stock widget, are handed the bar itself rather than
+  // the third-party facade, so a clone sees what the stock popup saw.
+  readonly property var popupClones: ({
+    "quadrille.audio": "omarchy.audio", "quadrille.bluetooth": "omarchy.bluetooth",
+    "quadrille.network": "omarchy.network", "quadrille.monitor": "omarchy.monitor",
+    "quadrille.power": "omarchy.power", "quadrille.weather": "omarchy.weather",
+    "quadrille.clock": "omarchy.clock", "quadrille.tailscale": "omarchy.tailscale",
+    "quadrille.agents": "omarchy.agents"
+  })
+  function stockIdOf(id) { return root.popupClones[id] || id }
   function skinFor(id) {
-    switch (id) {
+    switch (root.stockIdOf(id)) {
       case "omarchy.clock": return clockSkin
       case "omarchy.keyboard-layout": return keyboardSkin
       case "omarchy.network": return networkSkin
@@ -1806,6 +1818,7 @@ Item {
     readonly property var registryMetadata: root.barWidgetRegistry.metadataFor(root.canonicalWidgetId(moduleName))
     readonly property bool firstParty: (registryMetadata && registryMetadata.firstParty === true)
       || root.replacementFor(root.canonicalWidgetId(moduleName)) !== null
+      || root.popupClones[root.canonicalWidgetId(moduleName)] !== undefined
     readonly property string pluginApiId: registered ? root.canonicalWidgetId(moduleName) : "bar-entry:" + moduleName
     // Re-evaluate when the registry mutates (Component reference changes,
     // plugin enabled/disabled, etc.). Reading the `widgets` property creates

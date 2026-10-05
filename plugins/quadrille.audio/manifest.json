@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.audio",
+  "name": "Quadrille audio",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "Volume, output and input pickers and the per-app mixer on the pixel grid: stepped sliders, an inverse block for the device in use, brackets for the keyboard cursor.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Audio",
+    "description": "Volume slider, output picker, per-app mixer",
+    "category": "Audio",
+    "allowMultiple": false
+  },
+  "omarchy": { "clonedFrom": "omarchy.audio" }
+}

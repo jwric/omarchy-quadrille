@@ -14,3 +14,17 @@ Tab 1.0 Tab.qml
 Group 1.0 Group.qml
 Pressable 1.0 Pressable.qml
 BarButton 1.0 BarButton.qml
+BigText 1.0 BigText.qml
+QPopup 1.0 QPopup.qml
+QSwitch 1.0 QSwitch.qml
+QButton 1.0 QButton.qml
+QRow 1.0 QRow.qml
+QSlider 1.0 QSlider.qml
+QMeter 1.0 QMeter.qml
+QReading 1.0 QReading.qml
+QScroll 1.0 QScroll.qml
+QHero 1.0 QHero.qml
+QEmpty 1.0 QEmpty.qml
+QField 1.0 QField.qml
+QTip 1.0 QTip.qml
+singleton PanelSprites 1.0 PanelSprites.qml

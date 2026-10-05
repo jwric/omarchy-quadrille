@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.power",
+  "name": "Quadrille power",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "Battery, charge and power profiles on the pixel grid: a stepped charge bar, readings in two columns, the profile in use an inverse block.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Power",
+    "description": "Battery status, charge cycles and power profiles",
+    "category": "System",
+    "allowMultiple": false
+  },
+  "omarchy": { "clonedFrom": "omarchy.power" }
+}
