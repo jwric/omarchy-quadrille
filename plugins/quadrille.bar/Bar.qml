@@ -88,9 +88,9 @@ Item {
   property bool centerHoverRevealSuppressed: false
   property int barConfigSerial: 0
   property string position: "top"
-  // Resolves through fontconfig at paint time (Style.font.family defaults
-  // to "monospace"), so changing the system font (via `omarchy-font-set`)
-  // updates the bar without a reload.
+  // The body face, not the system monospace: the bar is laid out in 6 x 12
+  // cells and the stock widgets take their label font from here, so they land
+  // on the same cells. (Needs "Departure Mono Tight": tools/install.sh.)
   property string fontFamily: Px.face
   // Bound to the central Color singleton so the bar tracks shell.toml's
   // [bar] section. Property names kept for the rest of this file's bindings.
