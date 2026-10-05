@@ -349,6 +349,13 @@ Item {
       })
     }
 
+    // The icons named by absolute path: ask which of the files exist.
+    if (typeof root.appLibrary.checkIcons === "function") {
+      var files = []
+      for (var a = 0; a < appRows.length; a++) if (String(appRows[a].appIcon).charAt(0) === "/") files.push(appRows[a].appIcon)
+      root.appLibrary.checkIcons(files)
+    }
+
     var merged = MenuModel.mergeAppRows(root.items, root.itemOrder, appRows)
     root.items = merged.items
     root.itemOrder = merged.itemOrder
@@ -501,6 +508,31 @@ Item {
   // Label with the ✓ marker baked in when `checked:` evaluated truthy.
   function labelFor(entry) {
     return MenuModel.labelFor(entry, root.checkedResults)
+  }
+
+  // A label marked as the current choice carries a check mark the face has no
+  // glyph for; the row draws a tick sprite instead (see `isChecked`).
+  function isChecked(label) {
+    return /[\u2713\u2714]/.test(String(label || ""))
+  }
+
+  // Text for a pixel face: the Nerd Font icons some labels carry (private-use
+  // characters, which the face has no glyph for) are left out, with the
+  // brackets and the space that held them.
+  function clean(text) {
+    return String(text || "")
+      .replace(/[\ue000-\uf8ff]|[\udb80-\udbff][\udc00-\udfff]|[\u2713\u2714]/g, "")
+      .replace(/\(\s*\)/g, "")
+      .replace(/\s+/g, " ")
+      .replace(/^\s+|\s+$/g, "")
+  }
+
+  // `text` cut to `columns` cells: an ellipsis at the end and no space before it.
+  function fitCells(text, columns) {
+    var chars = Array.from(String(text || ""))
+    if (chars.length <= columns) return chars.join("")
+    if (columns < 2) return ""
+    return chars.slice(0, columns - 1).join("").replace(/\s+$/, "") + "\u2026"
   }
 
   function searchableToken(value) {
@@ -1153,7 +1185,7 @@ Item {
           }
         }
 
-        ConfirmDialog {
+        Confirm {
           id: deleteConfirm
 
           anchors.fill: parent
@@ -1271,19 +1303,13 @@ Item {
                 y: contentColumn.y + labelText.y + root.g.centre(labelText.height, height)
               }
 
-              Image {
+              AppIcon {
                 id: appIconImage
                 visible: row.isApp
-                width: root.g.px(11)
-                height: root.g.px(11)
-                smooth: false
-                fillMode: Image.PreserveAspectFit
-                // Decode at physical pixels — a logical-size decode leaves
-                // PNG icons upscaled and blurry on HiDPI displays.
-                sourceSize.width: Math.round(width * root.g.dpr)
-                sourceSize.height: Math.round(height * root.g.dpr)
+                cells: 11
                 source: row.isApp && root.appLibrary ? root.appLibrary.iconSource(row.appIcon) : ""
-                asynchronous: true
+                label: row.label
+                ink: row.hasCursor ? root.selectedText : Role.muted
                 anchors.left: parent.left
                 anchors.leftMargin: root.rowReservedBorderLeft + root.g.px(4) + root.g.centre(root.g.px(14), width)
                 y: contentColumn.y + labelText.y + root.g.centre(labelText.height, height)
@@ -1300,16 +1326,14 @@ Item {
 
                 PixelText {
                   id: labelText
-                  text: row.label
+                  text: root.fitCells(root.clean(row.label), root.g.columns(contentColumn.width))
                   ink: row.hasCursor ? root.selectedText : root.foreground
-                  columns: root.g.columns(contentColumn.width)
                 }
 
                 PixelText {
-                  text: row.detail
+                  text: root.fitCells(root.clean(row.detail), root.g.columns(contentColumn.width))
                   visible: (root.filterText || row.kind === "dmenu") && row.detail.length > 0
-                  ink: Role.muted
-                  columns: root.g.columns(contentColumn.width)
+                  ink: row.hasCursor ? root.selectedText : Role.muted
                 }
               }
 
@@ -1325,6 +1349,12 @@ Item {
                   visible: row.kind === "menu" || row.kind === "link"
                   rows: Sprites.chevronRight
                   color: row.hasCursor ? root.selectedText : Role.muted
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+                Sprite {
+                  visible: (root.isChecked(row.label) || row.icon === "\u2713") && !(row.kind === "menu" || row.kind === "link")
+                  rows: Sprites.tick
+                  color: row.hasCursor ? root.selectedText : Role.live
                   anchors.verticalCenter: parent.verticalCenter
                 }
               }
@@ -1372,34 +1402,22 @@ Item {
               && resultList.originY + resultList.contentHeight - resultList.height - resultList.contentY > 0
           }
 
-          Column {
-            x: root.g.centre(parent.width, width)
-            y: root.g.centre(parent.height, height)
-            spacing: root.g.px(4)
+          // Nothing to list: a magnifier and a muted line, on the row's own height.
+          Row {
+            x: root.g.px(5)
+            y: root.g.centre(parent.height, root.g.line)
+            spacing: root.g.px(3)
             visible: displayModel.count === 0 && root.mode !== "input"
 
-            Item {
-              width: root.g.px(150)
-              height: root.g.px(14)
-              Text {
-                anchors.centerIn: parent
-                text: "󰈉"
-                color: Role.muted
-                font.family: root.fontFamily
-                renderType: Text.NativeRendering
-                font.pixelSize: Math.round(11 * root.g.unit)
-              }
+            Sprite {
+              rows: Pictograms.search
+              color: Role.muted
+              anchors.verticalCenter: parent.verticalCenter
             }
-
-            Item {
-              width: root.g.px(150)
-              height: root.g.line
-              PixelText {
-                text: root.filterText ? "No matches for “" + root.filterText + "”" : "Nothing here yet"
-                ink: Role.muted
-                columns: root.g.columns(parent.width)
-                x: root.g.centre(parent.width, width)
-              }
+            PixelText {
+              text: root.filterText ? "No matches" : "Nothing here yet"
+              ink: Role.muted
+              columns: root.g.columns(resultList.width - root.g.px(5 + 7 + 3 + 4))
             }
           }
         }

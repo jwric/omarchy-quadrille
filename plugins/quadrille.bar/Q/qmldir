@@ -2,8 +2,11 @@ module Q
 singleton Px 1.0 Px.qml
 singleton Role 1.0 Role.qml
 singleton Sprites 1.0 Sprites.qml
+singleton Pictograms 1.0 Pictograms.qml
 PixelText 1.0 PixelText.qml
 PixelParagraph 1.0 PixelParagraph.qml
+PixelIcon 1.0 PixelIcon.qml
+AppIcon 1.0 AppIcon.qml
 Sprite 1.0 Sprite.qml
 Hairline 1.0 Hairline.qml
 Lamp 1.0 Lamp.qml
@@ -14,6 +17,7 @@ Tab 1.0 Tab.qml
 Group 1.0 Group.qml
 Pressable 1.0 Pressable.qml
 BarButton 1.0 BarButton.qml
+Confirm 1.0 Confirm.qml
 BigText 1.0 BigText.qml
 QPopup 1.0 QPopup.qml
 QSwitch 1.0 QSwitch.qml
@@ -25,6 +29,7 @@ QReading 1.0 QReading.qml
 QScroll 1.0 QScroll.qml
 QHero 1.0 QHero.qml
 QEmpty 1.0 QEmpty.qml
+singleton PanelSprites 1.0 PanelSprites.qml
 QField 1.0 QField.qml
 QTip 1.0 QTip.qml
-singleton PanelSprites 1.0 PanelSprites.qml
+Scrim 1.0 Scrim.qml

@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import "Q"
+import "Q/Glyphs.js" as Glyphs
 import "OsdModel.js" as OsdModel
 
 // quadrille.osd: omarchy.osd (cloned; MIT) with its card replaced.
@@ -30,12 +31,15 @@ Item {
   readonly property int gap: 8
   readonly property int iconSize: 14
   readonly property int gaugeCells: 20
+  // A message wraps on this many cells, over at most two lines.
   readonly property int maxMessage: 36
+  readonly property int maxLines: 2
 
   readonly property real fraction: maxValue > 0 ? value / maxValue : 0
-  readonly property string readout: hasProgress ? message : (message.length > maxMessage
-    ? message.slice(0, maxMessage - 1) + "…" : message)
-  readonly property var look: spriteFor(iconKey, Math.round(fraction * 100))
+  readonly property string readout: message
+  readonly property int messageColumns: Math.min(Glyphs.length(root.readout), maxMessage)
+  readonly property int messageLines: hasProgress ? 1 : Math.max(1, Math.min(maxLines, Glyphs.wrap(root.readout, Math.max(1, messageColumns), maxLines).length))
+  readonly property var look: spriteFor(iconKey, hasProgress ? Math.round(fraction * 100) : 100)
 
   // The icon for a key from the payload, and the level its waves show.
   function spriteFor(key, percent) {
@@ -55,6 +59,12 @@ Item {
     if (k === "media-next" || k === "player-next") return { rows: Sprites.next, level: 9 }
     if (k === "media-previous" || k === "player-previous") return { rows: Sprites.previous, level: 9 }
     if (k === "lock") return { rows: Sprites.lock, level: 9 }
+    if (k === "touchpad") return { rows: Pictograms.touchpad, level: 9 }
+    if (k === "touch" || k === "touchscreen") return { rows: Pictograms.touchscreen, level: 9 }
+    if (k === "media" || k === "player" || k === "media-source" || k === "player-source") return { rows: Sprites.play, level: 9 }
+    // a caller may pass the glyph itself, as the stock icon table does: the
+    // few of them in use are mapped, the rest are a bell
+    if (k === "\udb80\udfda") return { rows: Pictograms.download, level: 9 }
     return { rows: Sprites.bell, level: 9 }
   }
 
@@ -116,11 +126,12 @@ Item {
 
     Rectangle {
       id: card
+      readonly property real content: panel.g.px(Math.max(root.iconSize, root.hasProgress ? root.iconSize : root.messageLines * 12))
       width: panel.g.px(root.pad * 2 + root.iconSize + root.gap)
         + (root.hasProgress ? panel.g.px(root.gaugeCells * 4 - 1 + root.gap) + readoutBox.width
-                            : (root.readout.length > 0 ? root.readout.length * panel.g.cellW : 0))
+                            : root.messageColumns * panel.g.cellW)
         + panel.g.px(2)
-      height: panel.g.px(root.pad * 2 + root.iconSize + 2)
+      height: panel.g.px(root.pad * 2 + 2) + content
       x: panel.g.centre(parent.width, width)
       y: parent.height - height - panel.g.px(32)
       color: Role.edge
@@ -136,7 +147,7 @@ Item {
       Sprite {
         id: iconSprite
         x: panel.g.px(root.pad + 1)
-        y: panel.g.px(root.pad + 1)
+        y: panel.g.px(root.pad + 1) + panel.g.centre(card.content, height)
         unit: 2 * panel.g.unit
         rows: root.look.rows
         level: root.look.level
@@ -175,11 +186,13 @@ Item {
         }
       }
 
-      PixelText {
+      PixelParagraph {
         visible: !root.hasProgress
         x: iconSprite.x + iconSprite.width + panel.g.px(root.gap)
-        y: panel.g.px(root.pad + 1) + panel.g.centre(iconSprite.height, height)
+        y: panel.g.px(root.pad + 1) + panel.g.centre(card.content, height)
         text: root.readout
+        columns: Math.max(1, root.messageColumns)
+        maxLines: root.maxLines
         ink: Role.ink
       }
     }

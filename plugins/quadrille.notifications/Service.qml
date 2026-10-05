@@ -51,6 +51,7 @@ Item {
   readonly property int defaultBarSize: barVertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
   readonly property int liveBarSize: shell && shell.bar && !shell.bar.barHidden ? Math.max(0, shell.bar.barSize) : defaultBarSize
   readonly property int barClearance: liveBarSize + Style.gapsOut
+  readonly property bool barVisible: !(shell && shell.bar && shell.bar.barHidden)
 
   // Live Notification objects by originalId, kept OUT of the ListModels: a
   // QObject stored in a model role becomes a dangling C++ pointer when the
@@ -971,6 +972,15 @@ Item {
       readonly property var popupPlacement: NotificationLogic.popupPlacement(
         service.barPosition, service.barClearance, Style.gapsOut)
 
+      // Where the stack starts, on this screen's grid: 4 vpx clear of the
+      // screen edge, and of the bar when the bar is on that edge. The bar's own
+      // height is a whole number of vpx (16), not what its size hint says: the
+      // hint is in logical pixels and the frame is not, at a fractional scale.
+      readonly property real barEdge: service.barVisible
+        ? (service.barVertical ? g.ceil(service.liveBarSize) : g.px(Px.barVpx)) : 0
+      readonly property real edgeTop: g.px(4) + (service.barPosition === "top" ? barEdge : 0)
+      readonly property real edgeRight: g.px(4) + (service.barPosition === "right" ? barEdge : 0)
+
       // Full-screen, fixed-size surface (like the OSD overlay). Adding or
       // removing a toast changes only the content inside; the Wayland surface
       // never resizes, so the compositor can't briefly scale a stale buffer --
@@ -985,8 +995,8 @@ Item {
         id: popupColumn
         anchors.right: parent.right
         anchors.top: parent.top
-        anchors.topMargin: popupWindow.g.snap(popupWindow.popupPlacement.margins.top)
-        anchors.rightMargin: popupWindow.g.snap(popupWindow.popupPlacement.margins.right)
+        anchors.topMargin: popupWindow.edgeTop
+        anchors.rightMargin: popupWindow.edgeRight
         spacing: popupWindow.g.px(4)
 
         Repeater {

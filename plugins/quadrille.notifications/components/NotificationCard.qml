@@ -48,7 +48,9 @@ Item {
   readonly property string plainBody: plain(NotificationLogic.sanitizeBody(body, app, appIcon))
   readonly property bool singleLine: plainBody.length === 0
   readonly property bool critical: urgency === 2
-  readonly property bool hasIcon: smallIconSource.length > 0 && iconImage.status !== Image.Error
+  // An icon column when the sender named a picture, even one that cannot be
+  // read: the icon is drawn then as its placeholder, not left out.
+  readonly property bool hasIcon: image.length > 0 || appIcon.length > 0
 
   function iconSource(icon) {
     var value = String(icon || "")
@@ -65,7 +67,25 @@ Item {
       .replace(/<[^>]*>/g, "")
       .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"")
       .replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&")
+      .replace(/[ \t]*\n[ \t\n]*/g, "\n")
       .replace(/^\s+|\s+$/g, "")
+  }
+
+  // A glyph toast leads with a mark. The glyph itself is a vector shape from a
+  // Nerd Font; the few that omarchy sends have a pixel icon, any other gets a
+  // bell.
+  function markFor(glyph) {
+    var cp = String(glyph || "").codePointAt(0)
+    switch (cp) {
+    case 0xF012C: return Sprites.tick          // check
+    case 0xF0156: return Sprites.cross         // close
+    case 0xF014D: return Pictograms.clipboard  // copy
+    case 0xF0432: return Pictograms.image      // QR code
+    case 0xF0D11: return Pictograms.text       // text from a selection
+    case 0xF140B: return Sprites.plug          // flash: the battery
+    case 0xF0379: return Sprites.brightness    // the internal display
+    default:      return Sprites.bell
+    }
   }
 
   // ---- geometry, in vpx
@@ -103,22 +123,16 @@ Item {
     }
   }
 
-  // The app icon, nearest-neighbour: an icon is a picture, not a drawing, and
-  // is not smoothed into one.
-  Image {
+  // The app icon, redrawn on a 16 x 16 grid of virtual pixels (see AppIcon);
+  // its placeholder when there is no picture to draw.
+  AppIcon {
     id: iconImage
     visible: root.hasIcon
     x: g.px(1 + root.padX)
     y: g.px(1 + root.padY)
-    width: g.px(root.iconBox)
-    height: g.px(root.iconBox)
+    cells: root.iconBox
     source: root.smallIconSource
-    sourceSize.width: width * Screen.devicePixelRatio
-    sourceSize.height: height * Screen.devicePixelRatio
-    fillMode: Image.PreserveAspectFit
-    asynchronous: true
-    smooth: false
-    mipmap: false
+    label: root.app.length > 0 ? root.app : root.summary
   }
 
   Column {
@@ -153,13 +167,11 @@ Item {
         visible: root.hasGlyph && !root.hasIcon
         width: 2 * g.cellW
         height: g.line
-        Text {
-          anchors.centerIn: parent
-          text: root.glyph
+        Sprite {
+          rows: root.markFor(root.glyph)
           color: Role.ink
-          font.family: Px.face
-          font.pixelSize: Math.round(11 * root.g.unit)
-          renderType: Text.NativeRendering
+          x: g.px(2)
+          y: g.onCaps(7)
         }
       }
       PixelParagraph {

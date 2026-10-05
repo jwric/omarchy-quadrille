@@ -350,3 +350,176 @@ and not fixable from a plugin, so the clone does not depend on it:
 
 If a later Omarchy fixes the facade the fallback is simply not used. Any other
 third-party menu clone will hit the same thing.
+
+## Popup panels (agent P)
+
+### Why spacing, not only type: the theme tokens
+
+The stock popups are laid out in pixels for 12 px type (`Style.space(480)`, rows
+`space(28)`, hero `space(14)` gaps). Ours is 22. Pinning the *font* tokens alone
+cannot fix that: the weather card's temperature overlapped its FEELS label with
+`heading` and `display-large` pinned any way at all, because the labels in that row
+are `bodySmall` and `title`, which have nowhere smaller than 22 to go on the pixel
+grid (11 would be half a virtual pixel per font pixel). What fixed every stock popup
+(audio, bluetooth, network, monitor, power, weather, clock, agents, on both
+outputs: no overlap, clipping or truncation) is making the spacing grow with the
+type: `[spacing] scale = 2.0`, `scale-with-font = false` in the theme. Every
+`Style.space(n)` is then `2n` logical px, which is `n` virtual pixels at scale 1, and
+it no longer depends on `[font] base-size` (the machine's own `~/.config/omarchy/shell.toml`
+says 12; with `scale-with-font` on, that was what kept the margins whole, and it is no
+longer load-bearing).
+
+The type pins: body and everything up to a heading 22, display 44, display-large 44,
+icon-large 33. No pin exceeds its stock ratio to the body (stock 10 11 12 13 14 16 24
+28 over 12) except caption and body-small, which cannot go below 22. Display stays
+at 2x because stock is 24 / 12. 33 is the only size besides 66 that is a whole
+number of device pixels per font pixel on both outputs (3 x 11 at scale 1, 5 x 11 at
+1.666667).
+
+Measured on the eDP-2 laptop output and HDMI-A-1, `[spacing] scale` is the one
+setting that moves the unskinned stock widgets' margins too (`WidgetButton`'s
+`horizontalMargin 7.5` is scaled); the bar's widths did not change.
+
+### The popup kit (`quadrille.bar/Q`)
+
+The stock popups are made of a handful of host components (`KeyboardPanel`,
+`PanelHero`, `PanelSectionHeader`, `PanelSlider`, `ToggleSwitch`, `CursorSurface`,
+`Button`, `TextField`, `PanelToolTip`), imported as `qs.Ui`, which a plugin cannot
+restyle. The clones keep each panel's logic verbatim (properties, services,
+processes, keyboard model, `Model.js` untouched) and replace the view with these:
+
+| Piece | What it is |
+|---|---|
+| `QPopup` | `KeyboardPanel`'s contract (`anchorItem owner bar open centerOnBar focusTarget contentWidth contentHeight fittedContentWidth/Height`, the dismiss twins on other outputs, the bar click forwarding, the Exclusive-then-OnDemand focus prime) with a flat `ground` card in a 1-vpx `edge` hairline, square, snapped to this screen's grid. No fade. `cardWidth(cells)` is the card for that many text cells; `fittedContentHeight(h, cap)` is whole vpx and capped to the screen; `g`, `inset`, `innerWidth` |
+| `QHero` | icon at 2x (a 7 x 7 sprite, 2 vpx a pixel), title in ink over a muted caps line; children go at the right, vertically placed by the caller |
+| `QRow` | a list row: icon, name (wraps to `maxLines`, only the last ends in an ellipsis), `sub` line, `detail` reading on the right, `current` (inverse block), `hasCursor` (brackets), `dimmed`; whatever is put inside is parked at its right and gets clicks first. Signals `clicked(button)`, `hovered()` |
+| `QSlider` | stepped cells lit to the value, no knob: click or drag sets the cell under the pointer, wheel steps, right click is `rightClicked()`. `discrete` makes a picker of `maximum - minimum + 1` choices. `redline` lights cells past it in alarm |
+| `QMeter` | the same cells as a full-width reading (charge, token use, a microphone's level) |
+| `QSwitch` | a 15 x 9 box, a 5 x 5 knob left when off, right on the accent when on; brackets for the keyboard |
+| `QButton` | a hairline legend a line tall (a `Tab`'s box); `active` is the accent block, `hasCursor` brackets, `danger`, an optional 7 x 7 icon |
+| `QReading` | name muted left, value ink right; the name is dropped, not cut, when both do not fit |
+| `QScroll` | whole-pixel scroll (a wheel notch is 14 vpx), a one-pixel mark at the right edge, `ensureItemVisible(item)`, a fixed gutter so wrapped text does not reflow when the mark appears |
+| `QField` | a hairline box over a hidden `TextInput`: steady block cursor, the stretch around the cursor when long, `password`, `keyPressed(event)` |
+| `QTip` `QEmpty` `BigText` | a raised hairline tooltip; an icon and a muted line for an empty list; PixelText at 2x or 3x |
+| `PanelSprites` | 7 x 7 icons the bar and overlays do not have. Each clone keeps its own in an `Icons.qml` beside it rather than editing a shared singleton (also: a singleton is cached by the engine and needs a shell restart, an `Icons.qml` reloads with the plugin) |
+
+All geometry is whole virtual pixels counted from the card; widths are in text cells
+(`panel.cardWidth(44)`), so a label never lands on half a cell. Sections are `Group`
+(`┌── NAME ──┐`, no sides, no bottom). The keyboard cursor and the pointer share one
+mark, as the stock panels do.
+
+Opening them for a screenshot: `omarchy-shell shell summon omarchy.audio '{}'` works
+(it resolves the id to the enabled clone and calls the bar's `summonBarWidget`), the
+popup opening on the focused output. `plugins/tools/popup-shots.sh` wraps it:
+empty workspaces on both outputs first, a baseline grab, then each popup, then
+the user's workspaces and focus back; a grab is discarded unless every output showed
+an empty workspace. Hyprland 0.56 takes dispatchers as Lua expressions
+(`hyprctl dispatch 'hl.dsp.focus({ workspace = "8" })'`); `focus({ monitor = "eDP-2" })`
+moves between outputs.
+
+### How a clone plugs in
+
+`omarchy.clonedFrom` in the manifest, the stock id kept inside the code as its IPC
+target (`ipcTarget`, `moduleName` unchanged: the host routes the stock id to the
+enabled clone). `omarchy plugin enable quadrille.audio` replaces `omarchy.audio` in
+the bar layout and `plugin disable` puts it back. The bar (`Bar.qml`:
+`popupClones`, `stockIdOf`) treats a clone as the stock widget it replaces: it wears
+the same skin and is handed the bar itself instead of the third-party `PluginBarApi`
+facade (which has no `iconSlot` and would have given `bar.shell` the service-less
+entry shell). The facade's `shell` still has `summon`, `updateEntryInline`,
+`firstPartyServiceFor` (null) and `pluginCloneMaySummon` allows an audio clone
+to summon the OSD and a network clone the speedtest and wifiqr.
+
+## Status at pause (agent B: the bar and the kit)
+
+**Done and verified** (both monitors, `crisp.py`-style: colour transitions only on
+multiples of 2 px at scale 1 and 3 px at 1.666667, at most 7 colours a section):
+the whole bar is now pixel-exact, with no stock glyph left in it. New this round:
+
+* `skins/QIndicators.qml` replaces `omarchy.indicators`: dictation, screen
+  recording, reminder, night light, DND, stay-awake as 7 x 7 sprites (lit in a
+  tone, faint when off, unlit ones revealed with the centre hover). Same sources
+  and `omarchy.indicators refresh` IPC as the stock widget.
+* Skins over the stock widgets: `WeatherSkin` (a sprite per condition, from the
+  panel's own `label` glyph, and the temperature as text), `UpdateSkin`,
+  `AgentsSkin` (robot and a 4-cell gauge), `MediaSkin`, `MicrophoneSkin`,
+  `ActiveWindowSkin`, `KeyboardSkin`. `Skin.deep(name)` finds a value the stock
+  widget keeps in a child. 30 new sprites in `Q/Sprites.qml`
+  (`plugins/tools/preview_sprites.py` draws them without a shell).
+* Layout budget in `Bar.qml`: sections know where the centre group ends
+  (`centerLeftEdge`/`centerRightEdge`), every slot is offered `room`, and elastic
+  widgets (tray, media, title) give way; the right section is placed on the grid
+  counted from the window's origin (a 2560-px surface is not a multiple of 3).
+* `Q/PixelIcon.qml` + `Q/shaders/pixelicon.frag(.qsb)`: any app icon redrawn as
+  11 x 11 (or any size) pixel art, in one fragment shader (4 x 4 box filter per
+  cell, alpha cut at 0.5, 4 levels a channel, near-white/black low-saturation
+  pixels take the ink so symbolic icons survive any theme). Rebuild shaders with
+  `plugins/tools/build_shaders.sh` (`/usr/lib/qt6/bin/qsb`).
+
+**In progress, disabled: the pixel tray** (`skins/QTray.qml`, `TrayMenu.qml`,
+`PopupFrame.qml`; `Bar.qml` has `property bool pixelTray: false`). It renders
+(isolated harness: pinned icons inline, a chevron popup listing the rest, menus
+with submenus, separators, ticks, disabled rows) and `omarchy-shell quadrille.tray
+drawer|manage|menu <i>|close` drives it. But: **with `fake_sni.py` items registered
+the live shell stopped answering IPC for as long as they lived** (main thread asleep
+at 0% CPU, not spinning, so a blocking wait, probably on the fake item's D-Bus, not
+a QML loop; real items 1Password and Claude never did it). Not yet found whether it
+is the tool (it may answer `GetAll` badly: give it a proper
+`org.freedesktop.DBus.Properties`) or QTray. So the stock tray is back until
+that is known. To resume: set `pixelTray: true`, test only with the real items first
+(`omarchy-shell quadrille.tray drawer`), then with `fake_sni.py`, always in a
+short flock.
+
+**Next, in order:** (1) settle the tray hang as above, enable it, measure its
+popups on both screens; (2) screenshots for `plugins/screenshots/` of the bar with
+the new widgets (empty workspace, wallpaper only) and a `bar-states.png` of forced
+states; (3) a QWorkspaces tab for an urgent workspace (`HyprlandWorkspace.urgent`);
+(4) vertical bars: left/right keep stock widgets inside the pixel frame (only the
+menu button is ours); bottom works (hairline on top, popups open upward) but is not
+re-measured; (5) tailscale/dropbox skins (not in this layout); (6) the robot sprite
+reads as an invader.
+
+**Learned (a fresh agent needs these):**
+* Never `pkill -f` a pattern that appears in your own `bash -c` command line: it
+  kills the shell (exit 144). Use `pgrep -f '[p]attern'` or kill by pid.
+* A command waiting for the flock counts against the 120 s tool limit and goes to
+  the background: queue is long; keep sequences short and few.
+* The empty-workspace switch needs `sleep 0.4` between `hl.dsp.focus({ monitor =
+  "X" })` and `hl.dsp.focus({ workspace = "N" })`, or the second lands on the old
+  monitor. Verify with `hyprctl monitors -j` before and after a grim
+  (`scratchpad/shot.sh` does); workspaces 4 (HDMI-A-1) and 5 (eDP-2) are empty.
+* `Canvas.loadImage("image://icon/...")` aborts the shell (QPixmap off the GUI
+  thread), `drawImage(Image item)` draws nothing, `grabToImage` URLs (`itemgrabber:`)
+  do not load in a Canvas: that is why `PixelIcon` is a shader.
+* `window.devicePixelRatio` is the window's, `Screen.devicePixelRatio` is not.
+* `plugins/tools/testroot.sh DIR` makes an isolated Quickshell root (the shell's
+  `Commons`/`Ui` linked, our plugins linked by name) to try one component in, in
+  seconds, without touching the live shell; `QSTEST_SCREEN=eDP-2` picks the screen.
+* A scratch Quickshell that crashes posts a persistent "Process crashed: quickshell"
+  critical toast: `omarchy-shell notifications dismissAll`.
+* Agent P's popup clones (`quadrille.audio`, `quadrille.power`, ...) replace the
+  layout ids; `Bar.qml`'s `popupClones` map makes them wear the original's skin.
+
+## Status at pause (agent O: menu, OSD, notifications, overlays, app icons, wallpaper)
+
+Done and checked (offscreen render at both scales, see the harness below):
+
+* **Menu** (`quadrille.menu`): empty state no longer overflows its card (magnifier sprite and one line on the row's own height); the sub-text of the row under the cursor is on_accent (was muted on amber, unreadable); Nerd Font icon characters in labels are left out (they drew as boxes); the `✓` marker is a tick sprite on the right (the face has no `✓`; provider rows such as the font list now show the current one); an ellipsis no longer follows a space; the delete confirmation is the pixel `Confirm` (kit); icons are `AppIcon`. `LocalApps.iconSource` returns "" for a missing icon, and absolute-path icons are offered to an Image only once a one-shot `test -f` says the file exists, so the "Cannot open" warnings are gone and the entry shows the placeholder (a hairline box and the app's initial).
+* **OSD** (`quadrille.osd`): touchpad, touch screen, download and `media` icons (were a bell); a message wraps over two lines instead of being cut at 36 characters; a message OSD with a volume icon is no longer drawn muted.
+* **Notifications** (`quadrille.notifications`): the stack starts 4 vpx under the bar's real height (`Px.barVpx`, not `bar.barSize`, which says 32 px on a 29 px bar); an icon the sender named but that cannot be read is drawn as the placeholder instead of leaving a gap; glyph toasts lead with a pixel sprite (tick, cross, clipboard, plug, ...) instead of a vector glyph; blank lines in a body are collapsed.
+* **Kit additions** (new files in `Q/`, one line each in `qmldir`): `Pictograms` (touchpad touchscreen download search clipboard smile image folder file text app key shield trash sun), `AppIcon` (wraps agent B's `PixelIcon`: placeholder on a missing file, plain picture if the pixel pass delivers nothing in 1.5 s), `Confirm` (pixel `Ui.ConfirmDialog`), `Scrim` + `shaders/dither.frag(.qsb)` (the dim layer as a 4 x 4 Bayer dither, one cell per vpx; plain translucent wash when the shader does not build). `Scrim` is written but NOT yet used by any overlay.
+* **Wallpaper** (forked, finished): `plugins/quadrille.background` and `tools/gen_wallpapers.py`, commit b48117e. Its install.sh / stock.sh lines are NOT yet added (see next steps).
+
+In progress / not started:
+
+* Nothing half-done is enabled. No lock or polkit clone exists. Not started: reminders, emojis, clipboard, image picker clones; lock `LockView` and polkit restyles.
+* `AppIcon` -> `PixelIcon` is agent B's GPU shader and has not been seen on screen by me; the offscreen harness stubs it (the software renderer draws ShaderEffect black). First thing to do after a shell restart: open `omarchy-menu summon apps` over an empty workspace and look at the icons at both scales; if they are wrong, `AppIcon` still falls back to the plain picture after 1.5 s.
+
+Next steps, in order:
+
+1. Verify live (restart the shell inside the flock): menu Apps icons, an OSD (`omarchy-osd -i volume-high -p 60 -d 4000`), two toasts (`notify-send`, then delete the new files in `~/.local/state/omarchy/notifications/history/`). Fix what the GPU path shows.
+2. Add `quadrille.background` to the `ids` arrays (lab and `*` cases) of `plugins/install.sh` and to both `for id in` lists of `plugins/stock.sh`; paste the wallpaper section (below) into NOTES.md.
+3. Overlays as clones (`kinds: ["overlay"]`, `keepLoaded: true`, `omarchy.clonedFrom: omarchy.reminders|emojis|clipboard|image-picker`, `Q -> ../quadrille.bar/Q`): reminders (a prompt line with a block caret), emojis (grid, each emoji through a `PixelIcon`-style pipeline fed by a `Text` so it is nearest-neighbour at an integer scale; the host emoji are colour bitmaps), clipboard (keep the `wl-paste --watch` Processes and the `pkill` init; list + preview; never open it live, it shows the real history: test with `historyPath` pointed at a mock file), image picker (a grid with `Brackets` on the selection, labels dropped not cut; keep `open`, `preloadRows`, `closeSelector`). Use `Scrim` for the dim layer.
+4. Lock (`LockView.qml` only, the service stays verbatim) and polkit: only if tested in the nested compositor (`layershell/tools/nested.sh`); `lock preview` shows LockView without taking the session lock and is the safe live test. Neutralise `omarchy-brightness-*` and `omarchy-system-wake` in any test copy. Ship disabled otherwise.
+
+The offscreen harness (kept in the agent's scratch dir, not the repo): a `PanelWindow` is swapped for a `FloatingWindow` in a throwaway copy of the plugin, the kit's `PixelIcon` is stubbed, and `QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1.666667` gives the laptop's fractional scale; `grabToImage` of an inner item gives device-resolution PNGs. Pitfalls found: a QML `id` shadows a same-named property of the root (`readout` in Osd.qml); an asynchronous `Image` on an `image://icon/` URL aborts the process; keep the harness's output outside the watched config directory or it hot-reloads; `QT_SCALE_FACTOR` works but `ShaderEffect`/`layer.textureSize` do not render in the software scene graph (the live shell must check them).

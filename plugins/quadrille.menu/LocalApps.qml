@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import "AppSearch.js" as AppSearch
 
 // The desktop-application list, read straight from Quickshell's DesktopEntries.
@@ -33,13 +34,43 @@ QtObject {
     return AppSearch.sortedEntries(values, query, null)
   }
 
+  // Icon files named by absolute path, found to exist (see checkIcons). A path
+  // is not offered to an Image until then: an Image that cannot open its file
+  // writes a warning to the log, and a few entries name files that are gone.
+  property var existing: ({})
+
+  function checkIcons(paths) {
+    var want = []
+    for (var i = 0; i < paths.length; i++) {
+      var p = String(paths[i] || "")
+      if (p.charAt(0) === "/" && !existing[p] && want.indexOf(p) < 0) want.push(p)
+    }
+    if (want.length === 0 || iconCheck.running) return
+    iconCheck.found = ({})
+    iconCheck.command = ["bash", "-c", "for p in \"$@\"; do [ -f \"$p\" ] && printf '%s\\n' \"$p\"; done", "check"].concat(want)
+    iconCheck.running = true
+  }
+
+  property Process iconCheck: Process {
+    property var found: ({})
+    stdout: SplitParser { onRead: function(line) { iconCheck.found[line] = true } }
+    onExited: {
+      var next = ({})
+      for (var k in root.existing) next[k] = true
+      for (var f in iconCheck.found) next[f] = true
+      root.existing = next
+    }
+  }
+
   function iconSource(icon) {
     var value = String(icon || "")
-    if (value.length === 0) return Quickshell.iconPath("application-x-executable", true)
+    // An entry with no picture of its own is drawn by the menu (see AppIcon),
+    // not given the theme's generic one.
+    if (value.length === 0) return ""
     if (value.indexOf("file://") === 0 || value.indexOf("image://") === 0) return value
-    if (value.charAt(0) === "/") return "file://" + value
+    if (value.charAt(0) === "/") return existing[value] ? "file://" + value : ""
     var themed = Quickshell.iconPath(value, true)
-    return themed.length > 0 ? themed : Quickshell.iconPath("application-x-executable", true)
+    return themed
   }
 
   function refreshIcons() { }
