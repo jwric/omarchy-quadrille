@@ -235,3 +235,23 @@ selected-border         = "#222a1c"
 selected-border-alpha   = 1.0
 unselected-border       = "#222a1c"
 unselected-border-alpha = 0.28
+
+[quadrille]
+# quadrille's palette, stated role by role for the plugins in plugins/.
+# unit is the number of logical pixels in a virtual pixel.
+unit = 2
+void      = "#9aa48b"
+ground    = "#b0ba9f"
+raised    = "#a4ae93"
+hover     = "#98a287"
+edge      = "#6c765e"
+ink       = "#222a1c"
+muted     = "#46513c"
+faint     = "#7a856a"
+line      = "#5c6750"
+accent    = "#222a1c"
+on_accent = "#b0ba9f"
+highlight = "#949f82"
+live      = "#222a1c"
+caution   = "#5a4c12"
+alarm     = "#701e12"

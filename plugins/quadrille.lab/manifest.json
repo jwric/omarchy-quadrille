@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.lab",
+  "name": "Quadrille lab",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "A specimen sheet of the quadrille QML kit: pixel text, icons, lamps, gauges, tabs, groups, palette.",
+  "kinds": ["panel"],
+  "entryPoints": { "panel": "Lab.qml" }
+}

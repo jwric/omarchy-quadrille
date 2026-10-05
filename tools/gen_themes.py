@@ -274,7 +274,17 @@ def shell_toml(r, unit):
     leftover = {k: v for k, v in overrides.items()}
     if leftover:
         print(f"  note: template has no {sorted(leftover)}", file=sys.stderr)
-    return text + "\n"
+
+    # The shell's own tokens name a handful of surfaces; quadrille names fifteen
+    # roles. The Q kit of plugins/quadrille.bar reads them from here, so a theme
+    # switch carries the whole palette (Color.shellValues keeps unknown tables).
+    roles = [
+        "[quadrille]",
+        "# quadrille's palette, stated role by role for the plugins in plugins/.",
+        "# unit is the number of logical pixels in a virtual pixel.",
+        f"unit = {unit}",
+    ] + [f'{role:<9} = "{c[role]}"' for role in ROLES]
+    return text.rstrip("\n") + "\n\n" + "\n".join(roles) + "\n"
 
 
 def hyprland_lua(r, unit):

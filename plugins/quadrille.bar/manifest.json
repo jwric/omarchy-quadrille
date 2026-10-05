@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.bar",
+  "name": "Quadrille bar",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "A pixel-grid status bar: flat ground zone with a hairline edge, numbered workspace tabs, 7x7 pixel icons, lamps and stepped gauges, set in Departure Mono Tight.",
+  "kinds": ["bar"],
+  "entryPoints": { "bar": "Bar.qml" }
+}
