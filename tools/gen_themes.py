@@ -228,6 +228,13 @@ def shell_toml(r, unit):
         ("controls", "selected-color"): c["accent"],
         ("controls", "selected-fill-alpha"): "0.2",
         ("font", "base-size"): body,
+        # The stock popups are laid out in pixels for 12 px type. Ours is 22, so
+        # their margins, gaps and card widths grow by the same step or they
+        # overlap (the weather card's temperature sat on its "FEELS" label).
+        # A whole number of virtual pixels, and not tied to the font size, so
+        # a user's `[font] base-size` cannot put a margin on an odd pixel.
+        ("spacing", "scale"): f"{float(unit)}",
+        ("spacing", "scale-with-font"): "false",
         ("popups", "background"): c["ground"],
         ("popups", "border"): c["edge"],
         ("popups", "border-width"): px(1),
@@ -273,11 +280,22 @@ def shell_toml(r, unit):
         out.append(line)
 
     # Font sizes the type scale would otherwise derive: Departure Mono has
-    # native sizes only, so pin every token to one of them.
+    # native sizes only, so pin every token to one of them. The stock scale is
+    # 10 11 12 13 14 16 24 28 against a 12 px body; a pin never exceeds its
+    # stock ratio to the body, because the popups were laid out for those.
+    #
+    #   body and everything up to a heading   1x   (22: every font pixel 1 vpx;
+    #       the smaller tokens cannot go below it, 11 would be half a vpx)
+    #   display                               2x   (44; the stock 24 / 12)
+    #   display-large                         2x   (44; stock 28 / 12 is 2.33,
+    #       and the next native size, 66, is 3x)
+    #   icon-large                            1.5x (33, the stock 18 / 12; the one
+    #       size that is also whole device pixels on the 1.666667 laptop: 55 = 5 x 11)
     pinned = {
         "caption": body, "body-small": body, "body": body, "subtitle": body,
-        "title": body, "heading": 2 * body, "display": 2 * body,
-        "display-large": 3 * body, "icon-small": body, "icon": body, "icon-large": 2 * body,
+        "title": body, "heading": body, "display": 2 * body,
+        "display-large": 2 * body, "icon-small": body, "icon": body,
+        "icon-large": 3 * body // 2,
     }
     text = "\n".join(out)
     for key, value in pinned.items():

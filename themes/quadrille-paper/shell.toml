@@ -70,8 +70,8 @@ selection-fill-alpha = 0.35
 # enabled, those dimensions grow/shrink with [font] base-size too. Per-token
 # overrides (in px) below pin individual values without affecting the rest
 # of the scale. Uncomment any to tune a specific surface.
-scale = 1.0
-scale-with-font = true
+scale = 2.0
+scale-with-font = false
 # xxs                       = 2
 # xs                        = 3
 # sm                        = 4
@@ -112,12 +112,12 @@ body-small    = 22
 body          = 22
 subtitle      = 22
 title         = 22
-heading       = 44
+heading       = 22
 display       = 44
-display-large = 66
+display-large = 44
 icon-small    = 22
 icon          = 22
-icon-large    = 44
+icon-large    = 33
 
 [popups]
 # Shared by every bar flyout (dropdowns, OSD, popup cards).
