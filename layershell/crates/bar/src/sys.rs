@@ -64,17 +64,6 @@ pub fn memory_percent() -> u8 {
     (100 - field("MemAvailable") * 100 / total) as u8
 }
 
-pub fn load_average() -> String {
-    fs::read_to_string("/proc/loadavg")
-        .ok()
-        .and_then(|loadavg| {
-            let mut parts = loadavg.split_whitespace();
-
-            Some(format!("{} {} {}", parts.next()?, parts.next()?, parts.next()?))
-        })
-        .unwrap_or_default()
-}
-
 /// Whether any interface but loopback is up.
 pub fn network_up() -> bool {
     let Ok(entries) = fs::read_dir("/sys/class/net") else {

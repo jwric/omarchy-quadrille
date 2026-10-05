@@ -166,9 +166,19 @@ pub fn geometry(settings: &SurfaceSettings, pixel_scale: u32, scale: f64) -> Geo
             let anchor = settings.anchor;
 
             if anchor.contains(Anchor::TOP) != anchor.contains(Anchor::BOTTOM) {
-                size.1 as i32 + if anchor.contains(Anchor::TOP) { margin[0] } else { margin[2] }
+                size.1 as i32
+                    + if anchor.contains(Anchor::TOP) {
+                        margin[0]
+                    } else {
+                        margin[2]
+                    }
             } else if anchor.contains(Anchor::LEFT) != anchor.contains(Anchor::RIGHT) {
-                size.0 as i32 + if anchor.contains(Anchor::LEFT) { margin[3] } else { margin[1] }
+                size.0 as i32
+                    + if anchor.contains(Anchor::LEFT) {
+                        margin[3]
+                    } else {
+                        margin[1]
+                    }
             } else {
                 0
             }
@@ -238,9 +248,18 @@ pub enum Event {
     PointerLeft,
     /// In logical pixels.
     PointerMoved((f64, f64)),
-    PointerButton { button: u32, pressed: bool },
-    PointerScroll { x: AxisScroll, y: AxisScroll },
-    KeyPressed { event: KeyEvent, repeat: bool },
+    PointerButton {
+        button: u32,
+        pressed: bool,
+    },
+    PointerScroll {
+        x: AxisScroll,
+        y: AxisScroll,
+    },
+    KeyPressed {
+        event: KeyEvent,
+        repeat: bool,
+    },
     KeyReleased(KeyEvent),
     Modifiers(Modifiers),
     Focused(bool),
@@ -284,8 +303,8 @@ impl Wl {
         let layer_shell = LayerShell::bind(globals, qh)
             .map_err(|error| format!("zwlr_layer_shell_v1 is not available: {error}"))?;
 
-        let shm = Shm::bind(globals, qh)
-            .map_err(|error| format!("wl_shm is not available: {error}"))?;
+        let shm =
+            Shm::bind(globals, qh).map_err(|error| format!("wl_shm is not available: {error}"))?;
 
         let viewporter = globals.bind(qh, 1..=1, GlobalData).ok();
         let fractional_manager = globals.bind(qh, 1..=1, GlobalData).ok();
@@ -322,10 +341,6 @@ impl Wl {
         self.conn.backend().display_ptr().cast()
     }
 
-    pub fn has_fractional_scale(&self) -> bool {
-        self.fractional_manager.is_some() && self.viewporter.is_some()
-    }
-
     /// The scale an output is shown at, worked out from its logical size and
     /// its current mode (`wl_output` itself only knows integers).
     fn output_scale(&self, output: &wl_output::WlOutput) -> Option<f64> {
@@ -341,7 +356,11 @@ impl Wl {
                 | wl_output::Transform::Flipped270
         );
 
-        let physical_width = if rotated { mode.dimensions.1 } else { mode.dimensions.0 };
+        let physical_width = if rotated {
+            mode.dimensions.1
+        } else {
+            mode.dimensions.0
+        };
         let _ = logical_height;
 
         (logical_width > 0).then(|| f64::from(physical_width) / f64::from(logical_width))
@@ -412,10 +431,9 @@ impl Wl {
         );
         layer.set_exclusive_zone(geometry.exclusive);
 
-        let fractional = self
-            .fractional_manager
-            .as_ref()
-            .map(|manager| manager.get_fractional_scale(layer.wl_surface(), qh, FractionalData(id)));
+        let fractional = self.fractional_manager.as_ref().map(|manager| {
+            manager.get_fractional_scale(layer.wl_surface(), qh, FractionalData(id))
+        });
 
         let viewport = self
             .viewporter
@@ -597,10 +615,6 @@ impl Wl {
         if let Some(id) = self.keyboard_focus {
             self.push(id, Event::KeyPressed { event, repeat });
         }
-    }
-
-    pub fn keyboard_focus(&self) -> Option<window::Id> {
-        self.keyboard_focus
     }
 
     pub fn repeat_callback() -> Box<dyn FnMut(&mut Wl, &wl_keyboard::WlKeyboard, KeyEvent)> {
@@ -804,6 +818,8 @@ impl KeyboardHandler for Wl {
         _keysyms: &[Keysym],
     ) {
         if let Some(id) = self.id_of(surface) {
+            log::debug!("keyboard focus: {id:?}");
+
             self.keyboard_focus = Some(id);
             self.push(id, Event::Focused(true));
         }
@@ -818,6 +834,8 @@ impl KeyboardHandler for Wl {
         _serial: u32,
     ) {
         if let Some(id) = self.id_of(surface) {
+            log::debug!("keyboard focus lost: {id:?}");
+
             if self.keyboard_focus == Some(id) {
                 self.keyboard_focus = None;
             }
@@ -892,6 +910,8 @@ impl PointerHandler for Wl {
 
             match event.kind {
                 PointerEventKind::Enter { .. } => {
+                    log::debug!("pointer entered {id:?} at {:?}", event.position);
+
                     self.pointer_focus = Some(id);
                     self.cursor = None;
                     self.push(id, Event::PointerEntered);
@@ -908,6 +928,11 @@ impl PointerHandler for Wl {
                     self.push(id, Event::PointerMoved(event.position));
                 }
                 PointerEventKind::Press { button, .. } => {
+                    log::debug!(
+                        "pointer button {button:#x} on {id:?} at {:?}",
+                        event.position
+                    );
+
                     self.push(
                         id,
                         Event::PointerButton {

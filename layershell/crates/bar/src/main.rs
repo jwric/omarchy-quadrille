@@ -19,11 +19,11 @@ use quadrille::{Theme, px, style, widget};
 const BAR_HEIGHT: u32 = 25;
 
 /// The popup's size, in virtual pixels.
-const POPUP_SIZE: (u32, u32) = (130, 105);
+const POPUP_SIZE: (u32, u32) = (140, 185);
 
 #[derive(Debug, Clone)]
 enum Message {
-    Tick(Instant),
+    Tick,
     Workspace(u8),
     TogglePopup,
     ClosePopup,
@@ -41,6 +41,8 @@ struct Options {
     popup: bool,
     exclusive: bool,
     height: u32,
+    keyboard: KeyboardInteractivity,
+    close_on_unfocus: bool,
     exit_after: Option<Duration>,
 }
 
@@ -56,7 +58,6 @@ struct Bar {
     cpu_times: sys::CpuTimes,
     cpu: u8,
     memory: u8,
-    load: String,
     network: bool,
     battery: Option<u8>,
     started: Instant,
@@ -79,7 +80,6 @@ impl Bar {
                 cpu_times: sys::cpu_times().unwrap_or_default(),
                 cpu: 0,
                 memory: sys::memory_percent(),
-                load: sys::load_average(),
                 network: sys::network_up(),
                 battery: sys::battery_percent(),
                 started: Instant::now(),
@@ -90,7 +90,7 @@ impl Bar {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Tick(_) => {
+            Message::Tick => {
                 self.time = sys::local_time();
 
                 if let Some(now) = sys::cpu_times() {
@@ -101,10 +101,6 @@ impl Bar {
                 self.memory = sys::memory_percent();
                 self.network = sys::network_up();
                 self.battery = sys::battery_percent();
-
-                if self.popup {
-                    self.load = sys::load_average();
-                }
 
                 if self
                     .options
@@ -118,7 +114,7 @@ impl Bar {
             Message::TogglePopup => self.popup = !self.popup,
             Message::ClosePopup | Message::Escape => self.popup = false,
             Message::Unfocused(window) => {
-                if window == self.popup_id {
+                if self.options.close_on_unfocus && window == self.popup_id {
                     self.popup = false;
                 }
             }
@@ -159,7 +155,7 @@ impl Bar {
 
         if self.options.tick_ms > 0 {
             subscriptions.push(
-                time::every(Duration::from_millis(self.options.tick_ms)).map(Message::Tick),
+                time::every(Duration::from_millis(self.options.tick_ms)).map(|_| Message::Tick),
             );
         }
 
@@ -196,7 +192,7 @@ impl Bar {
                     exclusive: Exclusive::Ignore,
                     // Under the bar, a little in from the edge.
                     margin: [self.options.height as i32, 4, 0, 0],
-                    keyboard: KeyboardInteractivity::OnDemand,
+                    keyboard: self.options.keyboard,
                     output: self.options.output.clone(),
                 },
             ));
@@ -283,7 +279,6 @@ impl Bar {
                 widget::bar(0.0..=100.0, f32::from(self.cpu)).height(5),
                 widget::reading("MEM", format!("{}%", self.memory)),
                 widget::bar(0.0..=100.0, f32::from(self.memory)).height(5),
-                widget::reading("LOAD", self.load.clone()),
             ]
             .spacing(px::GAP),
         );
@@ -336,6 +331,8 @@ fn parse() -> Result<Options, String> {
         popup: false,
         exclusive: true,
         height: BAR_HEIGHT,
+        keyboard: KeyboardInteractivity::OnDemand,
+        close_on_unfocus: false,
         exit_after: None,
     };
 
@@ -361,6 +358,14 @@ fn parse() -> Result<Options, String> {
             }
             "--popup" => options.popup = true,
             "--no-exclusive" => options.exclusive = false,
+            "--close-on-unfocus" => options.close_on_unfocus = true,
+            "--keyboard" => {
+                options.keyboard = match value("--keyboard")?.as_str() {
+                    "exclusive" => KeyboardInteractivity::Exclusive,
+                    "on-demand" => KeyboardInteractivity::OnDemand,
+                    other => return Err(format!("--keyboard exclusive|on-demand, not {other}")),
+                }
+            }
             "--height" => {
                 options.height = value("--height")?
                     .parse()
@@ -395,7 +400,7 @@ fn main() {
             eprintln!("quadrille-bar: {error}");
             eprintln!(
                 "usage: quadrille-bar [--output NAME] [--backend wgpu|tiny-skia] \
-                 [--tick-ms MS] [--popup] [--no-exclusive] [--height VPX] [--exit-after SECS] | ctl COMMAND"
+                 [--tick-ms MS] [--popup] [--no-exclusive] [--height VPX] [--keyboard exclusive|on-demand] [--close-on-unfocus] [--exit-after SECS] | ctl COMMAND"
             );
             std::process::exit(2);
         }

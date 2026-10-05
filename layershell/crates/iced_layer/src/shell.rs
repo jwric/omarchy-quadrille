@@ -27,14 +27,16 @@ use iced_runtime::{Action, Task};
 
 use rustc_hash::FxHashMap;
 
+use iced_core::Renderer as _;
 use smithay_client_toolkit::reexports::calloop::channel;
 use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::Connection;
 use smithay_client_toolkit::reexports::client::Proxy as _;
 use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
-use smithay_client_toolkit::seat::pointer::{BTN_BACK, BTN_FORWARD, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, CursorIcon};
-use iced_core::Renderer as _;
+use smithay_client_toolkit::seat::pointer::{
+    BTN_BACK, BTN_FORWARD, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, CursorIcon,
+};
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -225,7 +227,10 @@ where
     fn layout_point(&self, (x, y): (f64, f64)) -> Point {
         let factor = f64::from(self.viewport.scale_factor());
 
-        Point::new((x * self.scale / factor) as f32, (y * self.scale / factor) as f32)
+        Point::new(
+            (x * self.scale / factor) as f32,
+            (y * self.scale / factor) as f32,
+        )
     }
 
     fn request_redraw(&mut self, request: window::RedrawRequest) {
@@ -467,8 +472,8 @@ where
     // there are and at what scale (xdg-output), what the seats can do.
     let conn = Connection::connect_to_env().map_err(|error| Error::Connect(error.to_string()))?;
 
-    let (globals, mut event_queue) = registry_queue_init::<Wl>(&conn)
-        .map_err(|error| Error::Connect(error.to_string()))?;
+    let (globals, mut event_queue) =
+        registry_queue_init::<Wl>(&conn).map_err(|error| Error::Connect(error.to_string()))?;
 
     let qh = event_queue.handle();
 
@@ -591,7 +596,8 @@ where
             };
 
             for (id, surface) in &wl.surfaces {
-                if !windows.contains_key(id) && surface.configured.is_some() && !surface.scale_known {
+                if !windows.contains_key(id) && surface.configured.is_some() && !surface.scale_known
+                {
                     consider(surface.created + wl::SCALE_GRACE);
                 }
 
@@ -643,7 +649,10 @@ where
         // anyway after a while: a compositor is not obliged to answer a
         // request that changes nothing.
         for surface in wl.surfaces.values_mut() {
-            if surface.awaiting.is_some_and(|since| since.elapsed() >= CONFIGURE_TIMEOUT) {
+            if surface
+                .awaiting
+                .is_some_and(|since| since.elapsed() >= CONFIGURE_TIMEOUT)
+            {
                 log::debug!("no configure after a request; going on");
                 surface.awaiting = None;
             }
@@ -1011,6 +1020,8 @@ where
 #[derive(Default)]
 struct Stats {
     enabled: bool,
+    started: Option<Instant>,
+    first_frame: Option<Duration>,
     interact: Vec<Duration>,
     prepare: Vec<Duration>,
     draw: Vec<Duration>,
@@ -1021,6 +1032,7 @@ impl Stats {
     fn from_env() -> Self {
         Self {
             enabled: std::env::var_os("ICED_LAYER_STATS").is_some(),
+            started: Some(Instant::now()),
             ..Self::default()
         }
     }
@@ -1048,6 +1060,13 @@ impl Stats {
                 micros(sorted[sorted.len() / 2]),
                 micros(sorted[(sorted.len() * 95 / 100).min(sorted.len() - 1)]),
                 micros(*sorted.last().expect("Not empty")),
+            );
+        }
+
+        if let Some(first) = self.first_frame {
+            eprintln!(
+                "stats first frame presented {:.1} ms after the shell started",
+                first.as_secs_f64() * 1e3
             );
         }
 
@@ -1189,6 +1208,10 @@ where
     );
 
     if stats.enabled {
+        if stats.first_frame.is_none() {
+            stats.first_frame = stats.started.map(|at| at.elapsed());
+        }
+
         stats.prepare.push(prepared - started);
         stats.draw.push(drawn - prepared);
         stats.present.push(presenting.elapsed());

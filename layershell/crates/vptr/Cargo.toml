@@ -1,0 +1,10 @@
+[package]
+name = "vptr"
+version = "0.0.1"
+description = "A test tool: moves and clicks a virtual pointer on a named output, through wlr-virtual-pointer"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

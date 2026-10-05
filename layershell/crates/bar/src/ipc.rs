@@ -58,6 +58,5 @@ pub fn commands() -> impl iced_futures::futures::Stream<Item = String> {
         while let Some(line) = receiver.next().await {
             let _ = output.send(line).await;
         }
-
     })
 }
