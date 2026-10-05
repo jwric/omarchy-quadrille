@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/iced_layer", "crates/bar"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# The toolkit, from the graticule checkout next door.
+quadrille = { path = "../../graticule/crates/quadrille" }
+
+# The pixel-scale iced fork (iced master + virtual pixels). Everything comes
+# from one git source so that quadrille and the shell share one set of types.
+iced_core = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale" }
+iced_futures = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale", features = ["smol"] }
+iced_graphics = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale" }
+iced_runtime = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale" }
+iced_program = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale" }
+iced_widget = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale", features = ["wgpu"] }
+iced_renderer = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale", features = ["wgpu", "tiny-skia", "wayland", "geometry", "image"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug = "line-tables-only"

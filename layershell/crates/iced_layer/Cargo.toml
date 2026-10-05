@@ -1,0 +1,23 @@
+[package]
+name = "iced_layer"
+version = "0.0.1"
+description = "A wlr-layer-shell windowing shell for the pixel-scale iced fork"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+iced_core.workspace = true
+iced_futures.workspace = true
+iced_graphics.workspace = true
+iced_runtime.workspace = true
+iced_program.workspace = true
+iced_renderer.workspace = true
+
+smithay-client-toolkit = { version = "0.20", default-features = true }
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+calloop = "0.14"
+raw-window-handle = "0.6"
+log = "0.4"
+thiserror = "2"
+rustc-hash = "2"

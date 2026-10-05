@@ -1,0 +1,1064 @@
+//! The Wayland side of the shell: sctk state, protocol handlers and the
+//! surfaces they manage. It knows nothing about iced; the shell reads the
+//! events it queues and the geometry it settles.
+use iced_core::window;
+
+use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
+use smithay_client_toolkit::globals::GlobalData;
+use smithay_client_toolkit::output::{OutputHandler, OutputState};
+use smithay_client_toolkit::reexports::calloop::LoopHandle;
+use smithay_client_toolkit::reexports::client::globals::GlobalList;
+use smithay_client_toolkit::reexports::client::protocol::{
+    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
+};
+use smithay_client_toolkit::reexports::client::{
+    Connection, Dispatch, Proxy, QueueHandle, backend::ObjectId,
+};
+use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
+use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
+    self, WpFractionalScaleV1,
+};
+use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::wp_viewport::WpViewport;
+use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
+use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::keyboard::{
+    KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers,
+};
+use smithay_client_toolkit::seat::pointer::{
+    AxisScroll, CursorIcon, PointerEvent, PointerEventKind, PointerHandler, ThemeSpec,
+    ThemedPointer,
+};
+use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
+use smithay_client_toolkit::shell::WaylandSurface;
+use smithay_client_toolkit::shell::wlr_layer::{
+    LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure,
+};
+use smithay_client_toolkit::shm::{Shm, ShmHandler};
+use smithay_client_toolkit::{
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat, delegate_shm, registry_handlers,
+};
+
+pub use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+/// How long a surface waits for the compositor to tell it its scale before it
+/// goes with what it can guess.
+pub const SCALE_GRACE: Duration = Duration::from_millis(120);
+
+/// How much of the screen edge a surface claims for itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exclusive {
+    /// Nothing: other surfaces may be placed under it, or move out of its way
+    /// (`exclusive_zone` 0).
+    None,
+    /// Its own thickness along the edge it is anchored to, like a bar.
+    Own,
+    /// Neither claims space nor is moved by anyone else's (`exclusive_zone`
+    /// -1), like a popup.
+    Ignore,
+}
+
+/// What a layer surface looks like to the compositor. Lengths are in virtual
+/// pixels: the shell turns them into the logical pixels the protocol speaks,
+/// at the scale of the output the surface is on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SurfaceSettings {
+    pub namespace: String,
+    pub layer: Layer,
+    pub anchor: Anchor,
+    /// Width and height. Zero stretches the axis, which needs both of its
+    /// edges anchored.
+    pub size: (u32, u32),
+    pub exclusive: Exclusive,
+    /// Top, right, bottom, left.
+    pub margin: [i32; 4],
+    pub keyboard: KeyboardInteractivity,
+    /// The output to appear on, by name (`eDP-2`); the compositor's choice
+    /// when `None`.
+    pub output: Option<String>,
+}
+
+impl Default for SurfaceSettings {
+    fn default() -> Self {
+        Self {
+            namespace: String::from("iced"),
+            layer: Layer::Top,
+            anchor: Anchor::empty(),
+            size: (0, 0),
+            exclusive: Exclusive::None,
+            margin: [0; 4],
+            keyboard: KeyboardInteractivity::None,
+            output: None,
+        }
+    }
+}
+
+/// What the protocol is told, in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Geometry {
+    pub size: (u32, u32),
+    pub margin: [i32; 4],
+    pub exclusive: i32,
+}
+
+/// A logical length for a surface that should show `virtual_px` virtual pixels
+/// of `pixel_scale` physical pixels each, at `scale`.
+///
+/// A logical length is an integer, and at a fractional scale most of them are
+/// not a whole number of physical pixels: 47 is 78.33 at 1.6667. The
+/// compositor then rounds the surface's edges and, depending on where it ends
+/// up, shows a buffer of 78 rows over 79, and filters it. So this looks, from
+/// the size asked for upwards, for a length that is exactly a whole number of
+/// physical pixels, preferably a whole number of virtual pixels as well. At
+/// 1.6667 with three physical pixels to a virtual one those are the multiples
+/// of 9 logical pixels, which is to say of 5 virtual pixels.
+///
+/// It never goes further than two virtual pixels past what was asked for; past
+/// that it takes what comes closest (a length that is whole in physical
+/// pixels, or just the next integer).
+pub fn logical_for(virtual_px: u32, pixel_scale: u32, scale: f64) -> u32 {
+    if virtual_px == 0 {
+        return 0;
+    }
+
+    let pixel_scale = pixel_scale.max(1);
+    let wanted = f64::from(virtual_px * pixel_scale);
+    let first = (wanted / scale).ceil() as u32;
+    let reach = (2.0 * f64::from(pixel_scale) / scale).ceil() as u32 + 1;
+
+    let physical = |logical: u32| (f64::from(logical) * scale).round() as u32;
+    let candidates = || first..first + reach;
+
+    candidates()
+        .find(|logical| is_exact(*logical, scale) && physical(*logical) % pixel_scale == 0)
+        .or_else(|| candidates().find(|logical| is_exact(*logical, scale)))
+        .or_else(|| candidates().find(|logical| physical(*logical) % pixel_scale == 0))
+        .unwrap_or(first)
+}
+
+/// Whether a logical length maps to a whole number of physical pixels at
+/// `scale`, which is when the compositor can show the buffer unfiltered.
+pub fn is_exact(logical: u32, scale: f64) -> bool {
+    // Scales are conveyed in 120ths: compare in them.
+    let physical = f64::from(logical) * (scale * 120.0).round() / 120.0;
+
+    (physical - physical.round()).abs() < 1e-6
+}
+
+pub fn geometry(settings: &SurfaceSettings, pixel_scale: u32, scale: f64) -> Geometry {
+    let to_logical = |virtual_px: u32| logical_for(virtual_px, pixel_scale, scale);
+
+    let size = (to_logical(settings.size.0), to_logical(settings.size.1));
+
+    let margin = settings.margin.map(|margin| {
+        let logical = to_logical(margin.unsigned_abs()) as i32;
+
+        if margin < 0 { -logical } else { logical }
+    });
+
+    let exclusive = match settings.exclusive {
+        Exclusive::None => 0,
+        Exclusive::Ignore => -1,
+        Exclusive::Own => {
+            let anchor = settings.anchor;
+
+            if anchor.contains(Anchor::TOP) != anchor.contains(Anchor::BOTTOM) {
+                size.1 as i32 + if anchor.contains(Anchor::TOP) { margin[0] } else { margin[2] }
+            } else if anchor.contains(Anchor::LEFT) != anchor.contains(Anchor::RIGHT) {
+                size.0 as i32 + if anchor.contains(Anchor::LEFT) { margin[3] } else { margin[1] }
+            } else {
+                0
+            }
+        }
+    };
+
+    Geometry {
+        size,
+        margin,
+        exclusive,
+    }
+}
+
+/// A layer surface and what the compositor has told us about it.
+pub struct Surface {
+    pub layer: LayerSurface,
+    viewport: Option<WpViewport>,
+    fractional: Option<WpFractionalScaleV1>,
+    pub settings: SurfaceSettings,
+    /// The scale the surface is shown at: the compositor's preference when it
+    /// has told us, an output's otherwise.
+    pub scale: f64,
+    pub scale_known: bool,
+    pub created: Instant,
+    /// The last size the compositor configured, in logical pixels.
+    pub configured: Option<(u32, u32)>,
+    /// A new size was asked for and not configured yet.
+    pub awaiting: Option<Instant>,
+    pub applied: Option<Geometry>,
+    destination: Option<(u32, u32)>,
+    buffer_scale: i32,
+    /// Bumped whenever the shell has to look at the surface again.
+    pub version: u64,
+}
+
+impl Surface {
+    pub fn wl_surface(&self) -> &wl_surface::WlSurface {
+        self.layer.wl_surface()
+    }
+
+    /// Whether the surface can be drawn at a size that is final.
+    pub fn is_ready(&self) -> bool {
+        self.configured.is_some()
+            && self.awaiting.is_none()
+            && (self.scale_known || self.created.elapsed() >= SCALE_GRACE)
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        if let Some(fractional) = self.fractional.take() {
+            fractional.destroy();
+        }
+
+        if let Some(viewport) = self.viewport.take() {
+            viewport.destroy();
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Event {
+    /// The size or the scale of the surface settled on something new.
+    Changed,
+    Closed,
+    PointerEntered,
+    PointerLeft,
+    /// In logical pixels.
+    PointerMoved((f64, f64)),
+    PointerButton { button: u32, pressed: bool },
+    PointerScroll { x: AxisScroll, y: AxisScroll },
+    KeyPressed { event: KeyEvent, repeat: bool },
+    KeyReleased(KeyEvent),
+    Modifiers(Modifiers),
+    Focused(bool),
+}
+
+pub struct FractionalData(window::Id);
+
+pub struct Wl {
+    pub registry_state: RegistryState,
+    pub seat_state: SeatState,
+    pub output_state: OutputState,
+    pub compositor_state: CompositorState,
+    pub layer_shell: LayerShell,
+    pub shm: Shm,
+    viewporter: Option<WpViewporter>,
+    fractional_manager: Option<WpFractionalScaleManagerV1>,
+    loop_handle: LoopHandle<'static, Wl>,
+
+    pub surfaces: HashMap<window::Id, Surface>,
+    by_wl: HashMap<ObjectId, window::Id>,
+    pub events: Vec<(window::Id, Event)>,
+
+    pointer: Option<ThemedPointer>,
+    pointer_focus: Option<window::Id>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    keyboard_focus: Option<window::Id>,
+    cursor: Option<CursorIcon>,
+    pub conn: Connection,
+}
+
+impl Wl {
+    pub fn new(
+        conn: &Connection,
+        globals: &GlobalList,
+        qh: &QueueHandle<Self>,
+        loop_handle: LoopHandle<'static, Wl>,
+    ) -> Result<Self, String> {
+        let compositor_state = CompositorState::bind(globals, qh)
+            .map_err(|error| format!("wl_compositor is not available: {error}"))?;
+
+        let layer_shell = LayerShell::bind(globals, qh)
+            .map_err(|error| format!("zwlr_layer_shell_v1 is not available: {error}"))?;
+
+        let shm = Shm::bind(globals, qh)
+            .map_err(|error| format!("wl_shm is not available: {error}"))?;
+
+        let viewporter = globals.bind(qh, 1..=1, GlobalData).ok();
+        let fractional_manager = globals.bind(qh, 1..=1, GlobalData).ok();
+
+        log::info!(
+            "wp_viewporter: {}, wp_fractional_scale_manager_v1: {}",
+            viewporter.is_some(),
+            fractional_manager.is_some()
+        );
+
+        Ok(Self {
+            registry_state: RegistryState::new(globals),
+            seat_state: SeatState::new(globals, qh),
+            output_state: OutputState::new(globals, qh),
+            compositor_state,
+            layer_shell,
+            shm,
+            viewporter,
+            fractional_manager,
+            loop_handle,
+            surfaces: HashMap::new(),
+            by_wl: HashMap::new(),
+            events: Vec::new(),
+            pointer: None,
+            pointer_focus: None,
+            keyboard: None,
+            keyboard_focus: None,
+            cursor: None,
+            conn: conn.clone(),
+        })
+    }
+
+    pub fn display_ptr(&self) -> *mut std::ffi::c_void {
+        self.conn.backend().display_ptr().cast()
+    }
+
+    pub fn has_fractional_scale(&self) -> bool {
+        self.fractional_manager.is_some() && self.viewporter.is_some()
+    }
+
+    /// The scale an output is shown at, worked out from its logical size and
+    /// its current mode (`wl_output` itself only knows integers).
+    fn output_scale(&self, output: &wl_output::WlOutput) -> Option<f64> {
+        let info = self.output_state.info(output)?;
+        let mode = info.modes.iter().find(|mode| mode.current)?;
+        let (logical_width, logical_height) = info.logical_size?;
+
+        let rotated = matches!(
+            info.transform,
+            wl_output::Transform::_90
+                | wl_output::Transform::_270
+                | wl_output::Transform::Flipped90
+                | wl_output::Transform::Flipped270
+        );
+
+        let physical_width = if rotated { mode.dimensions.1 } else { mode.dimensions.0 };
+        let _ = logical_height;
+
+        (logical_width > 0).then(|| f64::from(physical_width) / f64::from(logical_width))
+    }
+
+    fn find_output(&self, name: &str) -> Option<wl_output::WlOutput> {
+        self.output_state.outputs().find(|output| {
+            self.output_state
+                .info(output)
+                .and_then(|info| info.name)
+                .is_some_and(|candidate| candidate == name)
+        })
+    }
+
+    pub fn output_names(&self) -> Vec<String> {
+        self.output_state
+            .outputs()
+            .filter_map(|output| self.output_state.info(&output)?.name)
+            .collect()
+    }
+
+    pub fn create_surface(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        id: window::Id,
+        settings: SurfaceSettings,
+        pixel_mode: iced_core::PixelScaleMode,
+    ) {
+        let wl_surface = self.compositor_state.create_surface(qh);
+
+        let output = settings
+            .output
+            .as_deref()
+            .and_then(|name| self.find_output(name));
+
+        if settings.output.is_some() && output.is_none() {
+            log::warn!(
+                "Output {:?} not found among {:?}; letting the compositor choose",
+                settings.output,
+                self.output_names()
+            );
+        }
+
+        let hint = output.as_ref().and_then(|output| self.output_scale(output));
+        let scale = hint.unwrap_or(1.0);
+
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            wl_surface,
+            settings.layer,
+            Some(settings.namespace.clone()),
+            output.as_ref(),
+        );
+
+        layer.set_anchor(settings.anchor);
+        layer.set_keyboard_interactivity(settings.keyboard);
+
+        // The first commit has no buffer, so the surface is not mapped and
+        // whatever size it asks for here is corrected before anyone sees it.
+        let geometry = geometry(&settings, pixel_mode.resolve(scale as f32), scale);
+
+        layer.set_size(geometry.size.0, geometry.size.1);
+        layer.set_margin(
+            geometry.margin[0],
+            geometry.margin[1],
+            geometry.margin[2],
+            geometry.margin[3],
+        );
+        layer.set_exclusive_zone(geometry.exclusive);
+
+        let fractional = self
+            .fractional_manager
+            .as_ref()
+            .map(|manager| manager.get_fractional_scale(layer.wl_surface(), qh, FractionalData(id)));
+
+        let viewport = self
+            .viewporter
+            .as_ref()
+            .map(|viewporter| viewporter.get_viewport(layer.wl_surface(), qh, GlobalData));
+
+        layer.commit();
+
+        let _ = self.by_wl.insert(layer.wl_surface().id(), id);
+
+        let _ = self.surfaces.insert(
+            id,
+            Surface {
+                layer,
+                viewport,
+                fractional,
+                settings,
+                scale,
+                scale_known: false,
+                created: Instant::now(),
+                configured: None,
+                awaiting: Some(Instant::now()),
+                applied: Some(geometry),
+                destination: None,
+                buffer_scale: 1,
+                version: 0,
+            },
+        );
+    }
+
+    pub fn destroy_surface(&mut self, id: window::Id) {
+        if let Some(surface) = self.surfaces.remove(&id) {
+            let _ = self.by_wl.remove(&surface.wl_surface().id());
+        }
+
+        if self.pointer_focus == Some(id) {
+            self.pointer_focus = None;
+        }
+
+        if self.keyboard_focus == Some(id) {
+            self.keyboard_focus = None;
+        }
+    }
+
+    /// Applies new settings to a live surface.
+    pub fn update_surface(&mut self, id: window::Id, settings: &SurfaceSettings) {
+        let Some(surface) = self.surfaces.get_mut(&id) else {
+            return;
+        };
+
+        if surface.settings.anchor != settings.anchor {
+            surface.layer.set_anchor(settings.anchor);
+        }
+
+        if surface.settings.keyboard != settings.keyboard {
+            surface.layer.set_keyboard_interactivity(settings.keyboard);
+        }
+
+        if surface.settings.layer != settings.layer {
+            surface.layer.set_layer(settings.layer);
+        }
+
+        if surface.settings != *settings {
+            surface.settings = settings.clone();
+            surface.applied = None;
+            surface.layer.commit();
+        }
+    }
+
+    /// Asks the compositor for the geometry the surface's settings come to at
+    /// its current scale, if it is not the one it has.
+    pub fn sync_geometry(&mut self, id: window::Id, pixel_mode: iced_core::PixelScaleMode) {
+        let Some(surface) = self.surfaces.get_mut(&id) else {
+            return;
+        };
+
+        let pixel_scale = pixel_mode.resolve(surface.scale as f32);
+        let wanted = geometry(&surface.settings, pixel_scale, surface.scale);
+
+        if surface.applied == Some(wanted) {
+            return;
+        }
+
+        let size_changed = surface.applied.map(|applied| applied.size) != Some(wanted.size);
+
+        log::debug!(
+            "surface {id:?}: asking for {wanted:?} (scale {:.4}, pixel scale {pixel_scale})",
+            surface.scale
+        );
+
+        surface.layer.set_size(wanted.size.0, wanted.size.1);
+        surface.layer.set_margin(
+            wanted.margin[0],
+            wanted.margin[1],
+            wanted.margin[2],
+            wanted.margin[3],
+        );
+        surface.layer.set_exclusive_zone(wanted.exclusive);
+
+        if size_changed {
+            surface.awaiting = Some(Instant::now());
+        }
+
+        surface.applied = Some(wanted);
+        surface.layer.commit();
+    }
+
+    /// Tells the compositor how big the buffer about to be attached is meant
+    /// to appear. A buffer of `physical` pixels is shown over `logical` ones;
+    /// without a viewporter the buffer's own scale carries the integer part.
+    pub fn set_destination(&mut self, id: window::Id, logical: (u32, u32)) {
+        let Some(surface) = self.surfaces.get_mut(&id) else {
+            return;
+        };
+
+        if let Some(viewport) = &surface.viewport {
+            if surface.destination != Some(logical) {
+                viewport.set_destination(logical.0 as i32, logical.1 as i32);
+                surface.destination = Some(logical);
+            }
+        } else {
+            let scale = surface.scale.round().max(1.0) as i32;
+
+            if surface.buffer_scale != scale {
+                surface.wl_surface().set_buffer_scale(scale);
+                surface.buffer_scale = scale;
+            }
+        }
+    }
+
+    pub fn set_cursor(&mut self, id: window::Id, icon: Option<CursorIcon>) {
+        if self.pointer_focus != Some(id) {
+            return;
+        }
+
+        if self.cursor == icon {
+            return;
+        }
+
+        self.cursor = icon;
+
+        let Some(pointer) = &self.pointer else {
+            return;
+        };
+
+        let _ = match icon {
+            Some(icon) => pointer.set_cursor(&self.conn, icon),
+            None => pointer.hide_cursor(),
+        };
+    }
+
+    fn id_of(&self, surface: &wl_surface::WlSurface) -> Option<window::Id> {
+        self.by_wl.get(&surface.id()).copied()
+    }
+
+    fn push(&mut self, id: window::Id, event: Event) {
+        self.events.push((id, event));
+    }
+
+    fn set_scale(&mut self, id: window::Id, scale: f64) {
+        let Some(surface) = self.surfaces.get_mut(&id) else {
+            return;
+        };
+
+        if surface.scale_known && (surface.scale - scale).abs() < 1e-6 {
+            return;
+        }
+
+        log::info!("surface {id:?}: preferred scale {scale:.4}");
+
+        surface.scale = scale;
+        surface.scale_known = true;
+        surface.version += 1;
+
+        self.push(id, Event::Changed);
+    }
+
+    fn key(&mut self, event: KeyEvent, repeat: bool) {
+        if let Some(id) = self.keyboard_focus {
+            self.push(id, Event::KeyPressed { event, repeat });
+        }
+    }
+
+    pub fn keyboard_focus(&self) -> Option<window::Id> {
+        self.keyboard_focus
+    }
+
+    pub fn repeat_callback() -> Box<dyn FnMut(&mut Wl, &wl_keyboard::WlKeyboard, KeyEvent)> {
+        Box::new(|wl, _keyboard, event| wl.key(event, true))
+    }
+}
+
+impl CompositorHandler for Wl {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
+    ) {
+        // Only the integer fallback uses this: a compositor with fractional
+        // scale tells each surface its own.
+        if self.fractional_manager.is_some() {
+            return;
+        }
+
+        if let Some(id) = self.id_of(surface) {
+            self.set_scale(id, f64::from(new_factor));
+        }
+    }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {
+    }
+
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+    }
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
+    ) {
+        // Before the compositor has a preference, an output is a good guess.
+        let Some(id) = self.id_of(surface) else {
+            return;
+        };
+
+        let guess = self.output_scale(output);
+
+        if let (Some(guess), Some(surface)) = (guess, self.surfaces.get_mut(&id)) {
+            if !surface.scale_known && (surface.scale - guess).abs() > 1e-6 {
+                log::info!("surface {id:?}: entered an output at {guess:.4}");
+                surface.scale = guess;
+                surface.version += 1;
+                self.push(id, Event::Changed);
+            }
+        }
+    }
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl OutputHandler for Wl {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+}
+
+impl LayerShellHandler for Wl {
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
+        if let Some(id) = self.id_of(layer.wl_surface()) {
+            self.push(id, Event::Closed);
+        }
+    }
+
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _serial: u32,
+    ) {
+        let Some(id) = self.id_of(layer.wl_surface()) else {
+            return;
+        };
+
+        if let Some(surface) = self.surfaces.get_mut(&id) {
+            log::debug!("surface {id:?}: configured {:?}", configure.new_size);
+
+            surface.configured = Some(configure.new_size);
+            surface.awaiting = None;
+            surface.version += 1;
+        }
+
+        self.push(id, Event::Changed);
+    }
+}
+
+impl SeatHandler for Wl {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Keyboard if self.keyboard.is_none() => {
+                match self.seat_state.get_keyboard_with_repeat(
+                    qh,
+                    &seat,
+                    None,
+                    self.loop_handle.clone(),
+                    Wl::repeat_callback(),
+                ) {
+                    Ok(keyboard) => self.keyboard = Some(keyboard),
+                    Err(error) => log::warn!("No keyboard: {error}"),
+                }
+            }
+            Capability::Pointer if self.pointer.is_none() => {
+                let cursor_surface = self.compositor_state.create_surface(qh);
+
+                match self.seat_state.get_pointer_with_theme(
+                    qh,
+                    &seat,
+                    self.shm.wl_shm(),
+                    cursor_surface,
+                    ThemeSpec::System,
+                ) {
+                    Ok(pointer) => self.pointer = Some(pointer),
+                    Err(error) => log::warn!("No pointer: {error}"),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Keyboard => {
+                if let Some(keyboard) = self.keyboard.take() {
+                    keyboard.release();
+                }
+            }
+            Capability::Pointer => {
+                if let Some(pointer) = self.pointer.take() {
+                    pointer.pointer().release();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl KeyboardHandler for Wl {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        surface: &wl_surface::WlSurface,
+        _serial: u32,
+        _raw: &[u32],
+        _keysyms: &[Keysym],
+    ) {
+        if let Some(id) = self.id_of(surface) {
+            self.keyboard_focus = Some(id);
+            self.push(id, Event::Focused(true));
+        }
+    }
+
+    fn leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        surface: &wl_surface::WlSurface,
+        _serial: u32,
+    ) {
+        if let Some(id) = self.id_of(surface) {
+            if self.keyboard_focus == Some(id) {
+                self.keyboard_focus = None;
+            }
+
+            self.push(id, Event::Focused(false));
+        }
+    }
+
+    fn press_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: KeyEvent,
+    ) {
+        self.key(event, false);
+    }
+
+    fn repeat_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: KeyEvent,
+    ) {
+        self.key(event, true);
+    }
+
+    fn release_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: KeyEvent,
+    ) {
+        if let Some(id) = self.keyboard_focus {
+            self.push(id, Event::KeyReleased(event));
+        }
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        modifiers: Modifiers,
+        _raw: RawModifiers,
+        _layout: u32,
+    ) {
+        if let Some(id) = self.keyboard_focus {
+            self.push(id, Event::Modifiers(modifiers));
+        }
+    }
+}
+
+impl PointerHandler for Wl {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            let Some(id) = self.id_of(&event.surface) else {
+                continue;
+            };
+
+            match event.kind {
+                PointerEventKind::Enter { .. } => {
+                    self.pointer_focus = Some(id);
+                    self.cursor = None;
+                    self.push(id, Event::PointerEntered);
+                    self.push(id, Event::PointerMoved(event.position));
+                }
+                PointerEventKind::Leave { .. } => {
+                    if self.pointer_focus == Some(id) {
+                        self.pointer_focus = None;
+                    }
+
+                    self.push(id, Event::PointerLeft);
+                }
+                PointerEventKind::Motion { .. } => {
+                    self.push(id, Event::PointerMoved(event.position));
+                }
+                PointerEventKind::Press { button, .. } => {
+                    self.push(
+                        id,
+                        Event::PointerButton {
+                            button,
+                            pressed: true,
+                        },
+                    );
+                }
+                PointerEventKind::Release { button, .. } => {
+                    self.push(
+                        id,
+                        Event::PointerButton {
+                            button,
+                            pressed: false,
+                        },
+                    );
+                }
+                PointerEventKind::Axis {
+                    horizontal,
+                    vertical,
+                    ..
+                } => {
+                    self.push(
+                        id,
+                        Event::PointerScroll {
+                            x: horizontal,
+                            y: vertical,
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+impl ShmHandler for Wl {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
+impl ProvidesRegistryState for Wl {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+
+    registry_handlers![OutputState, SeatState];
+}
+
+impl Dispatch<WpViewporter, GlobalData> for Wl {
+    fn event(
+        _: &mut Self,
+        _: &WpViewporter,
+        _: <WpViewporter as Proxy>::Event,
+        _: &GlobalData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpViewport, GlobalData> for Wl {
+    fn event(
+        _: &mut Self,
+        _: &WpViewport,
+        _: <WpViewport as Proxy>::Event,
+        _: &GlobalData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpFractionalScaleManagerV1, GlobalData> for Wl {
+    fn event(
+        _: &mut Self,
+        _: &WpFractionalScaleManagerV1,
+        _: <WpFractionalScaleManagerV1 as Proxy>::Event,
+        _: &GlobalData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpFractionalScaleV1, FractionalData> for Wl {
+    fn event(
+        state: &mut Self,
+        _: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        data: &FractionalData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            state.set_scale(data.0, f64::from(scale) / 120.0);
+        }
+    }
+}
+
+delegate_compositor!(Wl);
+delegate_output!(Wl);
+delegate_shm!(Wl);
+delegate_seat!(Wl);
+delegate_keyboard!(Wl);
+delegate_pointer!(Wl);
+delegate_layer!(Wl);
+delegate_registry!(Wl);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIVE_THIRDS: f64 = 200.0 / 120.0;
+
+    #[test]
+    fn multiples_of_five_virtual_pixels_are_exact_at_five_thirds() {
+        for virtual_px in (5..=200).step_by(5) {
+            let logical = logical_for(virtual_px, 3, FIVE_THIRDS);
+
+            assert!(is_exact(logical, FIVE_THIRDS), "{virtual_px} -> {logical}");
+            assert_eq!(
+                (f64::from(logical) * FIVE_THIRDS).round() as u32,
+                virtual_px * 3
+            );
+        }
+    }
+
+    #[test]
+    fn the_bar_height_of_the_spike() {
+        assert_eq!(logical_for(25, 3, FIVE_THIRDS), 45);
+        assert_eq!(logical_for(25, 2, 1.0), 50);
+        assert_eq!(logical_for(25, 4, 2.0), 50);
+    }
+
+    #[test]
+    fn an_integer_scale_is_always_exact() {
+        for virtual_px in 1..100 {
+            assert_eq!(logical_for(virtual_px, 2, 1.0), virtual_px * 2);
+            assert_eq!(logical_for(virtual_px, 4, 2.0), virtual_px * 2);
+        }
+    }
+
+    #[test]
+    fn a_size_that_cannot_be_exact_is_still_covered() {
+        for virtual_px in 1..200 {
+            let logical = logical_for(virtual_px, 3, FIVE_THIRDS);
+
+            assert!(f64::from(logical) * FIVE_THIRDS + 0.5 >= f64::from(virtual_px * 3));
+            // ...and by no more than three virtual pixels.
+            assert!(f64::from(logical) * FIVE_THIRDS <= f64::from((virtual_px + 3) * 3) + 0.5);
+        }
+    }
+}
