@@ -217,6 +217,11 @@ is the point of the check. All five palettes were applied in memory
 
 ## 4. Use
 
+Needs Departure Mono and Departure Mono Tight installed (`tools/install.sh`) and,
+for the whole thing to read right, a quadrille theme (`omarchy theme set
+"Quadrille Terminal"`). On another theme the bar still works and takes its colours
+from that theme, with a 1-pixel unit.
+
 ```sh
 plugins/install.sh            # link, enable all, restart the shell
 plugins/install.sh bar        # only the bar
@@ -240,6 +245,20 @@ omarchy-shell shell summon quadrille.lab '{"screen":"HDMI-A-1"}'   # the specime
 If a plugin breaks the shell: `omarchy plugin disable <id>` and
 `omarchy-restart-shell`. A bar that fails to load falls back to the stock bar on
 its own.
+
+Working on them:
+
+```sh
+omarchy-shell shell rescanPlugins     # reload bar, skins, widgets, lab
+omarchy-restart-shell                 # the kit's singletons, and the osd/menu/notification clones
+quickshell log -i "$(quickshell list --all | sed -n 's/^Instance \(.*\):$/\1/p' | head -1)" -t 40
+```
+
+What the plugins execute, all through the same `bar.run` the stock widgets use:
+the menu button (`omarchy-shell shell toggle omarchy.menu`, `xdg-terminal-exec`),
+the CPU gauges' click (`omarchy-launch-or-focus-tui btop`), and the bar's one-off
+`omarchy-shell shell rescanPlugins` described above. Nothing touches the network
+or writes outside its own directory.
 
 ## 5. Not done
 
