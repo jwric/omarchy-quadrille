@@ -8,7 +8,16 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-quadrille=${QUADRILLE:-$root/../graticule}
+# quadrille's checkout: $QUADRILLE, or one beside this repository (it holds the fonts).
+quadrille=${QUADRILLE:-}
+for dir in "$root/../quadrille" "$root/../graticule"; do
+  [[ -n $quadrille ]] && break
+  [[ -d $dir/crates/quadrille/fonts ]] && quadrille=$dir
+done
+[[ -d $quadrille/crates/quadrille/fonts ]] || {
+  echo "install.sh: quadrille's checkout not found; clone it beside this repository or set QUADRILLE=/path" >&2
+  exit 1
+}
 
 mkdir -p "$HOME/.config/omarchy/themes"
 for theme in "$root"/themes/quadrille-*/; do

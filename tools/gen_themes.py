@@ -22,6 +22,7 @@ own templates and the colours above.
 """
 
 import argparse
+import os
 import re
 import struct
 import sys
@@ -29,7 +30,18 @@ import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_THEME_RS = ROOT.parent / "graticule" / "crates" / "quadrille" / "src" / "theme.rs"
+def _find_theme_rs() -> Path:
+    """`$QUADRILLE`, or a quadrille checkout beside this repository."""
+    candidates = [Path(os.environ["QUADRILLE"])] if os.environ.get("QUADRILLE") else []
+    candidates += [ROOT.parent / "quadrille", ROOT.parent / "graticule"]
+    for root in candidates:
+        theme_rs = root / "crates" / "quadrille" / "src" / "theme.rs"
+        if theme_rs.exists():
+            return theme_rs
+    return candidates[0] / "crates" / "quadrille" / "src" / "theme.rs"
+
+
+DEFAULT_THEME_RS = _find_theme_rs()
 SHELL_TEMPLATE = Path("/usr/share/omarchy/default/themed/shell.toml.tpl")
 
 # ---------------------------------------------------------------- palettes

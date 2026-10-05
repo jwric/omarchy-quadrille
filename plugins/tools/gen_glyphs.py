@@ -29,6 +29,7 @@ from PIL import Image, ImageDraw, ImageFont
 HERE = Path(__file__).resolve().parent
 DEFAULT_FONTS = [
     Path.home() / ".local/share/fonts/departure-mono/DepartureMonoTight-Regular.ttf",
+    HERE.parent.parent.parent / "quadrille/crates/quadrille/fonts/DepartureMonoTight-Regular.ttf",
     HERE.parent.parent.parent / "graticule/crates/quadrille/fonts/DepartureMonoTight-Regular.ttf",
 ]
 RANGES = [

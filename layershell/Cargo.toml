@@ -7,8 +7,9 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-# The toolkit, from the graticule checkout next door.
-quadrille = { path = "../../graticule/crates/quadrille" }
+# The toolkit. To build against a local checkout instead, uncomment the patch
+# at the end of this file.
+quadrille = { git = "https://github.com/jwric/quadrille" }
 
 # The pixel-scale iced fork (iced master + virtual pixels). Everything comes
 # from one git source so that quadrille and the shell share one set of types.
@@ -33,3 +34,6 @@ lto = "fat"
 codegen-units = 1
 strip = true
 debug = false
+
+# [patch."https://github.com/jwric/quadrille"]
+# quadrille = { path = "../../quadrille/crates/quadrille" }
