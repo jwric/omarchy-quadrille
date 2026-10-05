@@ -8,8 +8,10 @@ BarWidget {
   id: root
   moduleName: "omarchy.menu"
 
-  implicitWidth: vertical ? barSize : (7 + 2 * 4) * Px.unit
-  implicitHeight: vertical ? (7 + 2 * 4) * Px.unit : barSize
+  readonly property var g: Px.of(root)
+
+  implicitWidth: vertical ? barSize : (7 + 2 * 4) * g.unit
+  implicitHeight: vertical ? (7 + 2 * 4) * g.unit : barSize
 
   BarButton {
     id: button
@@ -23,16 +25,16 @@ BarWidget {
     }
 
     Rectangle {
-      x: root.vertical ? Px.centre(parent.width, width) : 0
-      y: root.vertical ? 0 : Px.px(2)
-      width: root.vertical ? Px.px(12) : parent.width
-      height: root.vertical ? parent.height : Px.px(12)
+      x: root.vertical ? g.centre(parent.width, width) : 0
+      y: root.vertical ? 0 : g.px(2)
+      width: root.vertical ? g.px(12) : parent.width
+      height: root.vertical ? parent.height : g.px(12)
       antialiasing: false
       color: button.down ? Role.hover : (button.hovered ? Role.raised : "transparent")
     }
     Sprite {
-      x: Px.centre(parent.width, width)
-      y: Px.centre(parent.height, height)
+      x: g.centre(parent.width, width)
+      y: g.centre(parent.height, height)
       rows: Sprites.menu
       color: button.hovered || button.down ? Role.ink : Role.muted
     }

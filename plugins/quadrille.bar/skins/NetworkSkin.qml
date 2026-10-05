@@ -10,11 +10,11 @@ Skin {
   readonly property real strength: prop("signalStrength", -1)
   readonly property int level: kind !== "wifi" ? 0 : (strength < 25 ? 1 : (strength < 60 ? 2 : 3))
 
-  implicitWidth: (7 + 2 * pad) * Px.unit
+  implicitWidth: (7 + 2 * pad) * g.unit
 
   Sprite {
-    x: root.pad * Px.unit
-    y: Px.centre(root.height, height)
+    x: root.pad * g.unit
+    y: g.centre(root.height, height)
     rows: root.kind === "wifi" ? Sprites.wifi : (root.kind === "ethernet" ? Sprites.ethernet : Sprites.offline)
     level: root.level
     color: Role.ink

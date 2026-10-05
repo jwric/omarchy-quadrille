@@ -21,6 +21,8 @@ import "../NotificationLogic.js" as NotificationLogic
 Item {
   id: root
 
+  readonly property var g: Px.of(root)
+
   property string app: ""
   property string appIcon: ""
   property string summary: ""
@@ -74,8 +76,8 @@ Item {
   readonly property int textColumns: Math.floor((cardWidth - 2 - 2 * padX - (hasIcon ? iconBox + 4 : 0)) / 6)
   readonly property bool showApp: app.length > 0 && !singleLine
 
-  implicitWidth: Px.px(cardWidth)
-  implicitHeight: Px.px(2 + 2 * padY) + column.height
+  implicitWidth: g.px(cardWidth)
+  implicitHeight: g.px(2 + 2 * padY) + column.height
 
   Rectangle {
     anchors.fill: parent
@@ -83,7 +85,7 @@ Item {
     antialiasing: false
     Rectangle {
       anchors.fill: parent
-      anchors.margins: Px.hair
+      anchors.margins: g.hair
       color: hoverTracker.hovered ? Role.raised : Role.ground
       antialiasing: false
     }
@@ -106,10 +108,10 @@ Item {
   Image {
     id: iconImage
     visible: root.hasIcon
-    x: Px.px(1 + root.padX)
-    y: Px.px(1 + root.padY)
-    width: Px.px(root.iconBox)
-    height: Px.px(root.iconBox)
+    x: g.px(1 + root.padX)
+    y: g.px(1 + root.padY)
+    width: g.px(root.iconBox)
+    height: g.px(root.iconBox)
     source: root.smallIconSource
     sourceSize.width: width * Screen.devicePixelRatio
     sourceSize.height: height * Screen.devicePixelRatio
@@ -121,15 +123,15 @@ Item {
 
   Column {
     id: column
-    x: Px.px(1 + root.padX + (root.hasIcon ? root.iconBox + 4 : 0))
-    y: Px.px(1 + root.padY)
+    x: g.px(1 + root.padX + (root.hasIcon ? root.iconBox + 4 : 0))
+    y: g.px(1 + root.padY)
     spacing: 0
 
     // app, and the lamp of a critical one
     Item {
       visible: root.showApp
-      width: root.textColumns * Px.cellW
-      height: root.showApp ? Px.line : 0
+      width: root.textColumns * g.cellW
+      height: root.showApp ? g.line : 0
       PixelText {
         text: root.app.toUpperCase().slice(0, root.textColumns - (root.critical ? 3 : 0))
         ink: Role.muted
@@ -139,24 +141,24 @@ Item {
         on: true
         tone: Role.alarm
         x: parent.width - width
-        y: Px.onCaps(6)
+        y: g.onCaps(6)
       }
     }
 
     // the summary: a glyph toast leads with its glyph
     Row {
-      spacing: Px.px(2)
+      spacing: g.px(2)
       visible: root.summary.length > 0 || root.hasGlyph
       Item {
         visible: root.hasGlyph && !root.hasIcon
-        width: 2 * Px.cellW
-        height: Px.line
+        width: 2 * g.cellW
+        height: g.line
         Text {
           anchors.centerIn: parent
           text: root.glyph
           color: Role.ink
           font.family: Px.face
-          font.pixelSize: Px.size
+          font.pixelSize: Math.round(11 * root.g.unit)
           renderType: Text.NativeRendering
         }
       }

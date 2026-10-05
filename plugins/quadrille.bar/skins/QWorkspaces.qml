@@ -13,6 +13,8 @@ BarWidget {
   id: root
   moduleName: "omarchy.workspaces"
 
+  readonly property var g: Px.of(root)
+
   readonly property var screen: QsWindow.window ? QsWindow.window.screen : null
   readonly property var monitor: screen ? Hyprland.monitorFor(screen) : null
   readonly property int activeId: monitor && monitor.activeWorkspace ? monitor.activeWorkspace.id : -1
@@ -39,14 +41,14 @@ BarWidget {
     root.bar.run("hyprctl dispatch " + Util.shellQuote("hl.dsp.focus({ workspace = \"" + id + "\" })"))
   }
 
-  implicitWidth: row.width + Px.px(2)
+  implicitWidth: row.width + g.px(2)
   implicitHeight: barSize
 
   Row {
     id: row
-    x: Px.px(1)
-    y: Px.centre(root.height, height)
-    spacing: Px.px(2)
+    x: g.px(1)
+    y: g.centre(root.height, height)
+    spacing: g.px(2)
 
     Repeater {
       model: root.workspaceIds()

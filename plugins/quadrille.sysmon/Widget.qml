@@ -10,6 +10,8 @@ BarWidget {
   id: root
   moduleName: "quadrille.sysmon"
 
+  readonly property var g: Px.of(root)
+
   property real cpu: 0
   property real mem: 0
   property real lastTotal: 0
@@ -18,9 +20,9 @@ BarWidget {
 
   readonly property int cells: 5
   readonly property int pad: 3
-  readonly property int groupWidth: 3 * Px.cellW + Px.px(2) + cpuGauge.width
+  readonly property real groupWidth: 3 * g.cellW + g.px(2) + cpuGauge.width
 
-  implicitWidth: groupWidth * 2 + Px.px(4) + 2 * pad * Px.unit
+  implicitWidth: groupWidth * 2 + g.px(4) + 2 * pad * g.unit
   implicitHeight: barSize
 
   function sampleCpu(raw) {
@@ -73,29 +75,29 @@ BarWidget {
     onPressed: function(b) { if (root.bar) root.bar.run("omarchy-launch-or-focus-tui btop") }
 
     Rectangle {
-      x: 0; y: Px.px(2); width: parent.width; height: Px.px(12)
+      x: 0; y: g.px(2); width: parent.width; height: g.px(12)
       antialiasing: false
       color: button.down ? Role.hover : (button.hovered ? Role.raised : "transparent")
     }
     Row {
-      x: root.pad * Px.unit
-      y: Px.centre(parent.height, height)
-      spacing: Px.px(4)
+      x: root.pad * g.unit
+      y: g.centre(parent.height, height)
+      spacing: g.px(4)
 
       Row {
-        spacing: Px.px(2)
+        spacing: g.px(2)
         PixelText { text: "CPU"; ink: Role.muted }
         BarGauge {
           id: cpuGauge
-          y: Px.centre(Px.line, height)
+          y: g.centre(g.line, height)
           cells: root.cells; cellHeight: 6; value: root.cpu; redline: 0.8; fill: Role.live
         }
       }
       Row {
-        spacing: Px.px(2)
+        spacing: g.px(2)
         PixelText { text: "MEM"; ink: Role.muted }
         BarGauge {
-          y: Px.centre(Px.line, height)
+          y: g.centre(g.line, height)
           cells: root.cells; cellHeight: 6; value: root.mem; redline: 0.8; fill: Role.live
         }
       }

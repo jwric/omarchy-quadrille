@@ -1197,16 +1197,23 @@ Item {
     visible: !remapGuard.remapping
     exclusionMode: root.barHidden ? ExclusionMode.Ignore : ExclusionMode.Auto
 
+    // The pixel grid of THIS window: a virtual pixel is a whole number of its
+    // device pixels, so what it is depends on the screen it is on. `g.bar` is
+    // the bar's frame (16 vpx); the layer surface is that rounded up to a whole
+    // logical pixel (29 at scale 1.666667, where 16 vpx are 28.8), and the
+    // frame sits at the surface's origin.
+    readonly property var g: Px.forWindow(barWindow)
+
     ScreenMoveRemap {
       id: remapGuard
       window: barWindow
     }
 
     margins {
-      top: root.barHidden && root.position === "top" ? -root.barSize : 0
-      bottom: root.barHidden && root.position === "bottom" ? -root.barSize : 0
-      left: root.barHidden && root.position === "left" ? -root.barSize : 0
-      right: root.barHidden && root.position === "right" ? -root.barSize : 0
+      top: root.barHidden && root.position === "top" ? -barWindow.implicitHeight : 0
+      bottom: root.barHidden && root.position === "bottom" ? -barWindow.implicitHeight : 0
+      left: root.barHidden && root.position === "left" ? -barWindow.implicitWidth : 0
+      right: root.barHidden && root.position === "right" ? -barWindow.implicitWidth : 0
     }
 
     anchors {
@@ -1216,8 +1223,8 @@ Item {
       right: root.position === "right" || !root.vertical
     }
 
-    implicitWidth: root.vertical ? root.barSize : 0
-    implicitHeight: root.vertical ? 0 : root.barSize
+    implicitWidth: root.vertical ? g.barWindow : 0
+    implicitHeight: root.vertical ? 0 : g.barWindow
     color: root.transparent ? "transparent" : root.background
     surfaceFormat.opaque: false
     WlrLayershell.namespace: "omarchy-bar"
@@ -1243,10 +1250,10 @@ Item {
     Rectangle {
       color: Role.edge
       antialiasing: false
-      x: root.position === "left" ? parent.width - Px.hair : 0
-      y: root.position === "top" ? parent.height - Px.hair : 0
-      width: root.vertical ? Px.hair : parent.width
-      height: root.vertical ? parent.height : Px.hair
+      x: root.position === "left" ? barWindow.g.bar - barWindow.g.hair : 0
+      y: root.position === "top" ? barWindow.g.bar - barWindow.g.hair : 0
+      width: root.vertical ? barWindow.g.hair : parent.width
+      height: root.vertical ? parent.height : barWindow.g.hair
     }
 
     PopupWindow {
@@ -1273,47 +1280,48 @@ Item {
           var popupWidth = tooltipWindow.implicitWidth
           var popupHeight = tooltipWindow.implicitHeight
           var localX = target.width / 2 - popupWidth / 2
-          var localY = target.height + Px.px(3)
+          var localY = target.height + barWindow.g.px(3)
 
           if (root.position === "bottom") {
-            localY = -popupHeight - Px.px(3)
+            localY = -popupHeight - barWindow.g.px(3)
           } else if (root.position === "left") {
-            localX = target.width + Px.px(3)
+            localX = target.width + barWindow.g.px(3)
             localY = target.height / 2 - popupHeight / 2
           } else if (root.position === "right") {
-            localX = -popupWidth - Px.px(3)
+            localX = -popupWidth - barWindow.g.px(3)
             localY = target.height / 2 - popupHeight / 2
           }
 
           var point = barWindow.contentItem.mapFromItem(target, localX, localY)
-          tooltipAnchor.rect.x = Px.snap(point.x)
-          tooltipAnchor.rect.y = Px.snap(point.y)
+          tooltipAnchor.rect.x = barWindow.g.snap(point.x)
+          tooltipAnchor.rect.y = barWindow.g.snap(point.y)
         }
       }
 
       Rectangle {
         id: tooltipBubble
+        readonly property var g: Px.of(tooltipBubble)
         readonly property var lines: String(root.tooltipText).split("\n")
         readonly property int columns: {
           var widest = 0
-          for (var i = 0; i < lines.length; i++) widest = Math.max(widest, lines[i].length)
+          for (var i = 0; i < lines.length; i++) widest = Math.max(widest, Array.from(lines[i]).length)
           return widest
         }
         // A hairline, 3 vpx of air either side of the ink and 1 above and below.
-        implicitWidth: columns * Px.cellW + Px.px(2 + 5)
-        implicitHeight: lines.length * Px.line + Px.px(2 + 2)
+        implicitWidth: columns * g.cellW + g.px(2 + 5)
+        implicitHeight: lines.length * g.line + g.px(2 + 2)
         color: Role.edge
         antialiasing: false
 
         Rectangle {
           anchors.fill: parent
-          anchors.margins: Px.hair
+          anchors.margins: tooltipBubble.g.hair
           color: Role.raised
           antialiasing: false
         }
         Column {
-          x: Px.px(3)
-          y: Px.px(2)
+          x: tooltipBubble.g.px(3)
+          y: tooltipBubble.g.px(2)
           Repeater {
             model: tooltipBubble.lines
             PixelText {
@@ -1330,20 +1338,23 @@ Item {
       id: horizontalBar
 
       Item {
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: barWindow.g.bar
 
         CenterModules { anchors.fill: parent }
 
         LeftModules {
           anchors.left: parent.left
-          anchors.leftMargin: Px.gap
-          anchors.verticalCenter: parent.verticalCenter
+          anchors.leftMargin: barWindow.g.gap
+          anchors.top: parent.top
         }
 
         RightModules {
           anchors.right: parent.right
-          anchors.rightMargin: Px.gap
-          anchors.verticalCenter: parent.verticalCenter
+          anchors.rightMargin: barWindow.g.gap
+          anchors.top: parent.top
         }
       }
     }
@@ -1358,13 +1369,13 @@ Item {
 
         LeftModules {
           anchors.top: parent.top
-          anchors.topMargin: Px.gap
+          anchors.topMargin: barWindow.g.gap
           anchors.horizontalCenter: parent.horizontalCenter
         }
 
         RightModules {
           anchors.bottom: parent.bottom
-          anchors.bottomMargin: Px.gap
+          anchors.bottomMargin: barWindow.g.gap
           anchors.horizontalCenter: parent.horizontalCenter
         }
       }
@@ -1387,6 +1398,7 @@ Item {
 
   // Stock widgets that keep running, hidden, under a pixel face.
   Component { id: clockSkin; ClockSkin { } }
+  Component { id: keyboardSkin; KeyboardSkin { } }
   Component { id: networkSkin; NetworkSkin { } }
   Component { id: bluetoothSkin; BluetoothSkin { } }
   Component { id: audioSkin; AudioSkin { } }
@@ -1395,6 +1407,7 @@ Item {
   function skinFor(id) {
     switch (id) {
       case "omarchy.clock": return clockSkin
+      case "omarchy.keyboard-layout": return keyboardSkin
       case "omarchy.network": return networkSkin
       case "omarchy.bluetooth": return bluetoothSkin
       case "omarchy.audio": return audioSkin
@@ -1412,7 +1425,8 @@ Item {
       (root.barDragScreen && ghostScreen && root.barDragScreen.name && ghostScreen.name && root.barDragScreen.name === ghostScreen.name)
     readonly property bool active: root.barDragSource && root.barDragScreen && screenMatches
     readonly property var sourceItem: root.barDragSource ? root.barDragSource.activeItem : null
-    readonly property int ghostPadding: Px.hair
+    readonly property var g: Px.forWindow(ghostWindow)
+    readonly property real ghostPadding: g.hair
     readonly property int ghostWidth: sourceItem ? Math.max(1, Math.ceil(sourceItem.width)) : 1
     readonly property int ghostHeight: sourceItem ? Math.max(1, Math.ceil(sourceItem.height)) : 1
 
@@ -1444,7 +1458,7 @@ Item {
       BorderSurface {
         anchors.fill: parent
         color: root.transparent ? "transparent" : root.background
-        borderSpec: Border.flat(Role.edge, Px.hair)
+        borderSpec: Border.flat(Role.edge, ghostWindow.g.hair)
         radius: 0
       }
 
@@ -1504,14 +1518,15 @@ Item {
 
         required property string modelData
         readonly property bool edgeVertical: modelData === "left" || modelData === "right"
-        readonly property int edgeSize: edgeVertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
+        readonly property var g: Px.forWindow(moveGhostWindow)
+        readonly property real edgeSize: g.barWindow
 
         x: modelData === "right" ? parent.width - edgeSize : 0
         y: modelData === "bottom" ? parent.height - edgeSize : 0
         width: edgeVertical ? edgeSize : parent.width
         height: edgeVertical ? parent.height : edgeSize
         color: root.transparent ? "transparent" : root.background
-        borderSpec: Border.flat(Role.accent, Px.hair)
+        borderSpec: Border.flat(Role.accent, edgeSlab.g.hair)
         // The candidate edge, drawn the moment it is chosen; nothing fades.
         visible: root.barMoveCandidate === modelData
       }
@@ -1537,6 +1552,7 @@ Item {
   component CenterModules: Item {
     id: centerRoot
 
+    readonly property var g: Px.of(centerRoot)
     property var entries: root.layoutEntries("center")
     readonly property bool hasAnchor: root.entryIndex(entries, root.centerAnchor) !== -1
     readonly property var anchorEntry: root.findCenterAnchorEntry()
@@ -1562,7 +1578,8 @@ Item {
           visible: !centerRoot.hasAnchor
           entries: centerRoot.entries
           region: "center"
-          anchors.centerIn: parent
+          x: centerRoot.g.snap((parent.width - width) / 2)
+          y: 0
         }
 
         ModuleList {
@@ -1570,7 +1587,7 @@ Item {
           entries: root.entriesBefore(centerRoot.entries, root.centerAnchor)
           region: "center"
           anchors.right: centerAnchorModule.left
-          anchors.verticalCenter: centerAnchorModule.verticalCenter
+          anchors.top: centerAnchorModule.top
         }
 
         ModuleSlot {
@@ -1578,7 +1595,8 @@ Item {
           visible: centerRoot.hasAnchor
           entry: centerRoot.anchorEntry
           region: "center"
-          anchors.centerIn: parent
+          x: centerRoot.g.snap((parent.width - width) / 2)
+          y: 0
         }
 
         ModuleList {
@@ -1586,7 +1604,7 @@ Item {
           entries: root.entriesAfter(centerRoot.entries, root.centerAnchor)
           region: "center"
           anchors.left: centerAnchorModule.right
-          anchors.verticalCenter: centerAnchorModule.verticalCenter
+          anchors.top: centerAnchorModule.top
         }
       }
     }
@@ -1776,6 +1794,10 @@ Item {
   component ModuleSlot: Item {
     id: slot
 
+    // This window's grid. A slot is the bar's frame tall (16 vpx) and a whole
+    // number of vpx wide, so what is laid out after it stays on device pixels.
+    readonly property var g: Px.of(slot)
+
     required property var entry
     property string region: ""
     readonly property string moduleName: root.entryId(entry)
@@ -1823,10 +1845,10 @@ Item {
     readonly property bool pointable: moduleHover.hovered && !dragSource
       && root.moduleClickTargetAt(slot, moduleHover.point.position.x, moduleHover.point.position.y) !== null
     // The box an open popup is marked with corner brackets around.
-    readonly property rect mark: skinned ? skinItem.mark : Qt.rect(0, Px.px(2), slot.width, Px.px(12))
+    readonly property rect mark: skinned ? skinItem.mark : Qt.rect(0, slot.g.px(2), slot.width, slot.g.px(12))
     implicitWidth: activeItem && activeItem.visible
-      ? (skinned ? skinItem.implicitWidth : (root.vertical ? root.barSize : activeItem.implicitWidth)) : 0
-    implicitHeight: activeItem && activeItem.visible ? activeItem.implicitHeight : 0
+      ? (skinned ? skinItem.implicitWidth : (root.vertical ? g.barWindow : g.whole(activeItem.implicitWidth))) : 0
+    implicitHeight: activeItem && activeItem.visible ? (root.vertical ? activeItem.implicitHeight : g.bar) : 0
     width: implicitWidth
     height: implicitHeight
     z: modulePointer.dragging ? 100 : 0
@@ -1843,8 +1865,8 @@ Item {
     // raised; the slot being dragged is a raised blank.
     Rectangle {
       visible: slot.pointable || slot.dragSource
-      x: 0; y: Px.px(2)
-      width: parent.width; height: Px.px(12)
+      x: 0; y: slot.g.px(2)
+      width: parent.width; height: slot.g.px(12)
       antialiasing: false
       color: Role.raised
     }

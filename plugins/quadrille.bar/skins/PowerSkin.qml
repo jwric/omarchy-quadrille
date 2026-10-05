@@ -14,20 +14,20 @@ Skin {
   readonly property color tone: charging ? Role.live : (fraction < 0.15 ? Role.alarm : Role.ink)
 
   visible: present
-  implicitWidth: present ? (7 + 2 + percent.length * 6 + 2 * pad) * Px.unit : 0
+  implicitWidth: present ? (7 + 2 + percent.length * 6 + 2 * pad) * g.unit : 0
 
   Sprite {
     id: icon
-    x: root.pad * Px.unit
-    y: Px.centre(root.height, height)
+    x: root.pad * g.unit
+    y: g.centre(root.height, height)
     rows: Sprites.battery
     level: root.level
     color: root.tone
     dim: Role.faint
   }
   PixelText {
-    x: icon.x + icon.width + Px.px(2)
-    y: Px.centre(root.height, height)
+    x: icon.x + icon.width + g.px(2)
+    y: g.centre(root.height, height)
     text: root.percent
     ink: root.tone
   }

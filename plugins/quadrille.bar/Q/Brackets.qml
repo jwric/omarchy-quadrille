@@ -7,14 +7,16 @@ import "."
 Item {
   id: root
 
+  readonly property var g: Px.of(root)
+
   property int arm: 3
   property int weight: 1
   property color color: Role.accent
 
   anchors.fill: parent
 
-  readonly property int a: arm * Px.unit
-  readonly property int w: weight * Px.unit
+  readonly property real a: arm * g.unit
+  readonly property real w: weight * g.unit
 
   Repeater {
     model: [

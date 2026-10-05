@@ -7,13 +7,15 @@ import "."
 Item {
   id: root
 
+  readonly property var g: Px.of(root)
+
   property var rows: []
   property int level: 9
   property color color: Role.ink
   // What an unlit digit shows; transparent hides it.
   property color dim: Role.faint
   property color accent: Role.alarm
-  property int unit: Px.unit
+  property real unit: g.unit
 
   implicitWidth: Sprites.width(rows) * unit
   implicitHeight: Sprites.height(rows) * unit

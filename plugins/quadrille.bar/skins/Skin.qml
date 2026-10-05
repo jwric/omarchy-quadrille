@@ -10,6 +10,8 @@ import "../Q"
 Item {
   id: root
 
+  readonly property var g: Px.of(root)
+
   // The stock widget this skin stands in for, and the bar's host object.
   property var host: null
   property var bar: null
@@ -20,7 +22,7 @@ Item {
   property int pad: 3
   // The bounds corner brackets are drawn around while the popup is open,
   // in the skin's own coordinates.
-  property rect mark: Qt.rect(0, Px.px(2), width, Px.px(12))
+  property rect mark: Qt.rect(0, g.px(2), width, g.px(12))
 
   function prop(name, fallback) {
     return host && host[name] !== undefined && host[name] !== null ? host[name] : fallback

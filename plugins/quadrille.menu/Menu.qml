@@ -29,6 +29,11 @@ Item {
   // Nerd Font icons beside the entries. Off: a pixel menu has no vector icons.
   property bool glyphIcons: false
 
+  // The pixel grid of the screen the menu is on: a virtual pixel is a whole
+  // number of that screen's device pixels (see Q/Px.qml), so every length below
+  // is a count of them and is real, not int.
+  readonly property var g: Px.forWindow(panel)
+
   // Injected by omarchy-shell when this plugin is summoned.
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   property var shell: null
@@ -107,7 +112,8 @@ Item {
   property color background: Color.menu.background
   property color foreground: Color.menu.text
   property color border: Color.menu.border
-  property var borderSpec: Border.surfaceSpec("menu", "border", border, Math.max(1, Style.space(2)))
+  // The hairline is drawn by the card itself, on the grid; no stock border.
+  property var borderSpec: Border.none()
   property color scrim: Color.menu.scrim
   property color selectedBackground: Color.menu.selectedBackground
   property color selectedText: Color.menu.selectedText
@@ -116,21 +122,23 @@ Item {
   readonly property real rowReservedBorderLeft: Border.left(selectedBorderSpec)
   readonly property real rowReservedBorderRight: Border.right(selectedBorderSpec)
   readonly property int cornerRadius: Style.cornerRadius
-  property int contentMargin: Px.px(6)
-  property int headerHeight: Px.px(14)
-  property int contentSpacing: Px.px(3)
-  property int baseRowHeight: Px.px(14)
-  property int detailRowHeight: Px.px(28)
+  // 6 vpx of padding (the card adds its 1-vpx hairline to it, as the stock card
+  // adds its border: the height formulas below count only the padding)
+  property real contentMargin: g.px(6)
+  property real headerHeight: g.px(14)
+  property real contentSpacing: g.px(3)
+  property real baseRowHeight: g.px(14)
+  property real detailRowHeight: g.px(28)
   // How much of the first hidden row stays visible at the fold — enough to
   // read as a cut-off row rather than a bottom border.
-  property int rowPeek: Math.round(baseRowHeight * 0.55)
-  property int rowSpacing: 0
-  property int dividerHeight: Px.px(8)
+  property real rowPeek: g.snap(baseRowHeight * 0.55)
+  property real rowSpacing: 0
+  property real dividerHeight: g.px(8)
   property bool searchDivider: false
   property int layoutSerial: 0
-  property int cardWidth: Px.snap(Math.min(root.dmenuActive ? Style.space(root.dmenuWidth) : ((root.activeMenu === "trigger.capture.screenrecord" || root.activeMenu === "style.font") ? Style.space(520) : Style.space(312)), panel.width - Style.gapsOut * 2))
-  property int visibleRowsHeight: root.dmenuActive ? dmenuRowListHeight(layoutSerial, displayModel.count, filterText) : rowListHeight(layoutSerial, displayModel.count, filterText, searchDivider)
-  property int cardHeight: root.dmenuActive
+  property real cardWidth: g.snap(Math.min(root.dmenuActive ? Style.space(root.dmenuWidth) : ((root.activeMenu === "trigger.capture.screenrecord" || root.activeMenu === "style.font") ? g.px(260) : g.px(156)), panel.width - Style.gapsOut * 2))
+  property real visibleRowsHeight: root.dmenuActive ? dmenuRowListHeight(layoutSerial, displayModel.count, filterText) : rowListHeight(layoutSerial, displayModel.count, filterText, searchDivider)
+  property real cardHeight: root.dmenuActive
     ? Math.min(contentMargin * 2 + headerHeight + (mode === "input" ? 0 : contentSpacing + visibleRowsHeight), panel.height - Style.gapsOut * 2)
     : Math.min(contentMargin * 2 + headerHeight + contentSpacing + visibleRowsHeight, panel.height - Style.gapsOut * 2)
 
@@ -1050,10 +1058,10 @@ Item {
     // on every resize, which made the menu jump around. The rows height is
     // frozen at the same moment, so the starting menu also caps how tall the
     // card may grow from there. Closing unfreezes both.
-    property int cardTop: -1
-    property int maxRowsHeight: -1
-    readonly property int centeredTop: Px.snap(Math.max(Style.gapsOut, (height - root.cardHeight) / 2))
-    readonly property int effectiveCardTop: cardTop >= 0 ? cardTop : centeredTop
+    property real cardTop: -1
+    property real maxRowsHeight: -1
+    readonly property real centeredTop: root.g.snap(Math.max(Style.gapsOut, (height - root.cardHeight) / 2))
+    readonly property real effectiveCardTop: cardTop >= 0 ? cardTop : centeredTop
     function freezeCardTop() {
       if (visible && cardTop < 0) {
         cardTop = effectiveCardTop
@@ -1077,11 +1085,20 @@ Item {
       width: root.cardWidth
       height: Math.min(root.cardHeight, panel.height - Style.gapsOut - panel.effectiveCardTop)
       radius: root.cornerRadius
-      x: Px.snap((parent.width - width) / 2)
+      x: root.g.snap((parent.width - width) / 2)
       y: panel.effectiveCardTop
       color: root.background
       borderSpec: root.borderSpec
-      padding: root.contentMargin
+      padding: root.contentMargin + root.g.hair
+
+      // The card's hairline, a whole number of device pixels.
+      Rectangle {
+        anchors.fill: parent
+        color: "transparent"
+        border.color: root.border
+        border.width: root.g.hair
+        antialiasing: false
+      }
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
@@ -1170,17 +1187,11 @@ Item {
           radius: root.cornerRadius
           color: "transparent"
 
-          Text {
-            textFormat: Text.PlainText
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
+          PixelText {
+            y: root.g.centre(parent.height, height)
             text: root.filterText || (root.dmenuActive ? (root.dmenuPrompt + "…") : ((root.item(root.activeMenu) ? (root.item(root.activeMenu).title || root.item(root.activeMenu).label) : "Go") + "…"))
-            color: root.filterText ? root.foreground : Role.muted
-            font.family: root.fontFamily
-            renderType: Text.NativeRendering
-            font.pixelSize: Px.size
-            elide: Text.ElideRight
+            ink: root.filterText ? root.foreground : Role.muted
+            columns: root.g.columns(parent.width)
           }
 
         }
@@ -1208,11 +1219,11 @@ Item {
 
               Rectangle {
                 anchors.left: parent.left
-                anchors.leftMargin: Style.space(4)
+                anchors.leftMargin: root.g.px(2)
                 anchors.right: parent.right
-                anchors.rightMargin: Style.space(4)
+                anchors.rightMargin: root.g.px(2)
                 anchors.verticalCenter: parent.verticalCenter
-                height: Px.hair
+                height: root.g.hair
                 color: Role.edge
               }
             }
@@ -1243,17 +1254,6 @@ Item {
               color: row.hasCursor ? root.selectedBackground : "transparent"
               borderSpec: row.hasCursor ? root.selectedBorderSpec : Border.none()
 
-              Rectangle {
-                visible: false
-                width: Style.space(4)
-                height: parent.height - Style.space(18)
-                radius: Math.min(root.cornerRadius, Style.space(4))
-                color: root.selectedBackground
-                anchors.left: parent.left
-                anchors.leftMargin: root.rowReservedBorderLeft + Style.space(8)
-                anchors.verticalCenter: parent.verticalCenter
-              }
-
               Text {
                 id: iconText
                 textFormat: Text.PlainText
@@ -1262,86 +1262,64 @@ Item {
                 color: row.hasCursor ? root.selectedText : root.foreground
                 font.family: row.iconFont.length > 0 ? row.iconFont : root.fontFamily
                 renderType: Text.NativeRendering
-                font.pixelSize: Px.size
-                width: Px.px(14)
+                font.pixelSize: Math.round(11 * root.g.unit)
+                width: root.g.px(14)
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 anchors.left: parent.left
-                anchors.leftMargin: root.rowReservedBorderLeft + Style.space(8)
-                y: contentColumn.y + labelText.y + Px.centre(labelText.height, height)
+                anchors.leftMargin: root.rowReservedBorderLeft + root.g.px(4)
+                y: contentColumn.y + labelText.y + root.g.centre(labelText.height, height)
               }
 
               Image {
                 id: appIconImage
                 visible: row.isApp
-                width: Px.px(11)
-                height: Px.px(11)
+                width: root.g.px(11)
+                height: root.g.px(11)
                 smooth: false
                 fillMode: Image.PreserveAspectFit
                 // Decode at physical pixels — a logical-size decode leaves
                 // PNG icons upscaled and blurry on HiDPI displays.
-                sourceSize.width: width * Screen.devicePixelRatio
-                sourceSize.height: height * Screen.devicePixelRatio
+                sourceSize.width: Math.round(width * root.g.dpr)
+                sourceSize.height: Math.round(height * root.g.dpr)
                 source: row.isApp && root.appLibrary ? root.appLibrary.iconSource(row.appIcon) : ""
                 asynchronous: true
                 anchors.left: parent.left
-                anchors.leftMargin: root.rowReservedBorderLeft + Px.px(4) + (Px.px(14) - width) / 2
-                y: contentColumn.y + labelText.y + Px.centre(labelText.height, height)
+                anchors.leftMargin: root.rowReservedBorderLeft + root.g.px(4) + root.g.centre(root.g.px(14), width)
+                y: contentColumn.y + labelText.y + root.g.centre(labelText.height, height)
               }
 
               Column {
                 id: contentColumn
                 anchors.left: row.hasIcon ? iconText.right : parent.left
-                anchors.leftMargin: row.hasIcon ? Px.px(2) : root.rowReservedBorderLeft + Px.px(5)
+                anchors.leftMargin: row.hasIcon ? root.g.px(2) : root.rowReservedBorderLeft + root.g.px(5)
                 anchors.right: trail.left
-                anchors.rightMargin: Px.px(3)
+                anchors.rightMargin: root.g.px(3)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 0
 
-                Text {
+                PixelText {
                   id: labelText
-                  textFormat: Text.PlainText
-                  width: parent.width
                   text: row.label
-                  color: row.hasCursor ? root.selectedText : root.foreground
-                  font.family: root.fontFamily
-                  renderType: Text.NativeRendering
-                  font.pixelSize: Px.size
-                  elide: Text.ElideRight
+                  ink: row.hasCursor ? root.selectedText : root.foreground
+                  columns: root.g.columns(contentColumn.width)
                 }
 
-                Text {
-                  textFormat: Text.PlainText
-                  width: parent.width
+                PixelText {
                   text: row.detail
                   visible: (root.filterText || row.kind === "dmenu") && row.detail.length > 0
-                  color: Role.muted
-                  font.family: root.fontFamily
-                  renderType: Text.NativeRendering
-                  font.pixelSize: Px.size
-                  elide: Text.ElideRight
+                  ink: Role.muted
+                  columns: root.g.columns(contentColumn.width)
                 }
               }
 
               Row {
                 id: trail
-                width: Px.px(7)
+                width: root.g.px(7)
                 anchors.right: parent.right
-                anchors.rightMargin: root.rowReservedBorderRight + Px.px(4)
-                y: contentColumn.y + labelText.y + Px.centre(labelText.height, height)
+                anchors.rightMargin: root.rowReservedBorderRight + root.g.px(4)
+                y: contentColumn.y + labelText.y + root.g.centre(labelText.height, height)
                 spacing: 0
-
-                Text {
-                  textFormat: Text.PlainText
-                  visible: false
-                  text: row.childCount
-                  color: root.foreground
-                  opacity: 0.45
-                  font.family: root.fontFamily
-                  renderType: Text.NativeRendering
-                  font.pixelSize: Px.size
-                  anchors.verticalCenter: parent.verticalCenter
-                }
 
                 Sprite {
                   visible: row.kind === "menu" || row.kind === "link"
@@ -1379,7 +1357,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            height: Px.hair
+            height: root.g.hair
             color: Role.edge
             visible: resultList.contentHeight > resultList.height && resultList.contentY - resultList.originY > 0
           }
@@ -1388,36 +1366,40 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            height: Px.hair
+            height: root.g.hair
             color: Role.edge
             visible: resultList.contentHeight > resultList.height
               && resultList.originY + resultList.contentHeight - resultList.height - resultList.contentY > 0
           }
 
           Column {
-            anchors.centerIn: parent
-            spacing: Style.space(8)
+            x: root.g.centre(parent.width, width)
+            y: root.g.centre(parent.height, height)
+            spacing: root.g.px(4)
             visible: displayModel.count === 0 && root.mode !== "input"
 
-            Text {
-              text: "󰈉"
-              color: Role.muted
-              font.family: root.fontFamily
-              renderType: Text.NativeRendering
-              font.pixelSize: Px.size
-              horizontalAlignment: Text.AlignHCenter
-              width: Style.space(320)
+            Item {
+              width: root.g.px(150)
+              height: root.g.px(14)
+              Text {
+                anchors.centerIn: parent
+                text: "󰈉"
+                color: Role.muted
+                font.family: root.fontFamily
+                renderType: Text.NativeRendering
+                font.pixelSize: Math.round(11 * root.g.unit)
+              }
             }
 
-            Text {
-              textFormat: Text.PlainText
-              text: root.filterText ? "No matches for “" + root.filterText + "”" : "Nothing here yet"
-              color: Role.muted
-              font.family: root.fontFamily
-              renderType: Text.NativeRendering
-              font.pixelSize: Px.size
-              horizontalAlignment: Text.AlignHCenter
-              width: Style.space(320)
+            Item {
+              width: root.g.px(150)
+              height: root.g.line
+              PixelText {
+                text: root.filterText ? "No matches for “" + root.filterText + "”" : "Nothing here yet"
+                ink: Role.muted
+                columns: root.g.columns(parent.width)
+                x: root.g.centre(parent.width, width)
+              }
             }
           }
         }

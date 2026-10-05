@@ -13,6 +13,8 @@ import "."
 Item {
   id: root
 
+  readonly property var g: Px.of(root)
+
   property string text: ""
   property bool active: false
   // Pages with something on them read in ink rather than muted.
@@ -22,8 +24,8 @@ Item {
   property bool hot: false
   property bool down: false
 
-  implicitWidth: (text.length * 6 + (air - 1) + air + 2) * Px.unit
-  implicitHeight: Px.line
+  implicitWidth: (text.length * 6 + (air - 1) + air + 2) * g.unit
+  implicitHeight: g.line
   width: implicitWidth
   height: implicitHeight
 
@@ -35,13 +37,13 @@ Item {
   }
   Rectangle {
     anchors.fill: parent
-    anchors.margins: Px.hair
+    anchors.margins: root.g.hair
     antialiasing: false
     color: root.active ? Role.accent
       : (root.down ? Role.hover : (root.hot ? Role.raised : Role.ground))
   }
   PixelText {
-    x: root.air * Px.unit
+    x: root.air * root.g.unit
     text: root.text
     ink: root.active ? Role.onAccent
       : (root.hot || root.down || root.occupied ? Role.ink : Role.muted)

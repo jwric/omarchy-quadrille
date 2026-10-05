@@ -1,45 +1,47 @@
 import QtQuick
 import "."
+import "Glyphs.js" as Glyphs
 
-// Text in the body face: Departure Mono Tight at its native size, drawn by the
-// platform (no distance field, no smoothing), on a whole 12-vpx line with the
-// capitals two vpx below its top and the baseline ten down, as quadrille sets
-// it.
+// Text in the body face, drawn from bitmaps: every font pixel a rectangle of
+// one vpx, so it is whole device pixels on any screen. (A Qt Text cannot be
+// that: see tools/gen_glyphs.py.) Departure Mono Tight at its native size on a
+// 12-vpx line: capitals on rows 2-9, the baseline at row 10, six columns a
+// character. The item is exactly `length x 6` vpx wide and one line tall, so
+// layout is arithmetic.
 //
-// The item is exactly `text.length` cells wide and one line tall, so layout is
-// arithmetic: width = cells * Px.cellW. Characters the face does not have fall
-// back to a foreign advance and put everything after them off the grid; keep
-// to what Departure Mono has.
+// Characters the font lacks are drawn as a box (the font's own missing glyph).
 Item {
   id: root
 
-  property alias text: label.text
+  readonly property var g: Px.of(root)
+
+  property string text: ""
   property color ink: Role.ink
+  // Cut to this many cells, ending in an ellipsis (quadrille's `Face::fit`);
+  // -1 leaves it be.
+  property int columns: -1
   // Drop the label instead of cutting it: hidden when it would be wider than
   // `room` (logical pixels). -1 leaves it alone.
   property real room: -1
 
-  readonly property int cells: label.text.length
-  readonly property real cellsWidth: cells * Px.cellW
+  readonly property string shown: columns >= 0 ? Glyphs.fit(text, columns) : text
+  readonly property int cells: Glyphs.length(shown)
+  readonly property real cellsWidth: cells * g.cellW
 
   width: cellsWidth
-  height: Px.line
+  height: g.line
   visible: room < 0 || cellsWidth <= room
 
-  Text {
-    id: label
-    // Qt puts the baseline at the font's ascent (11 vpx) from the top of the
-    // line; quadrille's line puts it at 10. One vpx up.
-    y: -Px.unit
-    color: root.ink
-    font.family: Px.face
-    font.pixelSize: Px.size
-    font.hintingPreference: Font.PreferFullHinting
-    font.kerning: false
-    font.preferShaping: false
-    renderType: Text.NativeRendering
-    textFormat: Text.PlainText
-    wrapMode: Text.NoWrap
-    elide: Text.ElideNone
+  Repeater {
+    model: Glyphs.runs(root.shown)
+    Rectangle {
+      required property var modelData
+      x: modelData.x * root.g.unit
+      y: modelData.y * root.g.unit
+      width: modelData.w * root.g.unit
+      height: root.g.unit
+      color: root.ink
+      antialiasing: false
+    }
   }
 }

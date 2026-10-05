@@ -100,6 +100,9 @@ Item {
 
   PanelWindow {
     id: panel
+
+    // The grid of the screen this card is on.
+    readonly property var g: Px.forWindow(panel)
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
@@ -113,28 +116,28 @@ Item {
 
     Rectangle {
       id: card
-      width: Px.px(root.pad * 2 + root.iconSize + root.gap)
-        + (root.hasProgress ? Px.px(root.gaugeCells * 4 - 1 + root.gap) + readoutBox.width
-                            : (root.readout.length > 0 ? root.readout.length * Px.cellW : 0))
-        + Px.px(2)
-      height: Px.px(root.pad * 2 + root.iconSize + 2)
-      x: Px.centre(parent.width, width)
-      y: parent.height - height - Px.px(32)
+      width: panel.g.px(root.pad * 2 + root.iconSize + root.gap)
+        + (root.hasProgress ? panel.g.px(root.gaugeCells * 4 - 1 + root.gap) + readoutBox.width
+                            : (root.readout.length > 0 ? root.readout.length * panel.g.cellW : 0))
+        + panel.g.px(2)
+      height: panel.g.px(root.pad * 2 + root.iconSize + 2)
+      x: panel.g.centre(parent.width, width)
+      y: parent.height - height - panel.g.px(32)
       color: Role.edge
       antialiasing: false
 
       Rectangle {
         anchors.fill: parent
-        anchors.margins: Px.hair
+        anchors.margins: panel.g.hair
         color: Role.ground
         antialiasing: false
       }
 
       Sprite {
         id: iconSprite
-        x: Px.px(root.pad + 1)
-        y: Px.px(root.pad + 1)
-        unit: 2 * Px.unit
+        x: panel.g.px(root.pad + 1)
+        y: panel.g.px(root.pad + 1)
+        unit: 2 * panel.g.unit
         rows: root.look.rows
         level: root.look.level
         color: Role.ink
@@ -145,8 +148,8 @@ Item {
       BarGauge {
         id: gauge
         visible: root.hasProgress
-        x: iconSprite.x + iconSprite.width + Px.px(root.gap)
-        y: Px.px(root.pad + 1) + Px.centre(iconSprite.height, height)
+        x: iconSprite.x + iconSprite.width + panel.g.px(root.gap)
+        y: panel.g.px(root.pad + 1) + panel.g.centre(iconSprite.height, height)
         cells: root.gaugeCells
         cellWidth: 3
         cellHeight: 6
@@ -159,10 +162,10 @@ Item {
       // jitter as the digits change.
       Item {
         id: readoutBox
-        width: root.hasProgress ? 4 * Px.cellW : 0
-        height: Px.line
-        x: root.hasProgress ? gauge.x + gauge.width + Px.px(root.gap) : 0
-        y: Px.px(root.pad + 1) + Px.centre(iconSprite.height, height)
+        width: root.hasProgress ? 4 * panel.g.cellW : 0
+        height: panel.g.line
+        x: root.hasProgress ? gauge.x + gauge.width + panel.g.px(root.gap) : 0
+        y: panel.g.px(root.pad + 1) + panel.g.centre(iconSprite.height, height)
         visible: root.hasProgress
         PixelText {
           id: readout
@@ -174,8 +177,8 @@ Item {
 
       PixelText {
         visible: !root.hasProgress
-        x: iconSprite.x + iconSprite.width + Px.px(root.gap)
-        y: Px.px(root.pad + 1) + Px.centre(iconSprite.height, height)
+        x: iconSprite.x + iconSprite.width + panel.g.px(root.gap)
+        y: panel.g.px(root.pad + 1) + panel.g.centre(iconSprite.height, height)
         text: root.readout
         ink: Role.ink
       }

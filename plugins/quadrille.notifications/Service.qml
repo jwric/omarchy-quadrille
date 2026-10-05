@@ -9,6 +9,7 @@ import Quickshell.Services.Notifications
 import qs.Commons
 
 import "components"
+import "Q"
 import "NotificationLogic.js" as NotificationLogic
 
 Item {
@@ -964,6 +965,9 @@ Item {
       exclusionMode: ExclusionMode.Ignore
       color: "transparent"
 
+      // The pixel grid of this screen: toasts sit on it (quadrille.notifications).
+      readonly property var g: Px.forWindow(popupWindow)
+
       readonly property var popupPlacement: NotificationLogic.popupPlacement(
         service.barPosition, service.barClearance, Style.gapsOut)
 
@@ -981,9 +985,9 @@ Item {
         id: popupColumn
         anchors.right: parent.right
         anchors.top: parent.top
-        anchors.topMargin: popupWindow.popupPlacement.margins.top
-        anchors.rightMargin: popupWindow.popupPlacement.margins.right
-        spacing: Style.space(8)
+        anchors.topMargin: popupWindow.g.snap(popupWindow.popupPlacement.margins.top)
+        anchors.rightMargin: popupWindow.g.snap(popupWindow.popupPlacement.margins.right)
+        spacing: popupWindow.g.px(4)
 
         Repeater {
           model: popupModel

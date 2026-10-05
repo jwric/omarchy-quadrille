@@ -11,11 +11,11 @@ Skin {
   readonly property int connected: (prop("connectedDevices", []) || []).length
 
   visible: !!adapter
-  implicitWidth: adapter ? (7 + 2 * pad) * Px.unit : 0
+  implicitWidth: adapter ? (7 + 2 * pad) * g.unit : 0
 
   Sprite {
-    x: root.pad * Px.unit
-    y: Px.centre(root.height, height)
+    x: root.pad * g.unit
+    y: g.centre(root.height, height)
     rows: Sprites.bluetooth
     color: !root.powered ? Role.faint : (root.connected > 0 ? Role.live : Role.muted)
   }

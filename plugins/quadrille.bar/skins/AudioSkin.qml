@@ -11,12 +11,12 @@ Skin {
   readonly property bool present: prop("hasOutput", false) === true
   readonly property int level: muted ? 0 : (volume <= 0.005 ? 0 : (volume < 0.5 ? 1 : 2))
 
-  implicitWidth: (7 + 3 + gauge.width / Px.unit + 2 * pad) * Px.unit
+  implicitWidth: (7 + 3 + gauge.width / g.unit + 2 * pad) * g.unit
 
   Sprite {
     id: icon
-    x: root.pad * Px.unit
-    y: Px.centre(root.height, height)
+    x: root.pad * g.unit
+    y: g.centre(root.height, height)
     rows: root.muted ? Sprites.muted : Sprites.volume
     level: root.level
     color: root.present ? Role.ink : Role.faint
@@ -24,8 +24,8 @@ Skin {
   }
   BarGauge {
     id: gauge
-    x: icon.x + icon.width + Px.px(3)
-    y: Px.centre(root.height, height)
+    x: icon.x + icon.width + g.px(3)
+    y: g.centre(root.height, height)
     cells: 5
     value: root.muted || !root.present ? 0 : root.volume
     fill: Role.ink

@@ -7,11 +7,11 @@ Skin {
   id: root
   readonly property string label: String(prop("displayText", "")).toUpperCase()
 
-  implicitWidth: label.length * Px.cellW + 2 * pad * Px.unit
+  implicitWidth: label.length * g.cellW + 2 * pad * g.unit
 
   PixelText {
-    x: root.pad * Px.unit
-    y: Px.centre(root.height, height)
+    x: root.pad * g.unit
+    y: g.centre(root.height, height)
     text: root.label
     ink: Role.ink
   }

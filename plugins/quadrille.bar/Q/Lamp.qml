@@ -7,13 +7,15 @@ import "."
 Item {
   id: root
 
+  readonly property var g: Px.of(root)
+
   property bool on: false
   // The colour it is lit in: accent (engaged), live (running), caution, alarm.
   property color tone: Role.accent
   property int size: 6
 
-  implicitWidth: size * Px.unit
-  implicitHeight: size * Px.unit
+  implicitWidth: size * g.unit
+  implicitHeight: size * g.unit
   width: implicitWidth
   height: implicitHeight
 
@@ -23,7 +25,7 @@ Item {
     color: root.on ? root.tone : Role.edge
     Rectangle {
       anchors.fill: parent
-      anchors.margins: Px.hair
+      anchors.margins: g.hair
       antialiasing: false
       color: root.on ? root.tone : Role.raised
     }

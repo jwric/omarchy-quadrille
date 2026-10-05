@@ -8,6 +8,8 @@ import "."
 Item {
   id: root
 
+  readonly property var g: Px.of(root)
+
   property string name: ""
   property color rule: Role.line
   property color nameInk: Role.muted
@@ -17,42 +19,42 @@ Item {
   property int spacing: 4
   default property alias content: holder.data
 
-  readonly property int header: Px.line + spacing * Px.unit
-  readonly property int nameWidth: name.length * Px.cellW
-  readonly property int labelLeft: Px.floor((width - nameWidth) / 2)
+  readonly property real header: g.line + spacing * g.unit
+  readonly property real nameWidth: name.length * g.cellW
+  readonly property real labelLeft: g.floor((width - nameWidth) / 2)
   readonly property bool broken: nameWidth > 0
-    && labelLeft - Px.cellW > 0 && labelLeft + nameWidth + Px.cellW <= width
+    && labelLeft - g.cellW > 0 && labelLeft + nameWidth + g.cellW <= width
 
-  implicitWidth: Math.max(holder.childrenRect.width, nameWidth + 4 * Px.cellW)
+  implicitWidth: Math.max(holder.childrenRect.width, nameWidth + 4 * g.cellW)
   implicitHeight: header + holder.childrenRect.height
 
   // y of the rule: the middle of the capitals.
-  readonly property int ruleY: Px.capTop + Px.floor(Px.cap / 2)
+  readonly property real ruleY: g.capTop + g.floor(g.cap / 2)
 
   // left and right pieces of the rule
   Rectangle {
     visible: root.broken
-    x: 0; y: root.ruleY; width: root.labelLeft - Px.cellW + Px.unit; height: Px.hair
+    x: 0; y: root.ruleY; width: root.labelLeft - g.cellW + g.unit; height: g.hair
     color: root.rule; antialiasing: false
   }
   Rectangle {
     visible: root.broken
-    x: root.labelLeft + root.nameWidth + Px.cellW - Px.unit; y: root.ruleY
-    width: root.width - x; height: Px.hair
+    x: root.labelLeft + root.nameWidth + g.cellW - g.unit; y: root.ruleY
+    width: root.width - x; height: g.hair
     color: root.rule; antialiasing: false
   }
   Rectangle {
     visible: !root.broken
-    x: 0; y: root.ruleY; width: root.width; height: Px.hair
+    x: 0; y: root.ruleY; width: root.width; height: g.hair
     color: root.rule; antialiasing: false
   }
   // the dropped ends
   Rectangle {
-    x: 0; y: root.ruleY + Px.hair; width: Px.hair; height: root.drop * Px.unit
+    x: 0; y: root.ruleY + g.hair; width: g.hair; height: root.drop * g.unit
     color: root.rule; antialiasing: false
   }
   Rectangle {
-    x: root.width - Px.hair; y: root.ruleY + Px.hair; width: Px.hair; height: root.drop * Px.unit
+    x: root.width - g.hair; y: root.ruleY + g.hair; width: g.hair; height: root.drop * g.unit
     color: root.rule; antialiasing: false
   }
   PixelText {
