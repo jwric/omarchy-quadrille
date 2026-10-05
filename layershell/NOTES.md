@@ -545,3 +545,73 @@ in use), `--theme-dir DIR`, `--open PANEL`, `--exit-after SECS`.
 tests: over a region of a `grim` screenshot, the number of distinct colours (7 to
 10 for a bar or a panel) and whether every colour change falls on a multiple of
 the pixel scale from the surface's own origin.
+
+## Status at pause (2026-10-05)
+
+Committed: four panels beside `sysmon` on the same host (`ctl toggle|summon
+audio|network|bluetooth|power`), all registered, all built from the shared
+widgets in `crates/bar/src/widgets` (rows, stepped sliders, steps, icons, focus
+brackets, text-input row). 98 unit tests pass; `cargo build --release` is clean.
+Nothing is installed: `~/.local/bin/quadrille-bar` is still the user's older build.
+
+What each does, `pactl`/`wpctl` aside: `audio` (pactl: outputs, default, master
+volume, inputs, per-application volume and mute, streams follow a new default),
+`network` (nmcli: Wi-Fi switch, networks, saved/open/secured joins with a password
+prompt, VPNs, rescan), `bluetooth` (bluetoothctl for reading; `omarchy-bluetooth-*`
+to act; scan), `power` (powerprofilesctl; `omarchy-powerprofiles-set autodetect`;
+lock, suspend, log out, reboot, power off, each behind a YES/NO that starts on NO).
+Panel sizes in virtual pixels: 170 wide; audio 250, network 300, bluetooth 200,
+power 245 high. Hidden, no panel reads anything; shown, one reading per beat
+(audio 1 s, network 4 s, bluetooth 3 s, power 2 s).
+
+Done and verified in a nested compositor with stubs, at both scales (screenshots,
+`ctl find`, keys by wtype, clicks by vptr, `calls.log` of the stubs):
+- audio: section `audio` passes (keys, sliders, application slider click, mute).
+- network: section `network` passes (password prompt, Escape, joins, VPN, switch).
+- All four panels crisp and exact at both scales were checked by hand from
+  screenshots; the automatic check is section `look`, not run yet.
+
+In progress, not yet verified:
+- Section `bluetooth`: two keyboard checks fail (Enter on the connected device
+  disconnects; Enter on a paired one connects). The clicks, scan and switch pass.
+  Probably the test's row counting (the order of the devices), not the panel:
+  look at `bluetooth_start.png` and the order in the stub's state first.
+- Section `power` (profiles, the confirm step for all five actions, Escape backing
+  out of a question, clicks) is written and has never run to the end. Rows: three
+  profiles (power-saver, balanced, performance), then the five actions.
+- Section `look` (sizes, crisp, idle numbers hidden vs shown) is written, not run.
+- The idle numbers for this file are not measured yet.
+- No unit tests yet in `host.rs` for the new registry (toggle ids, escape routing,
+  key dispatch through `Host::with_runner` and `commands::recorder`).
+- Not testable here: the real `pactl`/`nmcli`/`bluetoothctl` on hardware, real
+  pairing (agent, PIN), enterprise Wi-Fi, `omarchy-powerprofiles-set autodetect`
+  on a machine without a battery, and the power actions themselves (only their
+  command lines are unit-tested). A Wi-Fi password is an argument of `nmcli`, so
+  visible in `ps` for a moment.
+
+Next, in order: run `SECTIONS="bluetooth" tools/nested-test.sh`, fix; then `power`,
+then `look`, then the whole `tools/nested-test.sh` (core and nobar were restructured
+and have not been run since); then the `host.rs` unit tests; then the idle numbers
+and this file's panel section; then ask before installing anything.
+
+How to test, and the pitfalls:
+- Always `flock -w 900 /tmp/quadrille-live.lock` around anything that starts the
+  nested compositor or the binary on the live session; `tools/nested-test.sh` does
+  it itself, one lock per section, each under 170 s (a watchdog kills it).
+  Other agents use the desktop: never hold it longer than three minutes.
+- Never run `ctl` without `QUADRILLE_BAR_SOCKET` set to a test socket: the default
+  one is the user's own host (pid of `quadrille-bar --no-bar`), which stays running.
+- Every command is a stub: `QUADRILLE_COMMANDS=tools/stubs` makes the host run
+  only `tools/stubs/<name>` and nothing from the `PATH`; the stubs keep a state
+  and write each call to `$QUADRILLE_STUB_STATE/calls.log`. The host log says
+  "commands are stubbed". Never test a state-changing command on the live session.
+- Input only goes to the nested compositor (`tools/nested.sh run wtype ...`, vptr
+  refuses any other display). No wtype, vptr or `hyprctl dispatch` on the live one.
+- `ctl find TEXT` gives the box of a text of the open panel in its virtual
+  pixels (exact match on the trimmed text); the tests click and count from it.
+  Names are shown shortened ("Speaker", not the card's name), so look at a screenshot.
+- Keys are counted from `Home` (the first row); Escape closes the panel unless a
+  panel has something to back out of (the password, a question), and Cancel in
+  power puts the keyboard back on the first row, not on the row asked.
+- Commit only `layershell/` paths with `git commit -- PATHS`: another agent's work
+  is staged in `plugins/`, and a plain `git commit` would take it.
