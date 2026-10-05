@@ -95,7 +95,9 @@ Item {
 
   // Shared application engine (entries, hidden filters, icons, launch,
   // removal), owned by the shell and also used by the standalone launcher.
-  readonly property var appLibrary: root.shell ? root.shell.appLibrary : null
+  // The shell's library when the host hands one over, else our own (LocalApps.qml).
+  readonly property var appLibrary: root.shell && root.shell.appLibrary ? root.shell.appLibrary : localApps
+  LocalApps { id: localApps }
   property bool deleteConfirmOpen: false
   property var deleteTarget: null
   onOpenedChanged: if (!opened) { deleteConfirmOpen = false; deleteTarget = null }

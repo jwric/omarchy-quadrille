@@ -272,3 +272,23 @@ or writes outside its own directory.
   theme is applied again (`omarchy theme set "Quadrille Terminal"`). Until then the
   kit derives the roles, and gets `live`/`caution`/`line` right from `colors.toml`
   and `highlight` approximately.
+
+## The Apps menu opened empty (found 2026-10-05)
+
+`quadrille.menu` showed "Nothing here yet" under Apps. The shell's own menu was
+fine, so the application library works; the clone never got it. A third-party
+menu is meant to read `shell.appLibrary`, a facade made in `shell.qml`
+(`pluginAppLibraryFor`). On Omarchy 4.0.4 the `shell` object the host assigns to
+the clone has `appLibrary == null`, and the host then revokes that object
+(`prunePluginApis` / `revokePluginShellApi`), leaving `shell == null`. Either
+way `mergeAppRows()` had no library and built no rows. This is a host problem
+and not fixable from a plugin, so the clone does not depend on it:
+
+- `LocalApps.qml` answers the library's calls from Quickshell's `DesktopEntries`
+  (with a copy of the shell's `AppSearch.js`). `Menu.qml` prefers the shell's
+  library when the host provides one and falls back to this.
+- What the fallback lacks: the shell's hidden-entries filter, launch feedback,
+  and the icon-file fallback index. Launching is the same `uwsm-app -- gtk-launch`.
+
+If a later Omarchy fixes the facade the fallback is simply not used. Any other
+third-party menu clone will hit the same thing.
