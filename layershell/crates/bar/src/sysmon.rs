@@ -318,7 +318,7 @@ fn memory() -> Memory {
     }
 }
 
-fn power() -> Option<Power> {
+pub fn power() -> Option<Power> {
     let supplies = fs::read_dir("/sys/class/power_supply").ok()?;
     let mut battery = None;
     let mut on_ac = false;

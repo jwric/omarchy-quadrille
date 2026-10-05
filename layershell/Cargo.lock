@@ -1022,7 +1022,16 @@ dependencies = [
  "bytes",
  "iced_core",
  "iced_futures",
+ "iced_selector",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "iced_selector"
+version = "0.15.0-dev"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+dependencies = [
+ "iced_core",
 ]
 
 [[package]]

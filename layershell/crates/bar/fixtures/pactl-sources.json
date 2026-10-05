@@ -1,0 +1,69 @@
+[
+  {
+    "index": 60,
+    "state": "SUSPENDED",
+    "name": "source.mic",
+    "description": "Meteor Lake-P HD Audio Controller Stereo Microphone",
+    "mute": false,
+    "volume": {
+      "front-left": {
+        "value": 49152,
+        "value_percent": "75%",
+        "db": "0.00 dB"
+      },
+      "front-right": {
+        "value": 49152,
+        "value_percent": "75%",
+        "db": "0.00 dB"
+      }
+    },
+    "properties": {
+      "media.class": "Audio/Source",
+      "device.class": "sound",
+      "device.bus": "pci"
+    }
+  },
+  {
+    "index": 61,
+    "state": "SUSPENDED",
+    "name": "source.headset",
+    "description": "MOMENTUM 4",
+    "mute": false,
+    "volume": {
+      "mono": {
+        "value": 17694,
+        "value_percent": "27%",
+        "db": "0.00 dB"
+      }
+    },
+    "properties": {
+      "media.class": "Audio/Source",
+      "device.bus": "bluetooth",
+      "device.form_factor": "headset",
+      "device.icon_name": "audio-headset-bluetooth"
+    }
+  },
+  {
+    "index": 62,
+    "state": "SUSPENDED",
+    "name": "sink.speakers.monitor",
+    "description": "Monitor of Meteor Lake-P HD Audio Controller Speaker",
+    "mute": false,
+    "volume": {
+      "front-left": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      },
+      "front-right": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      }
+    },
+    "properties": {
+      "media.class": "Audio/Source",
+      "device.class": "monitor"
+    }
+  }
+]

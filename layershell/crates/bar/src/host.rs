@@ -1,5 +1,7 @@
 //! The panel host: a bar on every output, and panels that are summoned.
+use crate::commands::{self, Shared};
 use crate::ipc::{self, Request};
+use crate::panels::{Key, audio, bluetooth, network, power};
 use crate::sys::{self, LocalTime};
 use crate::sysmon;
 use crate::theme;
@@ -31,6 +33,9 @@ pub struct PanelDef {
     pub title: &'static str,
     /// In virtual pixels. At 1.6667 a size is exact when it is a multiple of 5.
     pub size: (u32, u32),
+    /// How often the panel reads the machine while it is shown, in
+    /// milliseconds. Hidden, it never does.
+    pub refresh_ms: u64,
 }
 
 pub const PANELS: &[PanelDef] = &[
@@ -38,11 +43,37 @@ pub const PANELS: &[PanelDef] = &[
         id: "sysmon",
         title: "SYSMON",
         size: (160, 305),
+        refresh_ms: 1000,
+    },
+    PanelDef {
+        id: "audio",
+        title: "AUDIO",
+        size: (170, 250),
+        refresh_ms: 1000,
+    },
+    PanelDef {
+        id: "network",
+        title: "NETWORK",
+        size: (170, 300),
+        refresh_ms: 4000,
+    },
+    PanelDef {
+        id: "bluetooth",
+        title: "BLUETOOTH",
+        size: (170, 200),
+        refresh_ms: 3000,
+    },
+    PanelDef {
+        id: "power",
+        title: "POWER",
+        size: (170, 245),
+        refresh_ms: 2000,
     },
     PanelDef {
         id: "demo",
         title: "DEMO",
         size: (140, 90),
+        refresh_ms: 0,
     },
 ];
 
@@ -58,6 +89,16 @@ pub enum Message {
     Minute,
     /// The system monitor reads the machine, while it is shown.
     Sample,
+    /// A panel reads the machine: it is shown, and this is its beat.
+    Refresh(&'static str),
+    Audio(audio::Message),
+    Network(network::Message),
+    Bluetooth(bluetooth::Message),
+    Power(power::Message),
+    /// A key the keyboard-driven panels answer to.
+    Key(Key),
+    /// Where the text a `ctl find` looked for is, in the panel's own pixels.
+    Found(Request, Option<[f32; 4]>),
     /// The pointer is over the bar of this output.
     Hover(String),
     /// A panel's button on the bar of this output.
@@ -147,11 +188,23 @@ pub struct Host {
     theme: Theme,
     bar: BarData,
     sysmon: sysmon::State,
+    audio: audio::State,
+    network: network::State,
+    bluetooth: bluetooth::State,
+    power: power::State,
     note: String,
+    runner: Shared,
+    /// The panel that was just shown and has to read the machine.
+    kick: Option<&'static str>,
 }
 
 impl Host {
     pub fn new(options: Options) -> (Self, Task<Message>) {
+        Self::with_runner(options, commands::from_env())
+    }
+
+    /// A host that reads and changes the machine through `runner`.
+    pub fn with_runner(options: Options, runner: Shared) -> (Self, Task<Message>) {
         let theme = theme::current(&options.theme_dir);
         let open = options.open.as_deref().and_then(panel).map(|def| Open {
             panel: def.id,
@@ -174,7 +227,13 @@ impl Host {
                 ..BarData::default()
             },
             sysmon: sysmon::State::default(),
+            audio: audio::State::default(),
+            network: network::State::default(),
+            bluetooth: bluetooth::State::default(),
+            power: power::State::default(),
             note: String::new(),
+            runner,
+            kick: None,
             options,
         };
 
@@ -182,7 +241,9 @@ impl Host {
             host.show(open.panel, open.output);
         }
 
-        (host, Task::none())
+        let task = host.kicked();
+
+        (host, task)
     }
 
     pub fn theme(&self) -> Theme {
@@ -191,17 +252,82 @@ impl Host {
 
     /// Shows a panel on an output, taking the place of the one that is up.
     fn show(&mut self, id: &'static str, output: Option<String>) {
-        if self.open.as_ref().map(|open| open.panel) != Some(id) && id == "sysmon" {
-            // A baseline to take the first rates from.
-            self.sysmon.reset();
-            self.sysmon.sample();
+        if self.open.as_ref().map(|open| open.panel) != Some(id) {
+            self.forget();
+
+            match id {
+                "sysmon" => {
+                    // A baseline to take the first rates from.
+                    self.sysmon.reset();
+                    self.sysmon.sample();
+                }
+                _ => self.kick = Some(id),
+            }
         }
 
         self.open = Some(Open { panel: id, output });
     }
 
     fn hide(&mut self) -> bool {
+        self.forget();
+
         self.open.take().is_some()
+    }
+
+    /// Lets go of what the panel that was up had read: nothing of a hidden
+    /// panel is kept, so a shown one starts from what the machine says now.
+    fn forget(&mut self) {
+        self.audio.reset();
+        self.network.reset();
+        self.bluetooth.reset();
+        self.power.reset();
+        self.kick = None;
+    }
+
+    /// The task that makes a panel that has just been shown read the machine.
+    fn kicked(&mut self) -> Task<Message> {
+        match self.kick.take() {
+            Some(id) => self.refresh(id),
+            None => Task::none(),
+        }
+    }
+
+    fn refresh(&mut self, id: &str) -> Task<Message> {
+        match id {
+            "audio" => self.audio.refresh(&self.runner).map(Message::Audio),
+            "network" => self.network.refresh(&self.runner).map(Message::Network),
+            "bluetooth" => self.bluetooth.refresh(&self.runner).map(Message::Bluetooth),
+            "power" => self.power.refresh(&self.runner).map(Message::Power),
+            _ => Task::none(),
+        }
+    }
+
+    fn open_panel(&self) -> Option<&'static str> {
+        self.open.as_ref().map(|open| open.panel)
+    }
+
+    /// Backs out of what the panel that is up is in the middle of, if it is in
+    /// the middle of something: a password, a question.
+    fn escape_panel(&mut self) -> bool {
+        match self.open_panel() {
+            Some("network") => self.network.escape(),
+            Some("power") => self.power.escape(),
+            Some("audio") => self.audio.escape(),
+            Some("bluetooth") => self.bluetooth.escape(),
+            _ => false,
+        }
+    }
+
+    fn key(&mut self, key: Key) -> Task<Message> {
+        let runner = self.runner.clone();
+
+        match self.open_panel() {
+            Some("audio") => self.audio.key(key, &runner).map(Message::Audio),
+            Some("network") => self.network.key(key, &runner).map(Message::Network),
+            Some("bluetooth") => self.bluetooth.key(key, &runner).map(Message::Bluetooth),
+            Some("power") => self.power.key(key, &runner).map(Message::Power),
+            _ => Task::none(),
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -220,6 +346,50 @@ impl Host {
             }
             Message::Minute => self.bar.time = LocalTime::now(),
             Message::Sample => self.sysmon.sample(),
+            Message::Refresh(id) => {
+                // A beat that comes after the panel is gone is nothing.
+                if self.open_panel() == Some(id) {
+                    return self.refresh(id);
+                }
+            }
+            Message::Audio(message) => {
+                let runner = self.runner.clone();
+
+                return self.audio.update(message, &runner).map(Message::Audio);
+            }
+            Message::Network(message) => {
+                let runner = self.runner.clone();
+
+                return self.network.update(message, &runner).map(Message::Network);
+            }
+            Message::Bluetooth(message) => {
+                let runner = self.runner.clone();
+
+                return self
+                    .bluetooth
+                    .update(message, &runner)
+                    .map(Message::Bluetooth);
+            }
+            Message::Power(message) => {
+                let runner = self.runner.clone();
+                let task = self.power.update(message, &runner).map(Message::Power);
+
+                // A session action has gone out: nothing more to show.
+                if self.power.take_close() {
+                    let _ = self.hide();
+                }
+
+                return task;
+            }
+            Message::Key(key) => return self.key(key),
+            Message::Found(request, bounds) => {
+                request.respond(match bounds {
+                    Some([x, y, width, height]) => {
+                        format!("{x:.0} {y:.0} {width:.0} {height:.0}\n")
+                    }
+                    None => "error: not on screen\n".to_owned(),
+                });
+            }
             Message::Hover(output) => self.pointer_output = Some(output),
             Message::Toggle(id, output) => {
                 if self.open.as_ref().map(|open| open.panel) == Some(id) {
@@ -228,8 +398,13 @@ impl Host {
                     self.show(def.id, Some(output));
                 }
             }
-            Message::Hide | Message::Escape => {
+            Message::Hide => {
                 let _ = self.hide();
+            }
+            Message::Escape => {
+                if !self.escape_panel() {
+                    let _ = self.hide();
+                }
             }
             Message::CloseRequested(window) => {
                 let is_panel = matches!(self.roles.borrow().get(&window), Some(Role::Panel(_)));
@@ -247,6 +422,38 @@ impl Host {
                 self.theme = theme;
             }
             Message::Request(request) => {
+                // Where some text is on screen, for the tests and for anyone
+                // who wants to point at it: `find TEXT` answers `x y w h` in the
+                // virtual pixels of the window it is in.
+                if let Some(text) = request.line.strip_prefix("find ") {
+                    let text = text.trim().to_owned();
+
+                    // Text is matched as it reads: a reading padded with spaces
+                    // to a width is still its number.
+                    let wanted = text.clone();
+
+                    return iced_runtime::widget::selector::find(
+                        move |candidate: iced_runtime::widget::selector::Candidate<'_>| {
+                            match candidate {
+                                iced_runtime::widget::selector::Candidate::Text {
+                                    content,
+                                    visible_bounds,
+                                    ..
+                                } if content.trim() == wanted => Some(visible_bounds),
+                                _ => None,
+                            }
+                        },
+                    )
+                    .map(move |found| {
+                        Message::Found(
+                            request.clone(),
+                            found
+                                .flatten()
+                                .map(|bounds| [bounds.x, bounds.y, bounds.width, bounds.height]),
+                        )
+                    });
+                }
+
                 let (answer, quit) = self.command(&request.line);
 
                 request.respond(answer);
@@ -258,7 +465,7 @@ impl Host {
             Message::Quit => return iced_runtime::exit(),
         }
 
-        Task::none()
+        self.kicked()
     }
 
     /// Runs a command of the control socket, and gives back the answer and
@@ -478,6 +685,26 @@ impl Host {
             subscriptions.push(Subscription::run(sysmon_ticks).map(|()| Message::Sample));
         }
 
+        // The panels that read the machine do it on a fixed beat while they
+        // are shown, and answer the keyboard only while they are.
+        if let Some(def) = self.open_panel().and_then(panel) {
+            subscriptions.push(event::listen_with(|event, status, _window| match event {
+                Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. })
+                    if status == iced_core::event::Status::Ignored =>
+                {
+                    Key::of(&key, modifiers).map(Message::Key)
+                }
+                _ => None,
+            }));
+
+            if def.refresh_ms > 0 && def.id != "sysmon" {
+                subscriptions.push(Subscription::run_with(
+                    (def.id, def.refresh_ms),
+                    |(id, ms)| beat(id, *ms),
+                ));
+            }
+        }
+
         if let Some(after) = self.options.exit_after {
             subscriptions.push(time::every(after).map(|_| Message::Quit));
         }
@@ -669,6 +896,10 @@ impl Host {
 
         let body: quadrille::Element<'_, Message> = match id {
             "sysmon" => sysmon::view(&self.sysmon),
+            "audio" => self.audio.view().map(Message::Audio).boxed(),
+            "network" => self.network.view().map(Message::Network).boxed(),
+            "bluetooth" => self.bluetooth.view().map(Message::Bluetooth).boxed(),
+            "power" => self.power.view().map(Message::Power).boxed(),
             _ => column![
                 widget::group(
                     "NOTE",
@@ -678,6 +909,15 @@ impl Host {
             ]
             .spacing(px::WIDE)
             .boxed(),
+        };
+
+        // The lists that can be longer than the panel scroll.
+        let body = match id {
+            "audio" | "network" | "bluetooth" => widget::scroll(body)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .boxed(),
+            _ => body,
         };
 
         container(column![header, body].spacing(px::WIDE).padding(px::WIDE))
@@ -701,6 +941,12 @@ fn minutes() -> impl iced_futures::futures::Stream<Item = Message> {
 
         Some((Message::Minute, ()))
     })
+}
+
+/// The beat of a panel that reads the machine while it is shown: every `ms`,
+/// the first one after one.
+fn beat(id: &'static str, ms: u64) -> impl iced_futures::futures::Stream<Item = Message> {
+    smol::Timer::interval(Duration::from_millis(ms)).map(move |_| Message::Refresh(id))
 }
 
 /// The pace of the system monitor: a first reading soon after it is shown, so

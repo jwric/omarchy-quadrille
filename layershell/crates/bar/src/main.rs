@@ -1,11 +1,14 @@
 //! A panel host: a bar on every output, and panels summoned over a socket,
 //! drawn by quadrille on layer-shell surfaces.
+mod commands;
 mod graphics;
 mod host;
 mod ipc;
+mod panels;
 mod sys;
 mod sysmon;
 mod theme;
+mod widgets;
 
 use host::{Host, Options};
 

@@ -1,0 +1,143 @@
+[
+  {
+    "index": 50,
+    "state": "SUSPENDED",
+    "name": "sink.speakers",
+    "description": "Meteor Lake-P HD Audio Controller Speaker",
+    "driver": "PipeWire",
+    "mute": false,
+    "volume": {
+      "front-left": {
+        "value": 32768,
+        "value_percent": "50%",
+        "db": "0.00 dB"
+      },
+      "front-right": {
+        "value": 32768,
+        "value_percent": "50%",
+        "db": "0.00 dB"
+      }
+    },
+    "active_port": "[Out] Speaker",
+    "ports": [
+      {
+        "name": "[Out] Speaker",
+        "description": "[Out] Speaker",
+        "type": "Unknown",
+        "priority": 1,
+        "availability": "availability unknown"
+      }
+    ],
+    "properties": {
+      "media.class": "Audio/Sink",
+      "device.icon_name": "audio-speakers",
+      "device.bus": "pci"
+    }
+  },
+  {
+    "index": 51,
+    "state": "SUSPENDED",
+    "name": "sink.headset",
+    "description": "MOMENTUM 4",
+    "driver": "PipeWire",
+    "mute": true,
+    "volume": {
+      "front-left": {
+        "value": 13107,
+        "value_percent": "20%",
+        "db": "0.00 dB"
+      },
+      "front-right": {
+        "value": 26214,
+        "value_percent": "40%",
+        "db": "0.00 dB"
+      }
+    },
+    "active_port": "headset-output",
+    "ports": [
+      {
+        "name": "headset-output",
+        "description": "headset-output",
+        "type": "Unknown",
+        "priority": 1,
+        "availability": "available"
+      }
+    ],
+    "properties": {
+      "media.class": "Audio/Sink",
+      "device.icon_name": "audio-headset-bluetooth",
+      "device.bus": "bluetooth",
+      "device.form_factor": "headset"
+    }
+  },
+  {
+    "index": 52,
+    "state": "SUSPENDED",
+    "name": "sink.hdmi",
+    "description": "DELL S3422DWG Digital Stereo (HDMI)",
+    "driver": "PipeWire",
+    "mute": false,
+    "volume": {
+      "front-left": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      },
+      "front-right": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      }
+    },
+    "active_port": "hdmi-output-0",
+    "ports": [
+      {
+        "name": "hdmi-output-0",
+        "description": "hdmi-output-0",
+        "type": "Unknown",
+        "priority": 1,
+        "availability": "available"
+      }
+    ],
+    "properties": {
+      "media.class": "Audio/Sink",
+      "device.icon_name": "video-display",
+      "device.bus": "pci"
+    }
+  },
+  {
+    "index": 53,
+    "state": "SUSPENDED",
+    "name": "sink.hdmi-unplugged",
+    "description": "Meteor Lake-P HD Audio Controller HDMI / DisplayPort 3 Output",
+    "driver": "PipeWire",
+    "mute": false,
+    "volume": {
+      "front-left": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      },
+      "front-right": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      }
+    },
+    "active_port": "[Out] HDMI3",
+    "ports": [
+      {
+        "name": "[Out] HDMI3",
+        "description": "[Out] HDMI3",
+        "type": "Unknown",
+        "priority": 1,
+        "availability": "not available"
+      }
+    ],
+    "properties": {
+      "media.class": "Audio/Sink",
+      "device.icon_name": "video-display",
+      "device.bus": "pci"
+    }
+  }
+]

@@ -1,0 +1,70 @@
+[
+  {
+    "index": 41,
+    "driver": "PipeWire",
+    "sink": 50,
+    "mute": false,
+    "volume": {
+      "front-left": {
+        "value": 52428,
+        "value_percent": "80%",
+        "db": "0.00 dB"
+      },
+      "front-right": {
+        "value": 52428,
+        "value_percent": "80%",
+        "db": "0.00 dB"
+      }
+    },
+    "corked": false,
+    "properties": {
+      "application.name": "Firefox",
+      "media.name": "Playback"
+    }
+  },
+  {
+    "index": 42,
+    "driver": "PipeWire",
+    "sink": 50,
+    "mute": true,
+    "volume": {
+      "front-left": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      },
+      "front-right": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      }
+    },
+    "corked": false,
+    "properties": {
+      "application.name": "mpv",
+      "media.name": "song.flac"
+    }
+  },
+  {
+    "index": 43,
+    "driver": "PipeWire",
+    "sink": 50,
+    "mute": false,
+    "volume": {
+      "front-left": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      },
+      "front-right": {
+        "value": 65536,
+        "value_percent": "100%",
+        "db": "0.00 dB"
+      }
+    },
+    "corked": false,
+    "properties": {
+      "node.name": "filter-chain"
+    }
+  }
+]
