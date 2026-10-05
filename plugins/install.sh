@@ -1,7 +1,8 @@
 #!/bin/bash
 # Link the quadrille shell plugins into ~/.config/omarchy/plugins and enable them.
 #
-#   plugins/install.sh              the bar, OSD, notifications, menu, system gauges
+#   plugins/install.sh              the bar, OSD, notifications, menu, system gauges, the audio and
+#                                   power popups, the wallpaper
 #   plugins/install.sh bar          just the bar
 #   plugins/install.sh lab          also link the specimen sheet (not enabled)
 #
@@ -18,8 +19,8 @@ mkdir -p "$dest"
 want=${1:-all}
 case $want in
   bar) ids=(quadrille.bar) ;;
-  lab) ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon quadrille.lab) ;;
-  *)   ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon) ;;
+  lab) ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon quadrille.audio quadrille.power quadrille.background quadrille.lab) ;;
+  *)   ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon quadrille.audio quadrille.power quadrille.background) ;;
 esac
 
 for id in "${ids[@]}"; do

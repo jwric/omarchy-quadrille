@@ -31,6 +31,46 @@ perfectness, everything else". Four slices were running in parallel:
 Each wrote its own "Status at pause" section when told to pause. To resume, give a
 fresh agent the section's "next steps", plus the rules below.
 
+## State at the pause (what each slice reported)
+
+All four slices stopped cleanly; the shell answered `omarchy-shell shell ping`
+and the quadrille bar was active. Each wrote a "Status at pause" section with
+next steps (`plugins/NOTES.md`: agents B, O, P; `layershell/NOTES.md`).
+
+- **P (popups, theme tokens).** Done: the theme fix for overlapping stock popups
+  (the cause was spacing not scaled with the 22 px type, not only the font pins):
+  `[spacing] scale = 2.0`, `scale-with-font = false`, heading 22, display-large 44,
+  icon-large 33. Stock audio, bluetooth, network, monitor, power, weather, clock and
+  agents popups were checked on both monitors; the final regenerated file was only
+  re-checked on the bar, and tailscale was not checked. The popup kit (QPopup, QRow,
+  QSlider, ...) and the `quadrille.audio` and `quadrille.power` clones are enabled and
+  pixel-crisp. **Not started:** bluetooth, network, monitor, tailscale, agents,
+  weather and clock clones (brief in `plugins/tools/popup-brief.md`).
+- **B (bar, kit).** Round-3 files committed. **The pixel tray is not finished:**
+  `pixelTray: false` in `plugins/quadrille.bar/Bar.qml` keeps the stock tray. With
+  fake tray items registered (`plugins/tools/fake_sni.py`) the shell stopped
+  answering IPC until they exited: investigate before enabling it. Pitfalls in NOTES.
+- **O (menu, OSD, toasts, icons, wallpaper).** Done: menu empty-state overlap,
+  readable selected sub-text, icon boxes, placeholder icons for missing app icons,
+  pixel Confirm; OSD touchpad/touch/download icons and two-line messages; toasts
+  placed under the bar's real height; kit pieces (Pictograms, AppIcon, Confirm,
+  Scrim). `quadrille.background` draws the wallpaper at each output's pixel grid.
+  **Not done:** reminders, emojis, clipboard, image picker clones; no lock or polkit
+  clone exists (do not enable one without a safe test). `AppIcon` wraps B's shader
+  `PixelIcon` and is unverified on the real GPU.
+- **H (iced panels).** `audio`, `network`, `bluetooth`, `power` panels are built and
+  registered beside `sysmon` (release build clean, 98 unit tests pass; nested tests
+  pass for audio and network with stubbed commands). Bluetooth has 2 failing keyboard
+  checks (probably the test's row counting); the power and look test sections have
+  not run; idle numbers and the registry tests remain. **Not installed:** the
+  user's `~/.local/bin/quadrille-bar` is still the earlier build, and the running host
+  is that one.
+- Housekeeping done by the lead: `plugins/install.sh` and `stock.sh` now include the
+  audio, power and background clones, so `stock.sh` is a full way back again.
+- Side effects to know about: test notifications were created and deleted from the
+  notification history, but rotation had already dropped two older entries; one agent
+  photographed the user's workspace while checking and deleted the file.
+
 ## Rules every agent worked under (keep them)
 
 - **Live-session lock.** Several agents share the user's desktop. Wrap every
