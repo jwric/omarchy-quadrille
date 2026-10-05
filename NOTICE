@@ -1,0 +1,20 @@
+omarchy-quadrille
+
+Original code in this repository is licensed under either of MIT (LICENSE-MIT)
+or Apache-2.0 (LICENSE-APACHE), at your option.
+
+Third-party material, which keeps its own licence:
+
+- plugins/quadrille.menu, quadrille.osd, quadrille.notifications and
+  quadrille.bar are restyled clones of the Omarchy shell plugins of the same
+  names (omarchy.menu, omarchy.osd, omarchy.notifications, omarchy.bar),
+  https://github.com/basecamp/omarchy, which are MIT licensed, copyright their
+  authors. The clones keep the originals' structure and contracts; the markup
+  that carries the look is new. The MIT notice of the originals applies to the
+  parts derived from them (see LICENSE-MIT for the text).
+- plugins/quadrille.menu/AppSearch.js is a copy of Omarchy's
+  shell/services/AppSearch.js (MIT, as above).
+- Departure Mono (not included here; tools/install.sh copies it from
+  quadrille's checkout) is by Helena Zhang under the SIL Open Font License 1.1.
+- The themes' colours come from quadrille (MIT OR Apache-2.0),
+  https://github.com/jwric/quadrille.
