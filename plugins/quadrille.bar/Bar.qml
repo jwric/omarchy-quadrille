@@ -1204,6 +1204,12 @@ Item {
     // frame sits at the surface's origin.
     readonly property var g: Px.forWindow(barWindow)
 
+    // Where the centre group (the anchored clock and what flanks it) ends, in
+    // window coordinates: the left and right sections may grow up to it, and
+    // the elastic widgets in them (the tray) are given what is left.
+    property real centerLeftEdge: width / 2
+    property real centerRightEdge: width / 2
+
     ScreenMoveRemap {
       id: remapGuard
       window: barWindow
@@ -1349,12 +1355,16 @@ Item {
           anchors.left: parent.left
           anchors.leftMargin: barWindow.g.gap
           anchors.top: parent.top
+          maxWidth: Math.max(0, barWindow.centerLeftEdge - 2 * barWindow.g.gap)
         }
 
         RightModules {
-          anchors.right: parent.right
-          anchors.rightMargin: barWindow.g.gap
+          // right-aligned, but on the grid counted from the window's origin: a
+          // surface 2560 device px wide is not a multiple of the 3-px unit, so
+          // anchoring to its right edge would put this section one pixel off
+          x: barWindow.g.floor(barWindow.width - barWindow.g.gap - width)
           anchors.top: parent.top
+          maxWidth: Math.max(0, barWindow.width - barWindow.g.gap - (barWindow.centerRightEdge + barWindow.g.gap))
         }
       }
     }
@@ -1388,10 +1398,20 @@ Item {
   // drawn for a horizontal bar only; a vertical bar keeps the stock widget.)
   Component { id: menuReplacement; QMenu { } }
   Component { id: workspacesReplacement; QWorkspaces { } }
+  property bool pixelTray: false
+  Component { id: trayReplacement; QTray { } }
+  Component { id: indicatorsReplacement; QIndicators { } }
   function replacementFor(id) {
     switch (id) {
       case "omarchy.menu": return menuReplacement
       case "omarchy.workspaces": return root.vertical ? null : workspacesReplacement
+      // QTray (skins/QTray.qml) is written and renders, but the shell stopped
+      // answering IPC for as long as a *fake* tray item (plugins/tools/fake_sni.py)
+      // was registered, and the cause is not yet found (NOTES.md, "Status at
+      // pause (agent B)"). Real items (1Password, Claude) did not do it. Until that
+      // is understood the stock tray stays; set `pixelTray` to try ours.
+      case "omarchy.tray": return root.vertical || !root.pixelTray ? null : trayReplacement
+      case "omarchy.indicators": return root.vertical ? null : indicatorsReplacement
       default: return null
     }
   }
@@ -1404,6 +1424,12 @@ Item {
   Component { id: audioSkin; AudioSkin { } }
   Component { id: monitorSkin; MonitorSkin { } }
   Component { id: powerSkin; PowerSkin { } }
+  Component { id: weatherSkin; WeatherSkin { } }
+  Component { id: updateSkin; UpdateSkin { } }
+  Component { id: agentsSkin; AgentsSkin { } }
+  Component { id: mediaSkin; MediaSkin { } }
+  Component { id: microphoneSkin; MicrophoneSkin { } }
+  Component { id: activeWindowSkin; ActiveWindowSkin { } }
   // Popup clones (plugins/quadrille.audio ... : the host's own panels redrawn on
   // the pixel grid) stand in for the stock widget of the same name. They wear
   // its skin, and, like the stock widget, are handed the bar itself rather than
@@ -1425,6 +1451,12 @@ Item {
       case "omarchy.audio": return audioSkin
       case "omarchy.monitor": return monitorSkin
       case "omarchy.power": return powerSkin
+      case "omarchy.weather": return weatherSkin
+      case "omarchy.system-update": return updateSkin
+      case "omarchy.agents": return agentsSkin
+      case "omarchy.media": return mediaSkin
+      case "omarchy.microphone": return microphoneSkin
+      case "omarchy.active-window": return activeWindowSkin
       default: return null
     }
   }
@@ -1587,6 +1619,7 @@ Item {
         }
 
         ModuleList {
+          id: blockList
           visible: !centerRoot.hasAnchor
           entries: centerRoot.entries
           region: "center"
@@ -1595,6 +1628,7 @@ Item {
         }
 
         ModuleList {
+          id: beforeList
           visible: centerRoot.hasAnchor
           entries: root.entriesBefore(centerRoot.entries, root.centerAnchor)
           region: "center"
@@ -1612,11 +1646,25 @@ Item {
         }
 
         ModuleList {
+          id: afterList
           visible: centerRoot.hasAnchor
           entries: root.entriesAfter(centerRoot.entries, root.centerAnchor)
           region: "center"
           anchors.left: centerAnchorModule.right
           anchors.top: centerAnchorModule.top
+        }
+
+        Binding {
+          target: centerRoot.QsWindow.window
+          property: "centerLeftEdge"
+          value: centerRoot.hasAnchor ? (beforeList.width > 0 ? beforeList.x : centerAnchorModule.x) : blockList.x
+          restoreMode: Binding.RestoreNone
+        }
+        Binding {
+          target: centerRoot.QsWindow.window
+          property: "centerRightEdge"
+          value: centerRoot.hasAnchor ? (afterList.width > 0 ? afterList.x + afterList.width : centerAnchorModule.x + centerAnchorModule.width) : blockList.x + blockList.width
+          restoreMode: Binding.RestoreNone
         }
       }
     }
@@ -1754,6 +1802,20 @@ Item {
 
     property var entries: []
     property string region: ""
+    // The most the list may take, and what of it the non-elastic slots already do:
+    // the rest is the room the elastic ones (the tray, a title) share.
+    property real maxWidth: 1e9
+    readonly property real fixedWidth: {
+      var row = item
+      if (!row) return 0
+      var total = 0
+      var kids = row.children
+      for (var i = 0; i < kids.length; i++) {
+        var kid = kids[i]
+        if (kid && kid.elastic === false) total += kid.width
+      }
+      return total
+    }
 
     visible: entries.length > 0
     // A hidden list must not build its modules. The center section declares
@@ -1779,6 +1841,7 @@ Item {
             required property var modelData
             entry: modelData
             region: moduleListRoot.region
+            room: Math.max(0, moduleListRoot.maxWidth - moduleListRoot.fixedWidth)
           }
         }
       }
@@ -1834,11 +1897,17 @@ Item {
       var mine = root.replacementFor(registryName)
       return mine ? mine : stock
     }
+    // This slot holds one of our own widgets in place of the stock one.
+    readonly property bool replaced: root.replacementFor(root.canonicalWidgetId(moduleName)) !== null
     // A pixel face drawn over a stock widget that keeps running hidden.
     readonly property var skinComponent: registered && activeItem && !root.vertical
       ? root.skinFor(root.canonicalWidgetId(moduleName)) : null
     readonly property var skinItem: skinLoader.item
     readonly property bool skinned: skinComponent !== null && skinItem !== null
+    // A slot whose widget gives way when the bar runs out of room (the tray, a
+    // title, a now-playing line), and what it is offered.
+    property real room: 1e9
+    readonly property bool elastic: skinned ? skinItem.elastic === true : (activeItem ? activeItem.elastic === true : false)
     readonly property bool qmlCustom: customType === "qml"
     readonly property bool commandCustom: customType === "command"
     readonly property bool registered: registryComponent !== null
@@ -1931,6 +2000,8 @@ Item {
     Binding { target: skinLoader.item; property: "bar"; value: root; when: skinLoader.item !== null }
     Binding { target: skinLoader.item; property: "hot"; value: slot.pointable; when: skinLoader.item !== null }
     Binding { target: skinLoader.item; property: "open"; value: slot.panelOpen; when: skinLoader.item !== null }
+    Binding { target: skinLoader.item; property: "room"; value: slot.room; when: skinLoader.item !== null; restoreMode: Binding.RestoreNone }
+    Binding { target: slot.activeItem; property: "room"; value: slot.room; when: slot.activeItem !== null && slot.replaced; restoreMode: Binding.RestoreNone }
 
     // An open popup is marked by the corners of its button, not a dot: a
     // selection is brackets.

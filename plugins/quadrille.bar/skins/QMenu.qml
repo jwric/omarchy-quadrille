@@ -10,6 +10,10 @@ BarWidget {
 
   readonly property var g: Px.of(root)
 
+  // The bar offers each widget the room it has left; this one does not give way.
+  property real room: 1e9
+  readonly property bool elastic: false
+
   implicitWidth: vertical ? barSize : (7 + 2 * 4) * g.unit
   implicitHeight: vertical ? (7 + 2 * 4) * g.unit : barSize
 

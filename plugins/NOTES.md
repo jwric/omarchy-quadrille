@@ -523,3 +523,58 @@ Next steps, in order:
 4. Lock (`LockView.qml` only, the service stays verbatim) and polkit: only if tested in the nested compositor (`layershell/tools/nested.sh`); `lock preview` shows LockView without taking the session lock and is the safe live test. Neutralise `omarchy-brightness-*` and `omarchy-system-wake` in any test copy. Ship disabled otherwise.
 
 The offscreen harness (kept in the agent's scratch dir, not the repo): a `PanelWindow` is swapped for a `FloatingWindow` in a throwaway copy of the plugin, the kit's `PixelIcon` is stubbed, and `QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1.666667` gives the laptop's fractional scale; `grabToImage` of an inner item gives device-resolution PNGs. Pitfalls found: a QML `id` shadows a same-named property of the root (`readout` in Osd.qml); an asynchronous `Image` on an `image://icon/` URL aborts the process; keep the harness's output outside the watched config directory or it hot-reloads; `QT_SCALE_FACTOR` works but `ShaderEffect`/`layer.textureSize` do not render in the software scene graph (the live shell must check them).
+
+## Status at pause (agent P)
+
+**Done and verified**
+- Theme tokens (`tools/gen_themes.py`, themes regenerated, committed, applied with
+  `omarchy-theme-set "Quadrille Terminal"`): `[spacing] scale = 2.0`, `scale-with-font =
+  false`; heading 22, display 44, display-large 44, icon-large 33. Checked with the
+  tokens pushed in memory (`omarchy-shell shell applyTheme`): audio, bluetooth, network,
+  monitor, power, weather, clock and agents on HDMI-A-1; weather, audio, network,
+  bluetooth, monitor, power, clock, agents on eDP-2 (no overlap, clipping or truncation;
+  the long lists scroll). With tokens alone (spacing 1) the weather card still overlapped.
+  NOT checked: tailscale (not installed here, not in the bar layout), the speedtest /
+  wifiqr / dropbox panels; and the final regenerated file was applied and the bar seen
+  after, but the popups were re-checked with the in-memory copy (icon-large 33 vs 22 only).
+- Kit (committed): QPopup QHero QRow QSlider QMeter QSwitch QButton QReading QScroll
+  QField QTip QEmpty BigText PanelSprites; `plugins/tools/popup-shots.sh`, `popup-crop.py`.
+- Clones (committed, enabled): `quadrille.power`, `quadrille.audio`. Measured with
+  layershell/tools/crisp.py on both outputs: 7-11 colours, every transition on the grid
+  (eDP-2 mod 3, HDMI mod 2). Audio checked with two silent streams (long name wraps).
+- `Bar.qml` has `popupClones` / `stockIdOf` for all nine ids (skins and first-party bar
+  handout), committed as a minimal hunk.
+
+**In progress / not started**
+- No half-done clone is enabled. `plugins/tools/popup-brief.md` is the brief written for
+  sub-agents (rules, grid, kit, deploy loop, shared-file rules): hand it to each one.
+- Not started: bluetooth, network, monitor, tailscale, agents, weather, clock clones;
+  `plugins/install.sh` / `stock.sh` still list only the old plugins (add the new ids:
+  quadrille.audio quadrille.power ...; enable a clone only if its stock widget is in the
+  layout, tailscale is not); a specimen sheet of the kit states; NOTES re-measure of the
+  bar after `[spacing] scale 2.0` (positions looked unchanged on HDMI-A-1).
+
+**Next steps, in order**
+1. bluetooth, monitor, network, agents, tailscale: one clone each from the brief
+   (`quadrille.<x>` = `cp -aL` of the stock plugin dir + `Q` symlink + manifest with
+   `omarchy.clonedFrom`; keep every line above `KeyboardPanel {`, replace the view).
+   Weather and clock are center-section widgets: check `centerAnchor` (config says
+   `omarchy.clock`; after `plugin enable quadrille.clock` the layout id changes, so
+   `entryIndex(entries, centerAnchor)` in Bar.qml must resolve it through `stockIdOf`).
+   The clock clone uses `bar.shell.updateEntryInline`: keep its `typeof` guard.
+2. install.sh / stock.sh, then a full stock round trip (`plugins/stock.sh`, check the
+   stock popups, `plugins/install.sh`).
+3. Re-run popup-shots for every popup, both outputs, crisp.py on each card.
+
+**Pitfalls**
+- `omarchy-shell` answers "not responding" for a few seconds after a rescan or when
+  another agent restarts the shell: loop on `shell ping` before summoning.
+- `omarchy-shell shell summon omarchy.<x> '{}'` opens the popup on the *focused* output;
+  popup-shots focuses the output first. Hyprland 0.56 dispatch is
+  `hyprctl dispatch 'hl.dsp.focus({ monitor = "eDP-2" })'`.
+- Edits to singletons (Px, Role, Sprites, PanelSprites) need `omarchy-restart-shell`.
+- Other agents' test surfaces appear in grabs (red brackets, tray lists); crop them out.
+- A screenshot taken without the empty-workspace check showed windows once: only use
+  popup-shots.sh, and Read every PNG before keeping it.
+- `qmldir`, `Bar.qml`, `Sprites.qml` are edited by several agents: stage only your
+  hunks (HEAD content plus your replacement) rather than the whole file.

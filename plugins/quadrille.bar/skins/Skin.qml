@@ -24,8 +24,30 @@ Item {
   // in the skin's own coordinates.
   property rect mark: Qt.rect(0, g.px(2), width, g.px(12))
 
+  // The widest the skin may be, in logical px (the bar sets it, for the skins
+  // that give way: a title, a now-playing line), and whether it is one of them.
+  property real room: 1e9
+  property bool elastic: false
+
   function prop(name, fallback) {
     return host && host[name] !== undefined && host[name] !== null ? host[name] : fallback
+  }
+
+  // The first object under the host that has a property `name`: for a value the
+  // stock widget keeps inside a child (the weather's report lives in the panel
+  // it loads beside its button).
+  function deep(name, from, depth) {
+    var obj = from === undefined ? host : from
+    var d = depth === undefined ? 0 : depth
+    if (!obj || d > 4) return null
+    if (name in obj) return obj
+    var kids = obj.children
+    if (!kids) return null
+    for (var i = 0; i < kids.length; i++) {
+      var found = deep(name, kids[i], d + 1)
+      if (found) return found
+    }
+    return null
   }
 
   implicitHeight: bar ? bar.barSize : Style.bar.sizeHorizontal

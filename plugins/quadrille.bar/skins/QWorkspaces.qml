@@ -15,6 +15,10 @@ BarWidget {
 
   readonly property var g: Px.of(root)
 
+  // The bar offers each widget the room it has left; this one does not give way.
+  property real room: 1e9
+  readonly property bool elastic: false
+
   readonly property var screen: QsWindow.window ? QsWindow.window.screen : null
   readonly property var monitor: screen ? Hyprland.monitorFor(screen) : null
   readonly property int activeId: monitor && monitor.activeWorkspace ? monitor.activeWorkspace.id : -1
