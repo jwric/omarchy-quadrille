@@ -1,8 +1,184 @@
 # quadrille on wlr-layer-shell: the spike and the panel host
 
-Two stages. Stage 2, the panel host, is first; stage 1, the feasibility spike
-that it grew from (the approaches compared, what the fork needs, fractional
-scale), follows unchanged in substance.
+Three stages, newest first. Stage 3 is four panels that read and change the
+machine (audio, network, Bluetooth, power); stage 2 is the panel host they sit
+on, with the system monitor; stage 1, the feasibility spike that the host grew
+from (the approaches compared, what the fork needs, fractional scale), follows
+unchanged in substance.
+
+## Stage 3: audio, network, Bluetooth and power
+
+Four panels on the same host, in the same design language: `quadrille-bar ctl
+toggle audio|network|bluetooth|power` (or `summon`, or `--open`). The registry
+is `PANELS` in `crates/bar/src/host.rs`; `ctl list`, the error for an unknown
+panel, `ctl hide NAME`, `--open NAME` and `--help` all say every id from it
+(`sysmon, audio, network, bluetooth, power, demo`), and a test keeps it so.
+Sizes are 170 virtual pixels wide, 250 / 300 / 200 / 245 tall for audio /
+network / Bluetooth / power: multiples of 5, so exact at 1.666667 (306 wide
+logical there, 340 at scale 1). Nothing here is installed by this work.
+
+### What each does
+
+All four follow the keyboard (Up/Down/Tab; Enter or Space acts; Escape backs
+out of what the panel is in the middle of, and only then closes it) and the
+pointer (a click acts and moves the keyboard's mark, drawn as ink corner
+brackets, to that row). A hidden panel reads nothing and keeps nothing.
+
+- **audio**: outputs (the default is the engaged row; unplugged ones are not
+  offered), the master volume as a 20-step slider (Left/Right 5 %, PageUp/Down
+  20 %, Home 0, End 100, `m` mutes), inputs (monitors are not inputs) and
+  their volume, and every playing application with its own slider and mute.
+  Choosing an output makes it the default and moves the playing streams to it.
+  Volume changes are optimistic and coalesced: the slider follows the pointer at
+  once and one `pactl` call per settle goes out; a reading that arrives within
+  1.2 s of a touch does not move the slider back. Commands: `pactl -f json list
+  sinks|sources|sink-inputs`, `get-default-sink|source`, and `set-default-sink|source`,
+  `move-sink-input`, `set-sink|source|sink-input-volume N%`, `set-*-mute ... toggle`.
+  (`wpctl` exists here but is not needed.)
+- **network**: the Wi-Fi switch, the networks in range (signal as four steps,
+  a lock for secured, the connected one engaged), wired devices, VPNs, RESCAN.
+  A saved network joins without asking; an open one joins; a secured one nobody
+  joined asks for the password in a field and sends it only on Enter; Escape
+  cancels the field and not the panel. `nmcli -t` throughout (`\:` in names is
+  handled), `device wifi list --rescan no` for reading. Commands: `connection up
+  id`, `device wifi connect SSID [password PW]`, `device disconnect`, `radio wifi
+  on|off`, `connection up|down id VPN`, `device wifi rescan`.
+- **bluetooth**: the adapter switch, SCAN (8 s), paired devices (connected first)
+  and the ones nearby (PAIR). Reading is `bluetoothctl show|devices [Paired|
+  Connected]`; acting is Omarchy's own `omarchy-bluetooth-power on|off` and
+  `omarchy-bluetooth-device connect|disconnect|pair MAC`; scanning `bluetoothctl
+  --timeout 8 scan on`. Devices that BlueZ knows only by address are not shown.
+- **power**: the battery (percent, state, watts when there are some), the profile
+  (`powerprofilesctl list|get`; set with `omarchy-powerprofiles-set autodetect P`,
+  as Omarchy's menu does), and the session actions LOCK, SUSPEND, LOG OUT, REBOOT,
+  POWER OFF with exactly the commands of the Omarchy menu (`omarchy-system-lock`,
+  `systemctl suspend`, `omarchy-system-logout`, `omarchy-system-reboot`,
+  `omarchy-system-shutdown`). Every one asks first, YES / NO, with the keyboard on
+  NO (Enter by accident is safe; `y` and `n` answer; Escape backs out). After a
+  successful action the panel hides.
+
+### The shared widgets (`crates/bar/src/widgets`)
+
+`rows` (a pressable row: icon, label that is cut with an ellipsis or dropped
+before it is cut to a letter, trailing text), `slider` (stepped, 20 segments,
+press / drag / wheel, the cursor changes), `steps` (a read-only level, for signal
+strength; the battery is the toolkit's `bar`), `icons` (23 hand-drawn 7 x 7 sprites: speaker, headphones,
+microphone, Wi-Fi, lock, Ethernet, shield, Bluetooth, battery, plug, power, moon,
+reboot, log out, keyboard, mouse, phone, leaf, scales, bolt; device icons are chosen
+from the device's name or kind), `focus` (the corner brackets), `input` (a text
+field row). `commands.rs` is the runner every panel runs programs through.
+
+### One pixel size to a surface (no mixels)
+
+A virtual pixel is the only pixel size on a surface. `Pen::sprite` and
+`widget::icon` draw one lit pixel as one virtual pixel and have no scale, so a
+7 x 7 icon is never drawn 2x or 3x next to text and icons at 1x (a "mixel").
+When an icon has to be bigger than the 7 of a line of text, because it stands
+beside two or more lines or alone, it is a sprite of its own, drawn by hand at
+its own native size (11 x 11, 15 x 15, 21 x 21: `icons::SIZES`) with the detail
+those pixels allow, of the same family as the 7 x 7 set; never the small one
+scaled. Audit of this crate: nothing is drawn scaled and no icon is bigger than 7
+today (every icon stands beside one line of text; the panel headers and the close
+button are text in the body face; sysmon draws charts and text, no sprites).
+Tests in `widgets/icons.rs` keep it so: every sprite is square and one of the
+native sizes, none is a pixel-multiplied copy of a smaller one (a detector that is
+itself tested against 2x, 3x and 4x copies of every icon), and no source file of
+the crate has a scaling routine for sprites.
+
+### How it was tested
+
+- **Unit tests** (111 in the workspace, all with a recording runner, none runs a
+  program): the parsers against fixtures (`crates/bar/fixtures`, synthetic pactl
+  output), the command each action builds, the keyboard of every panel, the
+  sliders, the write queue, the confirm flow, the icons, and in `host.rs` the
+  registry (every id in `list`, the errors and the toggle; exact sizes at both
+  scales; one surface of the right namespace each), a panel read when shown and
+  never when hidden (`Task::units()` is 0 for a beat or a key with no panel up),
+  read again when shown again, keys going through the host to audio and to power,
+  Escape backing out of a question before closing, YES the only thing that sends
+  a power command, and the panel closing after it. Tasks are run to the end by a
+  helper that drives the iced task stream, against the recorder.
+- **One more, ignored by default**: `cargo test -p quadrille-bar -- --ignored
+  --nocapture this_machines` runs the four `read`s against this machine's real
+  programs (reads only) and prints what the parsers made of them. Run on
+  2026-10-05: audio 1 output, 2 inputs, 2 applications; Wi-Fi `wlp44s0f0` on, 5
+  networks, 1 wired; Bluetooth off; the three power profiles and a battery.
+- **Nested compositor, every command a stub.** `tools/stubs/` has a stateful
+  stand-in for each program (`stub.py`, one script behind twelve names): it
+  answers from a state file (the fixtures plus a few Wi-Fi networks, Bluetooth
+  devices, VPNs and profiles), changes that state when it is told to, and writes
+  every call to `calls.log`. The host runs them when `QUADRILLE_COMMANDS` is the
+  directory (`commands::Stubs`: only `DIR/<basename>` runs, a program with no stub
+  fails and nothing comes from `PATH`; the host log says "commands are stubbed").
+  `tools/nested-test.sh` has the sections `core`, `nobar`, `look`, `audio`,
+  `network`, `bluetooth` and `power`, each in a nested compositor of its own, each
+  under `flock /tmp/quadrille-live.lock` and a 170 s watchdog:
+  - `look`: all four panels at QA (1.666667) and QB (1), exact logical sizes,
+    `crisp.py --check` of each, nothing changed by showing them, and the cost
+    (below).
+  - `audio`, `network`, `bluetooth`, `power`: keys by `wtype` and clicks by `vptr`
+    (nested display only), asserting on `calls.log`: choose an output, mute, step
+    the volume, Home / End, an application's slider by a click, the password
+    prompt and its Escape, join / VPN / switch off, connect / disconnect / pair /
+    scan / adapter off, a profile, and every session action asking first, NO as
+    the default, YES (and `y`) the only thing that sends it, each sent once.
+  - A click is placed with `ctl find TEXT`, which answers the box of a text of the
+    open panel in its own virtual pixels. Names are shown shortened, so look at a
+    screenshot before choosing the text.
+  - `keys_ready` probes that the keyboard reaches the panel (the host logs each
+    key it hands a panel, at debug): once a nested run had a panel that never got
+    its keyboard, and a section of keys that went nowhere is better told as that.
+
+### What it costs
+
+Measured in the `look` section (stubbed commands, panel on QA, 1.666667; the host
+process only: the programs it starts are not counted, and the stubs are Python, so
+read the command counts, not their cost). Six seconds each:
+
+| state | commands | host CPU | resident |
+|---|---|---|---|
+| nothing shown | 0 | 0 ms | 13.7 MB (no window: the graphics are dropped) |
+| audio (read every 1 s) | 30 (5 a reading) | 11 ms, 0.1 % of a core | 16.8 MB |
+| network (every 4 s) | 10 (5 a reading) | 4 ms | 17.4 MB |
+| bluetooth (every 3 s) | 8 (4 a reading) | 4 ms | 16.0 MB |
+| power (every 2 s) | 6 (2 a reading) | 7 ms | 16.7 MB |
+| hidden again | 0 | 0 | 13.6 MB |
+
+Hidden costs nothing: no timer, no subscription, no command, and the window and
+the graphics are gone. Shown, a panel costs a reading a beat and a fraction of a
+percent of a core. The test asserts all of this (no command and under 5 ms hidden;
+read on the beat and under 5 % of a core shown).
+
+### Not testable here
+
+The real programs on real hardware beyond reading: changing a default sink with
+real streams, a real Wi-Fi join or a wrong password (and how `nmcli` words the
+refusal), enterprise Wi-Fi, a real pairing (agent, PIN, a device that refuses),
+`omarchy-powerprofiles-set autodetect` on a machine with a different profile
+set, and the session actions themselves (only their command lines are tested,
+against the Omarchy menu's; nothing here ever ran one). A Wi-Fi password is an
+argument of `nmcli`, so it is visible in `ps` for the moment it runs. Other
+compositors than Hyprland: the focus grab is Hyprland's.
+
+### Rules this was built under, and pitfalls
+
+- Never run `ctl` without `QUADRILLE_BAR_SOCKET` set to a test socket: the
+  default socket is the user's own host.
+- Never run a state-changing command on the live session; tests use the stubs.
+  Nothing is installed by tests: they build into `target/` only.
+- Anything that starts the nested compositor or the binary on the live session
+  goes through `flock -w 900 /tmp/quadrille-live.lock`, for under three minutes;
+  the queue for it can be long when others are using the desktop, so run a
+  section in the background and poll rather than under a short `timeout`.
+- Input only goes to the nested compositor (`tools/nested.sh run wtype ...`; `vptr`
+  refuses another display). No `wtype`, `vptr` or `hyprctl dispatch` on the live one.
+- Keys are counted from Home, which is the first row; Cancel in power puts the
+  keyboard back on the first row; in Bluetooth the rows are the switch, SCAN, then
+  connected, paired, nearby, each by name.
+- Commit only `layershell/` paths (`git commit -- PATHS`): other work is staged in
+  `plugins/`, and a plain `git commit` would take it.
+- `Stubs` tests of freshly written scripts can meet "Text file busy" when another
+  test's fork holds the descriptor: they retry.
 
 ## Stage 2: a panel host with a system monitor
 
@@ -545,73 +721,3 @@ in use), `--theme-dir DIR`, `--open PANEL`, `--exit-after SECS`.
 tests: over a region of a `grim` screenshot, the number of distinct colours (7 to
 10 for a bar or a panel) and whether every colour change falls on a multiple of
 the pixel scale from the surface's own origin.
-
-## Status at pause (2026-10-05)
-
-Committed: four panels beside `sysmon` on the same host (`ctl toggle|summon
-audio|network|bluetooth|power`), all registered, all built from the shared
-widgets in `crates/bar/src/widgets` (rows, stepped sliders, steps, icons, focus
-brackets, text-input row). 98 unit tests pass; `cargo build --release` is clean.
-Nothing is installed: `~/.local/bin/quadrille-bar` is still the user's older build.
-
-What each does, `pactl`/`wpctl` aside: `audio` (pactl: outputs, default, master
-volume, inputs, per-application volume and mute, streams follow a new default),
-`network` (nmcli: Wi-Fi switch, networks, saved/open/secured joins with a password
-prompt, VPNs, rescan), `bluetooth` (bluetoothctl for reading; `omarchy-bluetooth-*`
-to act; scan), `power` (powerprofilesctl; `omarchy-powerprofiles-set autodetect`;
-lock, suspend, log out, reboot, power off, each behind a YES/NO that starts on NO).
-Panel sizes in virtual pixels: 170 wide; audio 250, network 300, bluetooth 200,
-power 245 high. Hidden, no panel reads anything; shown, one reading per beat
-(audio 1 s, network 4 s, bluetooth 3 s, power 2 s).
-
-Done and verified in a nested compositor with stubs, at both scales (screenshots,
-`ctl find`, keys by wtype, clicks by vptr, `calls.log` of the stubs):
-- audio: section `audio` passes (keys, sliders, application slider click, mute).
-- network: section `network` passes (password prompt, Escape, joins, VPN, switch).
-- All four panels crisp and exact at both scales were checked by hand from
-  screenshots; the automatic check is section `look`, not run yet.
-
-In progress, not yet verified:
-- Section `bluetooth`: two keyboard checks fail (Enter on the connected device
-  disconnects; Enter on a paired one connects). The clicks, scan and switch pass.
-  Probably the test's row counting (the order of the devices), not the panel:
-  look at `bluetooth_start.png` and the order in the stub's state first.
-- Section `power` (profiles, the confirm step for all five actions, Escape backing
-  out of a question, clicks) is written and has never run to the end. Rows: three
-  profiles (power-saver, balanced, performance), then the five actions.
-- Section `look` (sizes, crisp, idle numbers hidden vs shown) is written, not run.
-- The idle numbers for this file are not measured yet.
-- No unit tests yet in `host.rs` for the new registry (toggle ids, escape routing,
-  key dispatch through `Host::with_runner` and `commands::recorder`).
-- Not testable here: the real `pactl`/`nmcli`/`bluetoothctl` on hardware, real
-  pairing (agent, PIN), enterprise Wi-Fi, `omarchy-powerprofiles-set autodetect`
-  on a machine without a battery, and the power actions themselves (only their
-  command lines are unit-tested). A Wi-Fi password is an argument of `nmcli`, so
-  visible in `ps` for a moment.
-
-Next, in order: run `SECTIONS="bluetooth" tools/nested-test.sh`, fix; then `power`,
-then `look`, then the whole `tools/nested-test.sh` (core and nobar were restructured
-and have not been run since); then the `host.rs` unit tests; then the idle numbers
-and this file's panel section; then ask before installing anything.
-
-How to test, and the pitfalls:
-- Always `flock -w 900 /tmp/quadrille-live.lock` around anything that starts the
-  nested compositor or the binary on the live session; `tools/nested-test.sh` does
-  it itself, one lock per section, each under 170 s (a watchdog kills it).
-  Other agents use the desktop: never hold it longer than three minutes.
-- Never run `ctl` without `QUADRILLE_BAR_SOCKET` set to a test socket: the default
-  one is the user's own host (pid of `quadrille-bar --no-bar`), which stays running.
-- Every command is a stub: `QUADRILLE_COMMANDS=tools/stubs` makes the host run
-  only `tools/stubs/<name>` and nothing from the `PATH`; the stubs keep a state
-  and write each call to `$QUADRILLE_STUB_STATE/calls.log`. The host log says
-  "commands are stubbed". Never test a state-changing command on the live session.
-- Input only goes to the nested compositor (`tools/nested.sh run wtype ...`, vptr
-  refuses any other display). No wtype, vptr or `hyprctl dispatch` on the live one.
-- `ctl find TEXT` gives the box of a text of the open panel in its virtual
-  pixels (exact match on the trimmed text); the tests click and count from it.
-  Names are shown shortened ("Speaker", not the card's name), so look at a screenshot.
-- Keys are counted from `Home` (the first row); Escape closes the panel unless a
-  panel has something to back out of (the password, a question), and Cancel in
-  power puts the keyboard back on the first row, not on the row asked.
-- Commit only `layershell/` paths with `git commit -- PATHS`: another agent's work
-  is staged in `plugins/`, and a plain `git commit` would take it.

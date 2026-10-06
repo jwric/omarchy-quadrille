@@ -443,12 +443,25 @@ times() { calls | grep -cx -- "$1"; }
 show() { ctl summon "$1" "{\"output\":\"$2\"}" >/dev/null; sleep 2.2; }
 dismiss() { ctl hide >/dev/null; sleep 0.6; }
 
+# Whether the keyboard reaches the panel that is shown: one harmless key (Home
+# is the first row in all four panels) until the host logs it. Once in a while
+# the nested compositor has not given the panel its keyboard yet, and a section
+# of keys that went nowhere says nothing useful.
+keys_ready() {
+  for _ in 1 2 3 4 5 6; do
+    "$N" run wtype -k Home; sleep 0.4
+    grep -q 'key Home' "$OUT/host.log" && { pass "the keyboard reaches the panel"; return 0; }
+  done
+  fail "the keyboard never reached the panel"
+  return 1
+}
+
 # The host for the panel sections: panels only, every command a stub.
 start_panels_host() {
   begin
   (
     "$N" run env QUADRILLE_COMMANDS="$QUADRILLE_COMMANDS" QUADRILLE_STUB_STATE="$QUADRILLE_STUB_STATE" \
-      QUADRILLE_BAR_SOCKET=$SOCK RUST_LOG=iced_layer=debug,quadrille_bar=info \
+      QUADRILLE_BAR_SOCKET=$SOCK RUST_LOG=iced_layer=debug,quadrille_bar=debug \
       "$BIN/quadrille-bar" --no-bar --theme-dir "$OUT/current" > "$OUT/host.log" 2>&1 &
   )
   for _ in $(seq 1 50); do ctl list >/dev/null 2>&1 && break; sleep 0.1; done
@@ -477,22 +490,36 @@ section_look() {
   done
   check "showing them changed nothing" "! calls | grep -qE '^(pactl set|pactl move|nmcli (connection|device wifi connect|radio wifi o)|omarchy-|systemctl)'"
 
-  echo "== nothing runs while a panel is hidden, and it is read on a beat while shown"
-  sleep 1
+  echo "== what they cost: nothing hidden; one reading a beat, shown"
+  sleep 2
+  rss_hidden=$(rss_kb "$PID")
   before=$(calls | wc -l)
-  C0=$(cpu_ns "$PID"); sleep 4; C1=$(cpu_ns "$PID")
+  C0=$(cpu_ns "$PID"); sleep 6; C1=$(cpu_ns "$PID")
   after=$(calls | wc -l)
-  echo "   hidden for 4 s: $((after - before)) commands, $(( (C1 - C0) / 1000000 )) ms of CPU, $(rss_kb "$PID") kB resident"
-  check "hidden: no command in four seconds" "[ $before = $after ]"
-  check "hidden: no CPU to speak of (under 5 ms in 4 s)" "[ $(( (C1 - C0) / 1000000 )) -lt 5 ]"
-  show audio QA
-  before=$(times 'pactl -f json list sinks')
-  C0=$(cpu_ns "$PID"); sleep 4; C1=$(cpu_ns "$PID")
-  after=$(times 'pactl -f json list sinks')
-  echo "   audio shown for 4 s: $((after - before)) readings, $(( (C1 - C0) / 1000000 )) ms of CPU"
-  check "shown: audio is read once a second (at least 3 times in 4 s)" "[ $((after - before)) -ge 3 ]"
-  dismiss
-  sleep 1
+  echo "   hidden for 6 s: $((after - before)) commands, $(( (C1 - C0) / 1000000 )) ms of CPU, $rss_hidden kB resident"
+  check "hidden: no command in six seconds" "[ $before = $after ]"
+  check "hidden: no CPU to speak of (under 5 ms in 6 s)" "[ $(( (C1 - C0) / 1000000 )) -lt 5 ]"
+  for panel in audio network bluetooth power; do
+    # The first command of a reading, to count the readings by.
+    case $panel in
+      audio) beat=1; probe='pactl -f json list sinks' ;;
+      network) beat=4; probe='nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status' ;;
+      bluetooth) beat=3; probe='bluetoothctl show' ;;
+      power) beat=2; probe='powerprofilesctl get' ;;
+    esac
+    show $panel QA
+    before=$(calls | wc -l); readings=$(times "$probe")
+    C0=$(cpu_ns "$PID"); sleep 6; C1=$(cpu_ns "$PID")
+    after=$(calls | wc -l); readings=$(( $(times "$probe") - readings ))
+    cpu_ms=$(( (C1 - C0) / 1000000 ))
+    echo "   $panel shown for 6 s: $readings readings ($((after - before)) commands), $cpu_ms ms of CPU ($(( cpu_ms / 60 )).$(( cpu_ms % 60 * 10 / 60 )) % of a core), $(rss_kb "$PID") kB resident"
+    need=$(( 6 / beat - 1 )); [ $need -lt 1 ] && need=1
+    check "$panel shown: read on its beat (every ${beat} s: at least $need readings in 6 s)" "[ $readings -ge $need ]"
+    check "$panel shown: under 5 % of a core" "[ $cpu_ms -lt 300 ]"
+    dismiss
+  done
+  sleep 2
+  echo "   hidden again: $(rss_kb "$PID") kB resident (it was $rss_hidden kB)"
   before=$(calls | wc -l)
   sleep 3
   check "hidden again: the readings stop" "[ $before = $(calls | wc -l) ]"
@@ -506,6 +533,7 @@ section_look() {
 section_audio() {
   start_panels_host
   show audio QA
+  keys_ready
   for text in "Speaker" "MOMENTUM 4" "Stereo Microphone" "Firefox" "mpv" "50%" "75%" "80%"; do
     check "audio shows $text" "ctl find '$text' >/dev/null"
   done
@@ -537,6 +565,7 @@ section_audio() {
 section_network() {
   start_panels_host
   show network QA
+  keys_ready
   for text in "Home" "Lobby" "Cafe:Free" "Neighbour" "Known Away" "Work VPN" "RESCAN"; do
     check "network shows $text" "ctl find '$text' >/dev/null"
   done
@@ -573,16 +602,19 @@ section_network() {
 section_bluetooth() {
   start_panels_host
   show bluetooth QA
+  keys_ready
   for text in "Headphones" "Keyboard K1" "Speaker One" "Mystery Phone"; do
     check "bluetooth shows $text" "ctl find '$text' >/dev/null"
   done
   shot QA bluetooth_start
-  # Rows: the adapter switch, then the devices.
-  press Home Down Return
-  check "Enter on a connected device disconnects it" "calls | grep -qE '^omarchy-bluetooth-device disconnect '"
+  # Rows: the adapter switch, SCAN, then the devices: connected first, then
+  # paired, then the others, each by name (Headphones, Keyboard K1, Speaker One,
+  # Mystery Phone).
+  press Home Down Down Return
+  check "Enter on the connected device disconnects it" "called 'omarchy-bluetooth-device disconnect 22:22:22:22:22:22'"
   sleep 1.5
   press Down Return
-  check "Enter on a paired one connects it" "calls | grep -qE '^omarchy-bluetooth-device connect '"
+  check "Enter on a paired one connects it" "called 'omarchy-bluetooth-device connect 44:44:44:44:44:44'"
   sleep 1.5
   click_text QA quadrille-bluetooth "Mystery Phone"
   check "a click on a device only nearby pairs it" "called 'omarchy-bluetooth-device pair 33:33:33:33:33:33'"
@@ -603,6 +635,7 @@ section_bluetooth() {
 section_power() {
   start_panels_host
   show power QA
+  keys_ready
   for text in "BALANCED" "PERFORMANCE" "POWER-SAVER" "LOCK" "SUSPEND" "LOG OUT" "REBOOT" "POWER OFF"; do
     check "power shows $text" "ctl find '$text' >/dev/null"
   done
