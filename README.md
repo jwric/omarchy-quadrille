@@ -49,6 +49,10 @@ is off the grid on both). Your `foot.ini` is not touched. `QUADRILLE_FOOT_MULTIP
 delete `~/.local/bin/quadrille-foot` and `~/.local/share/applications/foot.desktop`.
 `tools/term-test.sh` renders candidates in a nested compositor at both scales.
 
+**Measuring overlay key.** The cursor reticle and live dimension lines are off at login
+(`quadrille-bar --no-bar --no-overlay`); `SUPER + CTRL + G` runs `tools/quadrille-overlay-toggle`
+(linked to `~/.local/bin`) to turn them on and off. `quadrille-bar ctl overlay on|off|status` does the same by hand.
+
 Nothing here edits your Hyprland config; the scripts print what to add. Crisper
 shell text wants one line in it: `hl.env("QML_DISABLE_DISTANCEFIELD", "1")`
 (Qt's distance-field text renderer smears a pixel font; this turns it off for

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Toggle the cursor measuring overlay of the panel host (bound to a key).
+if quadrille-bar ctl overlay status 2>/dev/null | grep -q '^overlay on'; then
+  quadrille-bar ctl overlay off
+else
+  quadrille-bar ctl overlay on
+fi
