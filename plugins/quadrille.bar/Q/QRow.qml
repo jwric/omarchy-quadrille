@@ -113,7 +113,8 @@ Item {
     id: trail
     anchors.right: parent.right
     anchors.rightMargin: root.g.px(2)
-    anchors.verticalCenter: parent.verticalCenter
+    // centred on the row's whole virtual pixels, not on a half one
+    y: root.g.centre(root.height, height)
     spacing: root.g.px(2)
   }
 

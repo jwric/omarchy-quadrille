@@ -327,11 +327,10 @@ Panel {
         }
 
         // ---------- Stats ----------
-        // Gated only by "we've ever loaded data", so the section never
-        // collapses mid-transition (UPower reports FullyCharged for a second on
-        // plug-in).
+        // Always there (a dash until the data arrives), so the card has the
+        // height it will keep from its first frame: nothing is sized from what a
+        // process answers after the popup is open.
         Row {
-          visible: root.batteryInfo.percentage !== undefined
           width: parent.width
           spacing: panel.g.px(8)
 
@@ -339,7 +338,7 @@ Panel {
 
           Column {
             width: parent.half
-            QReading { width: parent.width; label: "Battery size"; value: root.batteryInfo.size || "" }
+            QReading { width: parent.width; label: "Battery size"; value: root.batteryInfo.size || "—" }
             QReading { width: parent.width; label: "Charge cycles"; value: root.batteryInfo.cycles || "—" }
           }
 
@@ -353,7 +352,7 @@ Panel {
             QReading {
               width: parent.width
               label: root.chargeThresholdActive ? "Battery state" : (root.discharging ? "Discharging" : "Charging")
-              value: root.chargeThresholdActive ? "Holding" : (root.batteryFull ? "-" : (root.batteryInfo.rate || ""))
+              value: root.chargeThresholdActive ? "Holding" : (root.batteryFull ? "-" : (root.batteryInfo.rate || "—"))
             }
           }
         }
@@ -367,6 +366,7 @@ Panel {
           Row {
             id: profileRow
             width: parent.width
+            height: panel.g.line   // held before the profiles are listed
             spacing: panel.g.px(3)
 
             readonly property real cellWidth: root.profiles.length > 0

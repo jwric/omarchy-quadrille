@@ -682,15 +682,10 @@ Panel {
             }
           }
 
-          QEmpty {
-            visible: !root.current
-            width: parent.width
-            text: "Fetching forecast…"
-          }
-
-          // ---- Between the conditions and the forecast.
+          // ---- Between the conditions and the forecast. Always there: the
+          //      forecast row below holds its height until the days arrive, so the
+          //      card is the size it will stay from its first frame.
           Hairline {
-            visible: root.forecastDays.length > 0
             width: parent.width
           }
 
@@ -700,9 +695,16 @@ Panel {
           //      when it is not.
           Item {
             id: forecast
-            visible: root.forecastDays.length > 0
             width: parent.width
-            height: visible ? panel.g.px(24) : 0
+            height: panel.g.px(24)
+
+            PixelText {
+              visible: root.forecastDays.length === 0
+              x: panel.g.px(3)
+              y: panel.g.centre(parent.height, height)
+              text: root.current ? "No forecast" : "Fetching forecast…"
+              ink: Role.muted
+            }
 
             readonly property int count: Math.max(1, root.forecastDays.length)
             readonly property real column: panel.g.floor(width / count)

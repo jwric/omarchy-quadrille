@@ -569,6 +569,11 @@ Panel {
     enabled: root.opened && !!root.source
   }
 
+  // Asked once at start, not only while open: its answer drops the outputs that
+  // are not plugged in, and a card that waits for it is a card that changes size
+  // after it has been shown.
+  Component.onCompleted: if (!sinkAvailabilityProc.running) sinkAvailabilityProc.running = true
+
   Process {
     id: sinkAvailabilityProc
     command: ["omarchy-audio-sink-availability"]
