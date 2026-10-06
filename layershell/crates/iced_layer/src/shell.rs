@@ -396,6 +396,16 @@ fn physical_size(logical: (u32, u32), scale: f64) -> Size<u32> {
     )
 }
 
+fn retain_retries(
+    closed: &mut HashMap<window::Id, Instant>,
+    wanted: &HashMap<window::Id, SurfaceSettings>,
+    now: Instant,
+) {
+    closed.retain(|id, at| {
+        wanted.contains_key(id) && now.duration_since(*at) < Duration::from_millis(500)
+    });
+}
+
 fn build_user_interface<'a, P: Layered>(
     instance: &'a Instance<P>,
     cache: user_interface::Cache,
@@ -557,6 +567,7 @@ where
         };
 
         let wanted: HashMap<_, _> = instance.surfaces(&env).into_iter().collect();
+        retain_retries(&mut closed_at, &wanted, Instant::now());
 
         for id in declared.keys().copied().collect::<Vec<_>>() {
             if !wanted.contains_key(&id) {
@@ -640,7 +651,10 @@ where
             };
 
             for (id, surface) in &wl.surfaces {
-                if !windows.contains_key(id) && surface.configured.is_some() && !surface.scale_known
+                if !windows.contains_key(id)
+                    && surface.configured.is_some()
+                    && !surface.scale_known
+                    && surface.created.elapsed() < wl::SCALE_GRACE
                 {
                     consider(surface.created + wl::SCALE_GRACE);
                 }
@@ -727,6 +741,13 @@ where
             };
 
             if !surface.is_ready() {
+                continue;
+            }
+
+            if surface.settings.raster.is_some() {
+                if let Err(error) = wl.present_raster(id) {
+                    log::warn!("could not present raster {id:?}: {error}");
+                }
                 continue;
             }
 
@@ -1010,7 +1031,13 @@ where
             actions.extend(produced);
 
             for window in windows.values_mut() {
-                window.dirty = true;
+                if wl
+                    .surfaces
+                    .get(&window.id)
+                    .is_none_or(|surface| surface.settings.repaint_revision.is_none())
+                {
+                    window.dirty = true;
+                }
             }
 
             more_work = true;
@@ -1292,4 +1319,30 @@ where
     }
 
     Redrawn { messages }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    #[test]
+    fn expired_or_removed_surfaces_leave_no_retry_wake() {
+        let now = Instant::now();
+        let young = window::Id::unique();
+        let expired = window::Id::unique();
+        let gone = window::Id::unique();
+        let mut closed = HashMap::from([
+            (young, now - Duration::from_millis(499)),
+            (expired, now - Duration::from_millis(500)),
+            (gone, now),
+        ]);
+        let wanted = HashMap::from([
+            (young, SurfaceSettings::default()),
+            (expired, SurfaceSettings::default()),
+        ]);
+        retain_retries(&mut closed, &wanted, now);
+        assert_eq!(closed.len(), 1);
+        assert!(closed.contains_key(&young));
+        retain_retries(&mut closed, &wanted, now + Duration::from_millis(1));
+        assert!(closed.is_empty());
+    }
 }

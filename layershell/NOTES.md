@@ -1,5 +1,84 @@
 # quadrille on wlr-layer-shell: the spike and the panel host
 
+## Physical cursor graticule
+
+The host now draws `quadrille-reticle` by default, including with `--no-bar`.
+`--no-overlay` starts without it; `quadrille-bar ctl overlay on|off|status`
+changes it at runtime. Its one small layer-shell surface follows the output
+containing the compositor's pointer. Overlay layer, exclusive zone -1, no
+keyboard interactivity, no focus grab, and an empty input region make it pass
+all input through. Bars and panels keep their own repaint revision, so cursor
+messages do not repaint them.
+
+The measuring model in `crates/bar/src/physical.rs` is the same definition and
+shared JSON vectors as the wallpaper's JavaScript model. It reads optional
+`~/.config/quadrille/displays.toml` overrides at startup and monitor changes;
+off/on reloads them too. The plate reads `x` and `y` in millimetres from the
+top left, then `C x` and `y` from the centre, with one decimal. Each estimated
+coordinate has its own tilde. The plate flips left/up at the edges.
+
+The raster uses the same baked Departure Tight bitmap as QML, one native
+virtual pixel per bitmap cell pixel. Four five-pixel accent arms have a
+two-pixel transparent gap and void outlines. It is a native ARGB8888 shm
+buffer, about 165 x 50 virtual pixels, not an iced full-output window. A
+logical margin places the buffer near the pointer; integer physical residuals
+inside it align every stroke with the output grid. Uncommon scales get
+transparent padding to an integral physical extent. Only this small buffer
+is damaged on a move. No graphics renderer or font database is needed until
+an actual bar or panel is drawn.
+
+**Compositor crispness limit:** after recreating nested headless QB, the
+strict screenshot comparison finds 840 opaque pixels differing by one grey
+level along glyph and arm edges. Native pixels, source/destination extent,
+position and virtual grid remain exact. The same discrepancy survives
+moving QB from layout x30000 to x3000 and x0, integer buffer scaling,
+power-of-two textures and identical-texel transport. This is consistent with
+compositor output filtering, also recorded in the earlier spike's notes;
+Hyprland offers no nearest-neighbour layer rule. The strict test still fails
+and retains its evidence. This gates the requested live-session preview;
+no live overlay or hotplug crispness verification was performed.
+
+Hyprland animates layer surfaces by default. The host therefore installs a
+named runtime Lua rule matching only `^quadrille-reticle$`, with `no_anim =
+true` and `animation = "none"`. It keeps and reuses the rule handle, enables
+it again after monitor/config changes, and disables it when the overlay
+subscription ends. No configuration file is written. If the rule cannot be
+installed the overlay stays unmapped and logs the reason.
+
+Cursor queries use Hyprland's `.socket.sock`: 60 Hz until 400 ms after a
+movement, then 5 Hz. `.socket2.sock` events refresh fullscreen and monitor
+state; Wayland output changes also trigger a monitor refresh without a
+monitor polling loop. A separate 5 Hz `j/locked` check is required because
+there is no lock IPC event. Fullscreen, locked, outside every output and off
+states have no cursor queries and no surface. Outside-output recovery waits
+for a monitor/focus/workspace event. Turning it off removes the subscription,
+including the lock check. Transient cursor IPC failures retain the last
+valid reading; lock query failures suppress the overlay.
+
+**Pointer precision limit:** installed Hyprland 0.56.2 floors its internal
+cursor coordinates to whole logical pixels before `j/cursorpos` returns
+them. The raster is exact for the reported coordinate and its containing
+virtual pixel; it cannot reconstruct a fractional logical position the IPC
+does not expose. In the nested QA test, a known actual pointer at (3.9, 9.9)
+returns (3, 9): actual containing physical grid cell (6, 15), reported cell
+(3, 15). See [the installed compositor's cursor request](https://github.com/hyprwm/Hyprland/blob/efb50993780079460b0cbed1363e2166a2de1d9f/src/debug/HyprCtl.cpp#L1291-L1304).
+
+`tools/overlay-test.sh OUTDIR` runs in a nested compositor under `flock -o`
+with a 55-second watchdog. It compares atomic native-buffer dumps with the
+actual QA/QB screenshots, checking residuals, edge flips, and crisp readout
+plates (the compositor's own cursor sprite is excluded). It exercises
+stationary scale changes, output crossing, hotplug, runtime off/on, a click
+and Home reaching the underlying stubbed audio panel, a blank fullscreen
+window, and a minimal nested session lock with no PAM. Poll traces are for
+tests only; dumps and traces are disabled before CPU sampling.
+
+Measured over six seconds each after the panel interaction, on QB, host
+threads only: idle 7.50 ms (0.125 % of a core), 14.17 MiB RSS; moving 153.89
+ms (2.564 %), 14.17 MiB; off 0.13 ms (0.002 %), 14.04 MiB. Quantisation,
+scheduler, padded native extents, inhibition and retry-deadline unit tests
+also run in `cargo test --workspace`. Expired or removed closed surfaces no
+longer keep a past retry deadline waking the shell continuously.
+
 Three stages, newest first. Stage 3 is four panels that read and change the
 machine (audio, network, Bluetooth, power); stage 2 is the panel host they sit
 on, with the system monitor; stage 1, the feasibility spike that the host grew

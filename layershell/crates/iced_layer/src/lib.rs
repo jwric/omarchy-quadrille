@@ -15,6 +15,6 @@ mod wl;
 pub use app::{Application, application};
 pub use shell::{Error, Layered, run};
 pub use wl::{
-    Anchor, Env, Exclusive, Geometry, Grab, KeyboardInteractivity, Layer, OutputInfo,
-    SurfaceSettings, geometry, is_exact, logical_for,
+    Anchor, Env, Exclusive, Geometry, Grab, KeyboardInteractivity, Layer, OutputInfo, RasterBuffer,
+    SurfaceSettings, geometry, is_exact, logical_for, logical_for_native,
 };

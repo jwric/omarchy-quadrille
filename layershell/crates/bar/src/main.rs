@@ -4,7 +4,9 @@ mod commands;
 mod graphics;
 mod host;
 mod ipc;
+mod overlay;
 mod panels;
+mod physical;
 mod sys;
 mod sysmon;
 mod theme;
@@ -23,8 +25,8 @@ usage: quadrille-bar [OPTIONS]
        quadrille-bar ctl COMMAND
 
 options:
-  --no-bar, --panels-only  no bar: no surface, no exclusive zone and no timer
-                         until a panel is summoned (a service beside another bar)
+  --no-bar, --panels-only  no bar; panels and the cursor overlay remain available
+  --no-overlay           start without the always-on cursor overlay
   --output NAME          a bar on this output only; repeat for several (default: all)
   --backend NAME         tiny-skia (the default here) or wgpu
   --bar-tick-ms MS       how often the bar's gauges are read; 0 never (2000)
@@ -43,6 +45,7 @@ commands (quadrille-bar ctl ...):
   list                   the panels, the outputs and the theme
   find TEXT              where a text is in the panel shown: x y w h, in its pixels
   reload-theme           read the Omarchy theme again
+  overlay on|off|status   enable, disable or inspect the cursor overlay
   quit",
         panels = host::ids()
     )
@@ -64,6 +67,7 @@ fn parse() -> Result<Options, String> {
                     .map_err(|_| "--bar-tick-ms needs a number")?
             }
             "--no-bar" | "--panels-only" => options.no_bar = true,
+            "--no-overlay" => options.no_overlay = true,
             "--no-exclusive" => options.exclusive = false,
             "--height" => {
                 options.height = value("--height")?
@@ -131,7 +135,7 @@ fn main() {
 
                 eprintln!(
                     "quadrille-bar: the host is not running ({why}).\n\
-                     Start it with `quadrille-bar --no-bar` (panels only) or `quadrille-bar` (bars and panels)."
+                     Start it with `quadrille-bar --no-bar` (panels and cursor overlay) or `quadrille-bar` (bars, panels and overlay)."
                 );
                 std::process::exit(1);
             }

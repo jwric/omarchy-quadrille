@@ -1,6 +1,7 @@
 //! The panel host: a bar on every output, and panels that are summoned.
 use crate::commands::{self, Shared};
 use crate::ipc::{self, Request};
+use crate::overlay;
 use crate::panels::{Key, audio, bluetooth, network, power};
 use crate::sys::{self, LocalTime};
 use crate::sysmon;
@@ -123,6 +124,7 @@ pub enum Message {
     CloseRequested(window::Id),
     Note(String),
     ThemeChanged,
+    Overlay(overlay::Snapshot),
     Request(Request),
     Quit,
 }
@@ -131,9 +133,10 @@ pub enum Message {
 pub struct Options {
     /// The outputs that get a bar (and panels); every one does when empty.
     pub outputs: Vec<String>,
-    /// No bar at all: no surface, no exclusive zone, no timer, until a panel is
-    /// summoned. The host is a service for the panels, beside another bar.
+    /// No bar surface, exclusive zone or bar timer. The host serves panels
+    /// beside another bar and keeps its cursor overlay unless disabled.
     pub no_bar: bool,
+    pub no_overlay: bool,
     pub backend: Option<String>,
     /// How often the bar's gauges are read, in milliseconds; 0 never.
     pub bar_tick_ms: u64,
@@ -155,6 +158,7 @@ impl Default for Options {
         Self {
             outputs: Vec::new(),
             no_bar: false,
+            no_overlay: false,
             backend: None,
             bar_tick_ms: 2000,
             exclusive: true,
@@ -173,6 +177,7 @@ impl Default for Options {
 enum Role {
     Bar(String),
     Panel(&'static str),
+    Reticle,
 }
 
 struct Open {
@@ -210,6 +215,8 @@ pub struct Host {
     runner: Shared,
     /// The panel that was just shown and has to read the machine.
     kick: Option<&'static str>,
+    overlay: overlay::State,
+    repaint_revision: u64,
 }
 
 impl Host {
@@ -248,6 +255,8 @@ impl Host {
             note: String::new(),
             runner,
             kick: None,
+            overlay: overlay::State::new(!options.no_overlay),
+            repaint_revision: 0,
             options,
         };
 
@@ -347,6 +356,9 @@ impl Host {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        if !matches!(message, Message::Overlay(_)) {
+            self.repaint_revision = self.repaint_revision.wrapping_add(1);
+        }
         match message {
             Message::Tick => {
                 self.bar.time = LocalTime::now();
@@ -436,7 +448,9 @@ impl Host {
                 log::info!("theme: {}", theme.name());
 
                 self.theme = theme;
+                self.overlay.restyle(&self.theme);
             }
+            Message::Overlay(snapshot) => self.overlay.update(snapshot, &self.theme),
             Message::Request(request) => {
                 // Where some text is on screen, for the tests and for anyone
                 // who wants to point at it: `find TEXT` answers `x y w h` in the
@@ -565,14 +579,26 @@ impl Host {
             "list" => Ok(self.list()),
             "reload-theme" => {
                 self.theme = theme::current(&self.options.theme_dir);
+                self.overlay.restyle(&self.theme);
 
                 Ok(format!("theme {}\n", self.theme.name()))
             }
+            "overlay" => match id {
+                "on" | "off" => {
+                    self.overlay.enabled = id == "on";
+                    if !self.overlay.enabled {
+                        self.overlay.clear();
+                    }
+                    Ok(self.overlay.status())
+                }
+                "status" => Ok(self.overlay.status()),
+                _ => Err("error: overlay needs on, off or status\n".into()),
+            },
             "quit" => return ("bye\n".to_owned(), true),
             "" => Err("error: empty command\n".to_owned()),
             other => Err(format!(
                 "error: unknown command {other:?} \
-                 (summon, toggle, hide, list, find, reload-theme, quit)\n"
+                 (summon, toggle, hide, list, find, reload-theme, overlay, quit)\n"
             )),
         };
 
@@ -606,6 +632,7 @@ impl Host {
         }
 
         text.push_str(&format!("theme  {}\n", self.theme.name()));
+        text.push_str(&self.overlay.status());
         text
     }
 
@@ -670,6 +697,9 @@ impl Host {
             }),
             Subscription::run(|| ipc::requests().map(Message::Request)),
         ];
+        if self.overlay.enabled {
+            subscriptions.push(Subscription::run(overlay::watch).map(Message::Overlay));
+        }
 
         // The bar's clock and gauges, which a host with no bar does not have.
         if !self.options.no_bar {
@@ -742,6 +772,9 @@ impl Host {
     }
 
     pub fn surfaces(&self, env: &Env) -> Vec<(window::Id, SurfaceSettings)> {
+        if self.env.borrow().outputs != env.outputs {
+            overlay::outputs_changed();
+        }
         *self.env.borrow_mut() = env.clone();
 
         let grab = env.focus_grab && !self.options.exclusive_keyboard && !self.options.passive;
@@ -764,6 +797,7 @@ impl Host {
                     ),
                     SurfaceSettings {
                         namespace: "quadrille-bar".into(),
+                        repaint_revision: Some(self.repaint_revision),
                         layer: Layer::Top,
                         anchor: Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
                         size: (0, self.options.height),
@@ -799,6 +833,7 @@ impl Host {
                     ),
                     SurfaceSettings {
                         namespace: format!("quadrille-{}", def.id),
+                        repaint_revision: Some(self.repaint_revision),
                         layer: Layer::Overlay,
                         anchor: Anchor::TOP | Anchor::RIGHT,
                         size: def.size,
@@ -814,7 +849,25 @@ impl Host {
                         },
                         output,
                         grab: if grab { Grab::Popup } else { Grab::None },
+                        ..SurfaceSettings::default()
                     },
+                ));
+            }
+        }
+
+        if let Some(settings) = self.overlay.surface() {
+            let output = settings
+                .output
+                .as_ref()
+                .expect("An overlay belongs to an output");
+            if env
+                .outputs
+                .iter()
+                .any(|candidate| &candidate.name == output)
+            {
+                surfaces.push((
+                    self.id(format!("reticle:{output}"), Role::Reticle),
+                    settings,
                 ));
             }
         }
@@ -831,6 +884,7 @@ impl Host {
         match role {
             Some(Role::Bar(output)) => self.bar_view(output),
             Some(Role::Panel(id)) => self.panel_view(id),
+            Some(Role::Reticle) => space::horizontal().boxed(),
             None => space::horizontal().boxed(),
         }
     }

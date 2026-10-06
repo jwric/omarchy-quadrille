@@ -34,6 +34,7 @@ use smithay_client_toolkit::shell::wlr_layer::{
     LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure,
 };
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
+use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::{
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
     delegate_registry, delegate_seat, delegate_shm, registry_handlers,
@@ -45,6 +46,7 @@ use crate::focus_grab::protocol::hyprland_focus_grab_v1::{self, HyprlandFocusGra
 pub use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long a surface waits for the compositor to tell it its scale before it
@@ -124,6 +126,30 @@ pub struct SurfaceSettings {
     /// when `None`.
     pub output: Option<String>,
     pub grab: Grab,
+    /// Logical protocol margins, when positioning a physical-pixel raster.
+    pub logical_margin: Option<[i32; 4]>,
+    /// An empty Wayland input region: neither clicks nor pointer focus.
+    pub input_passthrough: bool,
+    /// Native premultiplied ARGB8888 pixels, with no renderer or filtering.
+    pub raster: Option<RasterBuffer>,
+    /// Programs that track content changes can spare unrelated windows a
+    /// redraw when a small independent surface changes.
+    pub repaint_revision: Option<u64>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RasterBuffer {
+    pub size: (u32, u32),
+    pub pixels: Arc<[u8]>,
+}
+
+impl std::fmt::Debug for RasterBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RasterBuffer")
+            .field("size", &self.size)
+            .field("bytes", &self.pixels.len())
+            .finish()
+    }
 }
 
 impl Default for SurfaceSettings {
@@ -138,6 +164,10 @@ impl Default for SurfaceSettings {
             keyboard: KeyboardInteractivity::None,
             output: None,
             grab: Grab::None,
+            logical_margin: None,
+            input_passthrough: false,
+            raster: None,
+            repaint_revision: None,
         }
     }
 }
@@ -185,6 +215,15 @@ pub fn logical_for(virtual_px: u32, pixel_scale: u32, scale: f64) -> u32 {
         .unwrap_or(first)
 }
 
+/// Native buffers need an integral physical extent even at uncommon scales.
+/// Transparent padding is cheaper than filtering a measuring instrument.
+pub fn logical_for_native(virtual_px: u32, pixel_scale: u32, scale: f64) -> u32 {
+    let first = logical_for(virtual_px, pixel_scale, scale);
+    (first..=first + 120)
+        .find(|logical| is_exact(*logical, scale))
+        .unwrap_or(first)
+}
+
 /// Whether a logical length maps to a whole number of physical pixels at
 /// `scale`, which is when the compositor can show the buffer unfiltered.
 pub fn is_exact(logical: u32, scale: f64) -> bool {
@@ -197,12 +236,21 @@ pub fn is_exact(logical: u32, scale: f64) -> bool {
 pub fn geometry(settings: &SurfaceSettings, pixel_scale: u32, scale: f64) -> Geometry {
     let to_logical = |virtual_px: u32| logical_for(virtual_px, pixel_scale, scale);
 
-    let size = (to_logical(settings.size.0), to_logical(settings.size.1));
+    let size = if settings.raster.is_some() {
+        (
+            logical_for_native(settings.size.0, pixel_scale, scale),
+            logical_for_native(settings.size.1, pixel_scale, scale),
+        )
+    } else {
+        (to_logical(settings.size.0), to_logical(settings.size.1))
+    };
 
-    let margin = settings.margin.map(|margin| {
-        let logical = to_logical(margin.unsigned_abs()) as i32;
+    let margin = settings.logical_margin.unwrap_or_else(|| {
+        settings.margin.map(|margin| {
+            let logical = to_logical(margin.unsigned_abs()) as i32;
 
-        if margin < 0 { -logical } else { logical }
+            if margin < 0 { -logical } else { logical }
+        })
     });
 
     let exclusive = match settings.exclusive {
@@ -261,6 +309,8 @@ pub struct Surface {
     pub output_name: Option<String>,
     /// Bumped whenever the shell has to look at the surface again.
     pub version: u64,
+    raster_pool: Option<SlotPool>,
+    raster_presented: Option<RasterBuffer>,
 }
 
 impl Surface {
@@ -581,6 +631,13 @@ impl Wl {
 
         layer.set_anchor(settings.anchor);
         layer.set_keyboard_interactivity(settings.keyboard);
+        if settings.input_passthrough {
+            let region = smithay_client_toolkit::compositor::Region::new(&self.compositor_state)
+                .expect("An empty input region");
+            layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
+        }
 
         // The first commit has no buffer, so the surface is not mapped and
         // whatever size it asks for here is corrected before anyone sees it.
@@ -625,6 +682,8 @@ impl Wl {
                 buffer_scale: 1,
                 output_name: output_name.clone(),
                 version: 0,
+                raster_pool: None,
+                raster_presented: None,
             },
         );
     }
@@ -661,11 +720,71 @@ impl Wl {
             surface.layer.set_layer(settings.layer);
         }
 
+        if surface.settings.input_passthrough != settings.input_passthrough {
+            if settings.input_passthrough {
+                let region =
+                    smithay_client_toolkit::compositor::Region::new(&self.compositor_state)
+                        .expect("An empty input region");
+                surface
+                    .wl_surface()
+                    .set_input_region(Some(region.wl_region()));
+            } else {
+                surface.wl_surface().set_input_region(None);
+            }
+        }
+
         if surface.settings != *settings {
             surface.settings = settings.clone();
-            surface.applied = None;
-            surface.layer.commit();
+            // Cursor motion changes only the margin and pixels. Keep the old
+            // size so a move does not wait for a redundant size configure.
+            if surface.settings.raster.is_none() {
+                surface.layer.commit();
+            }
         }
+    }
+
+    /// Presents only a small native buffer. Buffers are released by the
+    /// compositor and the slot pool reuses their memory on subsequent moves.
+    pub fn present_raster(&mut self, id: window::Id) -> Result<(), String> {
+        let Some(surface) = self.surfaces.get(&id) else {
+            return Ok(());
+        };
+        let Some(raster) = surface.settings.raster.clone() else {
+            return Ok(());
+        };
+        if !surface.is_ready() || surface.raster_presented.as_ref() == Some(&raster) {
+            return Ok(());
+        }
+        let logical = surface.configured.expect("A ready surface has its size");
+        self.set_destination(id, logical);
+        let surface = self.surfaces.get_mut(&id).expect("The surface exists");
+        if surface.raster_pool.is_none() {
+            surface.raster_pool = Some(
+                SlotPool::new(raster.pixels.len() * 3, &self.shm)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        let (buffer, canvas) = surface
+            .raster_pool
+            .as_mut()
+            .unwrap()
+            .create_buffer(
+                raster.size.0 as i32,
+                raster.size.1 as i32,
+                raster.size.0 as i32 * 4,
+                smithay_client_toolkit::reexports::client::protocol::wl_shm::Format::Argb8888,
+            )
+            .map_err(|error| error.to_string())?;
+        canvas[..raster.pixels.len()].copy_from_slice(&raster.pixels);
+        buffer
+            .attach_to(surface.wl_surface())
+            .map_err(|error| error.to_string())?;
+        surface
+            .wl_surface()
+            .damage_buffer(0, 0, raster.size.0 as i32, raster.size.1 as i32);
+        surface.layer.commit();
+        surface.raster_presented = Some(raster);
+        Ok(())
     }
 
     /// Asks the compositor for the geometry the surface's settings come to at
@@ -703,7 +822,9 @@ impl Wl {
         }
 
         surface.applied = Some(wanted);
-        surface.layer.commit();
+        if surface.settings.raster.is_none() || size_changed {
+            surface.layer.commit();
+        }
     }
 
     /// Tells the compositor how big the buffer about to be attached is meant
@@ -715,8 +836,20 @@ impl Wl {
         };
 
         if let Some(viewport) = &surface.viewport {
-            if surface.destination != Some(logical) {
+            if let Some(raster) = &surface.settings.raster {
+                viewport.set_source(0.0, 0.0, raster.size.0 as f64, raster.size.1 as f64);
                 viewport.set_destination(logical.0 as i32, logical.1 as i32);
+                if surface.buffer_scale != 1 {
+                    surface.wl_surface().set_buffer_scale(1);
+                    surface.buffer_scale = 1;
+                }
+                surface.destination = Some(logical);
+                return;
+            }
+            if surface.destination != Some(logical) || surface.buffer_scale != 1 {
+                viewport.set_destination(logical.0 as i32, logical.1 as i32);
+                surface.wl_surface().set_buffer_scale(1);
+                surface.buffer_scale = 1;
                 surface.destination = Some(logical);
             }
         } else {
