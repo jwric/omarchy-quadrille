@@ -1180,3 +1180,18 @@ all live bar text from its captures. The planner/guards are tested against an
 occupied laptop workspace 3 with workspace 8 already on Dell: selecting 8 from
 the laptop would jump to Dell and leave private laptop windows exposed. The lead runs it only after the complete Rust/nested checks;
 this implementation slice has not executed that live preview.
+
+`surfaces/overlay-live.sh` reuses that planner/guard for a disposable release host
+with `--no-bar` and a unique control socket. It never injects input or installs or
+restarts the running host. Its Wayland debug reader keeps numeric layer/region
+facts only: foreign-window titles and all raw protocol lines are discarded. It
+requires a mapped `quadrille-reticle` layer owned by its child PID, observes layer
+overlay, keyboard none, exclusive zone -1 and an empty input region, then crops
+only that layer's geometry from the empty output (also excluding the live bar).
+Output, workspace, mode or pointer changes discard the capture. Rotated live
+outputs are refused by this preview's crop helper. Cleanup sends `overlay off`
+then `quit`, kills only its child if needed, and restores workspaces/focus.
+`overlay-live-test.py` has eight synthetic protocol/ownership/capture tests; it
+starts no host and calls no live IPC. The live command, for the lead after all
+checks, is `flock -o -w 900 /tmp/quadrille-live.lock plugins/tools/surfaces/overlay-live.sh OUT`.
+The wrapper limits its hold to 55 seconds; normal execution is a few seconds.
