@@ -12,6 +12,13 @@ Third-party material, which keeps its own licence:
   authors. The clones keep the originals' structure and contracts; the markup
   that carries the look is new. The MIT notice of the originals applies to the
   parts derived from them (see LICENSE-MIT for the text).
+- plugins/quadrille.audio, .power, .clock, .weather, .bluetooth, .network,
+  .monitor, .agents and .tailscale are restyled clones of the Omarchy popup
+  panels (omarchy.audio ... omarchy.tailscale; shell/plugins/panels/* and
+  shell/plugins/agents), MIT as above. Their logic (properties, services,
+  processes, Model.js, Service.qml, Main.qml) is the originals'; the views are new.
+  QPopup (plugins/quadrille.bar/Q) is derived from the shell's Ui/KeyboardPanel.qml
+  in the same way.
 - plugins/quadrille.menu/AppSearch.js is a copy of Omarchy's
   shell/services/AppSearch.js (MIT, as above).
 - Departure Mono (not included here; tools/install.sh copies it from
