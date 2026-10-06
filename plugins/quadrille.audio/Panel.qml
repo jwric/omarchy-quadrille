@@ -643,10 +643,12 @@ Panel {
     if (code === 0xf0100) return PanelSprites.camera
     return PanelSprites.speaker
   }
+  Icons { id: icons }
+  // The hero icon is its own 15-high sprite, not the 7 x 7 one scaled.
   function outputSprite() {
-    if (!sink || !sink.audio) return Sprites.muted
-    if (isHeadphones(sink)) return PanelSprites.headphones
-    return outputMuted ? Sprites.muted : Sprites.volume
+    if (!sink || !sink.audio) return icons.speakerMuted15
+    if (isHeadphones(sink)) return icons.headphones15
+    return outputMuted ? icons.speakerMuted15 : icons.speaker15
   }
   function outputLevel() {
     return outputMuted ? 0 : (outputVolume <= 0.005 ? 0 : (outputVolume < 0.5 ? 1 : 2))

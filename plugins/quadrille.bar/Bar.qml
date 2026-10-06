@@ -603,7 +603,7 @@ Item {
 
     position = normalizePosition(config.position)
     setRequestedTransparency(false)
-    centerAnchor = Util.canonicalWidgetId(config.centerAnchor || "")
+    centerAnchor = root.anchorIn(Util.canonicalWidgetId(config.centerAnchor || ""), config.layout)
 
     // layoutEntries feeds plain JS arrays to the module Repeaters, and QML
     // cannot diff those: reassigning layoutConfig rebuilds every widget on
@@ -1442,6 +1442,24 @@ Item {
     "quadrille.agents": "omarchy.agents"
   })
   function stockIdOf(id) { return root.popupClones[id] || id }
+  // The id the layout actually holds for `id`: itself, or the clone that took
+  // its place (the center anchor says omarchy.clock; after the clock is cloned
+  // the layout says quadrille.clock, and the host does not rewrite the anchor).
+  function anchorIn(id, layout) {
+    if (!id || !layout) return id
+    var found = ""
+    var regions = ["left", "center", "right"]
+    for (var r = 0; r < regions.length; r++) {
+      var list = layout[regions[r]]
+      if (!Array.isArray(list)) continue
+      for (var i = 0; i < list.length; i++) {
+        var eid = BarModel.entryId(list[i])
+        if (eid === id) return id
+        if (!found && root.stockIdOf(eid) === id) found = eid
+      }
+    }
+    return found || id
+  }
   function skinFor(id) {
     switch (root.stockIdOf(id)) {
       case "omarchy.clock": return clockSkin

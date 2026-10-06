@@ -262,6 +262,8 @@ Panel {
     }
   }
 
+  Icons { id: icons }
+
   // The sprite of a power profile.
   function profileSprite(name) {
     if (name === "power-saver") return PanelSprites.leaf
@@ -304,7 +306,7 @@ Panel {
         // ---------- Hero: battery · title/status · percentage ----------
         QHero {
           width: parent.width
-          icon: Sprites.battery
+          icon: icons.battery17
           iconLevel: Math.max(1, Math.ceil(root.batteryFraction * 4))
           iconInk: root.batteryLow ? Role.alarm : (root.charging ? Role.live : Role.ink)
           title: "Battery"

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.clock",
+  "name": "Quadrille clock",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The clock and its calendar popup on the pixel grid: the date at twice the size, the year as a stepped bar, a month of 20 x 14 virtual-pixel days with today an inverse block.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Clock",
+    "description": "Date/time label with a calendar popup",
+    "category": "Time",
+    "allowMultiple": false
+  },
+  "omarchy": { "clonedFrom": "omarchy.clock" }
+}

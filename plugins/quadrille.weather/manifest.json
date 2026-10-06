@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.weather",
+  "name": "Quadrille weather",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The weather pill and its detail popup on the pixel grid: the condition as a pixel sprite, the temperature at three times the body size, a forecast of whole-cell columns.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Weather",
+    "description": "Weather pill with detail popup",
+    "category": "Info",
+    "allowMultiple": false,
+    "settingsForm": "weatherSettings"
+  },
+  "omarchy": { "clonedFrom": "omarchy.weather" }
+}

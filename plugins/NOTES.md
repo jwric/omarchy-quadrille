@@ -578,3 +578,30 @@ The offscreen harness (kept in the agent's scratch dir, not the repo): a `PanelW
   popup-shots.sh, and Read every PNG before keeping it.
 - `qmldir`, `Bar.qml`, `Sprites.qml` are edited by several agents: stage only your
   hunks (HEAD content plus your replacement) rather than the whole file.
+
+## One pixel size to a surface: native sprites, no mixels (agent P)
+
+The user's rule: no mixels, a mixed pixel size. A 7 x 7 sprite drawn at 2x or 3x
+beside text and 1x icons is a mixel, so an icon that spans more than a text row is
+**its own sprite at its own native size**, with the detail those pixels allow (an
+outline in `#`, a fill in a second tone, inner shapes), and it must read as the
+same family as the 7 x 7 one. The popups follow it:
+
+| Slot | Size | Where |
+|---|---|---|
+| a list row, a button | 7 x 7 | `Sprites`, `PanelSprites` |
+| a two-line hero | 15 high | audio `Icons.qml` (speaker with two waves lit by `level`, muted with an accent cross, headphones), clock `Icons.qml` (calendar, today in the accent), power `Icons.qml` (a 17 x 9 battery of four cells) |
+| a weather condition | 21 x 21 | weather `Icons.qml`: sun, moon, cloud, cloud with sun or moon, fog, drizzle, rain, sleet, thunder, snow; outline `#`, fill `2` (muted), sun and lightning `!` (caution). Same set in the hero and the forecast. The bar's 9 x 7 ones are the small members of the family |
+
+Sprite tones: `#` and any digit up to `level` are the ink, digits above it are the
+`dim` colour, `!` is `accent`; so `level: 1` with `dim: Role.muted` gives ink, muted
+and an accent tone, which is what the hero sprites use (`QHero` passes `iconDim`,
+`iconAccent`; `iconScale` stays 1). The conditions were drawn by a small generator
+(circles for the lobes, an outline of every shape, drops and rays as lines) and
+judged on a sheet, not scaled from anything.
+
+What is still bigger than one pixel: the hero number of a popup (the battery
+percentage, the temperature, the date) is `BigText`, quadrille's DISPLAY and HERO
+faces (Departure Mono at 22 and 33, a font pixel of 2 or 3 vpx). It is one per popup
+and it is text, not an icon; if the user wants it gone too, the hero reading becomes
+body text in an inverse block.
