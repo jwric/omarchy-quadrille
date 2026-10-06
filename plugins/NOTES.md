@@ -735,3 +735,19 @@ shows up with real items, run `plugins/tools/surfaces/tray.sh` (the nested three
 tray run) and look at
 `top -H` and `gdb -p` of the scratch shell (it is a child of the script, so ptrace
 is allowed), not the live one.
+
+### Bar orientations, and what is left of the list
+
+* **Top bar**: everything above is measured on it (both outputs).
+* **Bottom bar**: the frame, the skins and the popups (`PopupFrame` and `QPopup` open
+  upward when `bar.position === "bottom"`) are written for it; it was not re-measured
+  this round.
+* **Left and right bars: unsupported, said plainly.** The skins and the replacements
+  are for a horizontal bar only (`Bar.qml` turns them off when `vertical`, the stock
+  widgets sit inside the pixel frame, only the menu button is ours); the tray, the
+  indicators, the weather and the rest would each need a vertical drawing. Not a
+  regression: they never were.
+* Not done: a tab for an urgent workspace (`HyprlandWorkspace.urgent`), tailscale and
+  dropbox skins (not in this layout), hover/pressed/focus states forced and measured
+  for every skin, a polish of the sysmon gauges, the 9 x 7 weather sprites redrawn
+  (cloud with sun or moon are still lumpy).
