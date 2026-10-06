@@ -18,9 +18,13 @@ const metrics = {};
 for (const vector of vectors.cases) {
   const p = physical.resolve(vector.input, vector.overrides);
   const drawing = drafting.plan(vector.input, p, [{ input: vector.input, physical: p }], glyphs, 16);
+  assert.equal(drawing.width, Math.floor(p.widthPx / p.pixelsPerVpx));
+  assert.equal(drawing.height, Math.floor(p.heightPx / p.pixelsPerVpx));
   for (const stroke of drawing.strokes) {
     for (const key of ['x', 'y', 'w', 'h']) assert(Number.isInteger(stroke[key]), `${vector.id}: ${key}`);
     assert(stroke.w > 0 && stroke.h > 0);
+    assert(stroke.x >= 0 && stroke.y >= 0 && (stroke.x + stroke.w) * p.pixelsPerVpx <= p.widthPx &&
+      (stroke.y + stroke.h) * p.pixelsPerVpx <= p.heightPx, `${vector.id}: clipped virtual pixel stroke`);
   }
   for (const label of drawing.labels) assert(glyphs.length(label.text) * 6 + 1 <= label.room, `${vector.id}: cut label`);
   for (const [marks, pixels, density] of [[drawing.xMarks, p.widthPx, p.pxPerMmX], [drawing.yMarks, p.heightPx, p.pxPerMmY]]) {

@@ -52,7 +52,8 @@ function layout(monitors) {
 
 function plan(input, physical, monitors, glyphs, topInset) {
   var phys = physical.pixelsPerVpx
-  var w = Math.ceil(physical.widthPx / phys), h = Math.ceil(physical.heightPx / phys)
+  // Edge ticks need complete cells; a mode can end with a partial virtual pixel.
+  var w = Math.floor(physical.widthPx / phys), h = Math.floor(physical.heightPx / phys)
   var strokes = [], labels = [], plates = []
   topInset = Math.max(0, Math.round(topInset || 0))
   function rect(x, y, width, height, role) {
@@ -198,16 +199,17 @@ function plan(input, physical, monitors, glyphs, topInset) {
       text("edge rulers / cm", lx + 5, ly + ph - 16, pw - 10)
     }
   }
-  return { width: w, height: h, strokes: strokes, labels: labels, plates: plates, xMarks: axisX, yMarks: axisY }
+  return { width: w, height: h, pixelWidth: physical.widthPx, pixelHeight: physical.heightPx,
+    strokes: strokes, labels: labels, plates: plates, xMarks: axisX, yMarks: axisY }
 }
 
 function paint(ctx, drawing, phys, colors, glow, dpr) {
   ctx.reset()
   ctx.scale(1 / dpr, 1 / dpr)
-  ctx.clearRect(0, 0, drawing.width * phys, drawing.height * phys)
+  ctx.clearRect(0, 0, drawing.pixelWidth, drawing.pixelHeight)
   if (glow) {
     ctx.fillStyle = colors.void
-    ctx.fillRect(0, 0, drawing.width * phys, drawing.height * phys)
+    ctx.fillRect(0, 0, drawing.pixelWidth, drawing.pixelHeight)
     ctx.fillStyle = colors.ground
     var bayer = [[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]]
     var w = drawing.width, h = drawing.height, cx = Math.floor(w / 2), cy = Math.floor(h / 2)

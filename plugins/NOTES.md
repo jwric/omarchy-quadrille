@@ -1195,3 +1195,13 @@ then `quit`, kills only its child if needed, and restores workspaces/focus.
 starts no host and calls no live IPC. The live command, for the lead after all
 checks, is `flock -o -w 900 /tmp/quadrille-live.lock plugins/tools/surfaces/overlay-live.sh OUT`.
 The wrapper limits its hold to 55 seconds; normal execution is a few seconds.
+
+The stroke plan uses only complete virtual cells at mode boundaries. A laptop
+mode of 2560x1600 with 3 physical px/vpx has an available 853x533-cell drawing
+extent; the right/bottom ticks occupy a complete final cell, leaving the residual
+physical column/row to the background. Its physical centre and all millimetre
+mark calculations still use the full 2560x1600 mode. The shared-case check rejects
+any stroke clipped by a mode boundary. The corrected laptop offscreen buffer
+remains 2560x1600, seven colours and zero off-grid transitions; direct pixel
+checks prove the last right/bottom tick is three physical pixels wide. The ruler
+accuracy numbers above are unchanged. No further nested or live run was made.
