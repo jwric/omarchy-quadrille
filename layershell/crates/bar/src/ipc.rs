@@ -52,14 +52,19 @@ pub fn is_running() -> bool {
 #[derive(Clone)]
 pub struct Request {
     pub line: String,
-    reply: Arc<Mutex<Option<std_mpsc::Sender<String>>>>,
+    reply: Arc<Mutex<Option<std_mpsc::Sender<(String, std_mpsc::Sender<()>)>>>>,
 }
 
 impl Request {
     /// Answers the command. Only the first answer is sent.
     pub fn respond(&self, answer: impl Into<String>) {
         if let Some(reply) = self.reply.lock().ok().and_then(|mut reply| reply.take()) {
-            let _ = reply.send(answer.into());
+            let (written, receipt) = std_mpsc::channel();
+            if reply.send((answer.into(), written)).is_ok() {
+                // A quit may end the process immediately after this returns.
+                // Give the client thread time to put its answer on the socket.
+                let _ = receipt.recv_timeout(Duration::from_millis(100));
+            }
         }
     }
 }
@@ -130,9 +135,35 @@ fn serve(mut stream: UnixStream, sender: &mpsc::UnboundedSender<Request>) {
         return;
     }
 
-    let answer = answer
+    let (answer, receipt) = answer
         .recv_timeout(Duration::from_secs(3))
-        .unwrap_or_else(|_| "error: no answer\n".into());
+        .unwrap_or_else(|_| ("error: no answer\n".into(), std_mpsc::channel().0));
 
     let _ = stream.write_all(answer.as_bytes());
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = receipt.send(());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quit_reply_reaches_the_socket_before_respond_returns() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let (sender, mut requests) = mpsc::unbounded();
+        let worker = std::thread::spawn(move || serve(server, &sender));
+        client.write_all(b"quit\n").unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        let request = smol::block_on(requests.next()).unwrap();
+        request.respond("bye\n");
+        request.respond("another reply\n");
+        let mut reply = String::new();
+        client.read_to_string(&mut reply).unwrap();
+        assert_eq!(reply, "bye\n");
+        worker.join().unwrap();
+    }
 }

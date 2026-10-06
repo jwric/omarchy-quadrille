@@ -13,8 +13,9 @@
 # command stubbed). Each runs in a nested compositor of its own, which is a
 # window of the real session while it runs, so each takes the desktop lock
 # (/tmp/quadrille-live.lock, flock) first, so that no one else's screenshot has
-# it in, and gives up after 170 seconds, so that none holds it longer than
-# three minutes. Screenshots and logs are left in OUTDIR/<section>.
+# it in, and stops after 55 seconds, including cleanup, so each hold stays under a
+# minute. Legacy panel checks use --no-overlay; overlay tests have their own run.
+# Screenshots and logs are left in OUTDIR/<section>.
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 BIN=$HERE/target/release
@@ -26,11 +27,11 @@ LOCK=/tmp/quadrille-live.lock
 
 if [ -z "$SECTION" ]; then
   # The driver: one locked run for each section.
-  mkdir -p "$OUTROOT"; for section in core nobar look audio network bluetooth power; do rm -rf "$OUTROOT/$section"; done
+  mkdir -p "$OUTROOT"; for section in ${SECTIONS:-core nobar look audio network bluetooth power power_actions}; do rm -rf "$OUTROOT/$section"; done
   failed=0
-  for section in ${SECTIONS:-core nobar look audio network bluetooth power}; do
+  for section in ${SECTIONS:-core nobar look audio network bluetooth power power_actions}; do
     echo "######## $section"
-    flock -w 900 "$LOCK" "$0" --section "$section" "$OUTROOT" || failed=$((failed + 1))
+    flock -o -w 900 "$LOCK" timeout -k 3 55 "$0" --section "$section" "$OUTROOT" || failed=$((failed + 1))
   done
   echo
   [ "$failed" = 0 ] && echo "all sections passed" || echo "$failed section(s) FAILED"
@@ -130,15 +131,12 @@ crisp() {
 }
 
 cleanup() {
-  [ -n "${WATCHDOG:-}" ] && kill "$WATCHDOG" 2>/dev/null
   ctl quit >/dev/null 2>&1; sleep 0.5
   "$N" down >/dev/null 2>&1
 }
 trap cleanup EXIT
-
-# The lock is held for as long as this runs: three minutes at the most.
-( sleep 170; echo "  FAIL  the 170 s limit on holding the desktop lock was reached"; kill -TERM $$ ) &
-WATCHDOG=$!
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Every command the panels run is a stub that only writes it down: the host is
 # started with these, and runs nothing else.
@@ -183,7 +181,7 @@ section_core() {
   echo "== a bar on every output, at that output's scale"
   (
     "$N" run env QUADRILLE_COMMANDS="$QUADRILLE_COMMANDS" QUADRILLE_STUB_STATE="$QUADRILLE_STUB_STATE" QUADRILLE_BAR_SOCKET=$SOCK RUST_LOG=iced_layer=debug,quadrille_bar=info \
-      ICED_LAYER_STATS=1 "$BIN/quadrille-bar" --output QA --output QB --theme-dir "$OUT/current" \
+      ICED_LAYER_STATS=1 "$BIN/quadrille-bar" --output QA --output QB --theme-dir "$OUT/current" --no-overlay \
       --bar-tick-ms 0 > "$OUT/bar.log" 2>&1 &
   )
   for _ in $(seq 1 50); do ctl list >/dev/null 2>&1 && break; sleep 0.1; done
@@ -335,7 +333,7 @@ section_nobar() {
   echo "== --no-bar: a service for the panels, beside another bar"
   (
     "$N" run env QUADRILLE_COMMANDS="$QUADRILLE_COMMANDS" QUADRILLE_STUB_STATE="$QUADRILLE_STUB_STATE" QUADRILLE_BAR_SOCKET=$SOCK RUST_LOG=iced_layer=debug,quadrille_bar=info \
-      "$BIN/quadrille-bar" --no-bar --theme-dir "$OUT/current" > "$OUT/nobar.log" 2>&1 &
+      "$BIN/quadrille-bar" --no-bar --theme-dir "$OUT/current" --no-overlay > "$OUT/nobar.log" 2>&1 &
   )
   for _ in $(seq 1 50); do ctl list >/dev/null 2>&1 && break; sleep 0.1; done
   sleep 1.5
@@ -440,7 +438,7 @@ typed() { "$N" run wtype -s 40 "$1"; sleep 0.5; }
 times() { calls | grep -cx -- "$1"; }
 
 # A panel on an output, shown and settled.
-show() { ctl summon "$1" "{\"output\":\"$2\"}" >/dev/null; sleep 2.2; }
+show() { ctl summon "$1" "{\"output\":\"$2\"}" >/dev/null; sleep "${3:-2.2}"; }
 dismiss() { ctl hide >/dev/null; sleep 0.6; }
 
 # Whether the keyboard reaches the panel that is shown: one harmless key (Home
@@ -448,9 +446,17 @@ dismiss() { ctl hide >/dev/null; sleep 0.6; }
 # the nested compositor has not given the panel its keyboard yet, and a section
 # of keys that went nowhere says nothing useful.
 keys_ready() {
+  local panel=$1 before
+  read -r px py pw ph < <(surface QA "quadrille-$panel")
+  read -r w h < <(extent QA)
+  VPTR_EXTENT="${w}x${h}" "$N" run "$BIN/vptr" QA move "$((px + pw / 2))" "$((py + ph / 2))" sleep 200
+  before=$(grep -c 'key Home' "$OUT/host.log" || true)
   for _ in 1 2 3 4 5 6; do
     "$N" run wtype -k Home; sleep 0.4
-    grep -q 'key Home' "$OUT/host.log" && { pass "the keyboard reaches the panel"; return 0; }
+    if [ "$(grep -c 'key Home' "$OUT/host.log" || true)" -gt "$before" ]; then
+      pass "the keyboard reaches the panel"
+      return 0
+    fi
   done
   fail "the keyboard never reached the panel"
   return 1
@@ -459,10 +465,13 @@ keys_ready() {
 # The host for the panel sections: panels only, every command a stub.
 start_panels_host() {
   begin
+  # Keyboard checks keep the nested pointer on the panel for focus. Hide its
+  # software sprite on keys so it cannot contaminate a panel crispness check.
+  "$N" ctl eval 'hl.config({cursor={hide_on_key_press=true}})' >/dev/null
   (
     "$N" run env QUADRILLE_COMMANDS="$QUADRILLE_COMMANDS" QUADRILLE_STUB_STATE="$QUADRILLE_STUB_STATE" \
       QUADRILLE_BAR_SOCKET=$SOCK RUST_LOG=iced_layer=debug,quadrille_bar=debug \
-      "$BIN/quadrille-bar" --no-bar --theme-dir "$OUT/current" > "$OUT/host.log" 2>&1 &
+      "$BIN/quadrille-bar" --no-bar --theme-dir "$OUT/current" --no-overlay > "$OUT/host.log" 2>&1 &
   )
   for _ in $(seq 1 50); do ctl list >/dev/null 2>&1 && break; sleep 0.1; done
   sleep 1.0
@@ -478,7 +487,7 @@ section_look() {
   echo "== the panels at both scales: exact sizes, crisp pixels"
   for panel in audio network bluetooth power; do
     for output in QA QB; do
-      show $panel $output
+      show $panel $output 1.0
       shot $output "${panel}_$output"
       case $panel in audio) h=250 ;; network) h=300 ;; bluetooth) h=200 ;; power) h=245 ;; esac
       read -r _ _ _ _ scale < <(monitor $output)
@@ -491,14 +500,14 @@ section_look() {
   check "showing them changed nothing" "! calls | grep -qE '^(pactl set|pactl move|nmcli (connection|device wifi connect|radio wifi o)|omarchy-|systemctl)'"
 
   echo "== what they cost: nothing hidden; one reading a beat, shown"
-  sleep 2
+  sleep 1
   rss_hidden=$(rss_kb "$PID")
   before=$(calls | wc -l)
-  C0=$(cpu_ns "$PID"); sleep 6; C1=$(cpu_ns "$PID")
+  C0=$(cpu_ns "$PID"); sleep 4; C1=$(cpu_ns "$PID")
   after=$(calls | wc -l)
-  echo "   hidden for 6 s: $((after - before)) commands, $(( (C1 - C0) / 1000000 )) ms of CPU, $rss_hidden kB resident"
-  check "hidden: no command in six seconds" "[ $before = $after ]"
-  check "hidden: no CPU to speak of (under 5 ms in 6 s)" "[ $(( (C1 - C0) / 1000000 )) -lt 5 ]"
+  echo "   hidden for 4 s: $((after - before)) commands, $(( (C1 - C0) / 1000000 )) ms of CPU, $rss_hidden kB resident"
+  check "hidden: no command in four seconds" "[ $before = $after ]"
+  check "hidden: no CPU to speak of (under 5 ms in 4 s)" "[ $(( (C1 - C0) / 1000000 )) -lt 5 ]"
   for panel in audio network bluetooth power; do
     # The first command of a reading, to count the readings by.
     case $panel in
@@ -507,21 +516,21 @@ section_look() {
       bluetooth) beat=3; probe='bluetoothctl show' ;;
       power) beat=2; probe='powerprofilesctl get' ;;
     esac
-    show $panel QA
+    show $panel QA 1.0
     before=$(calls | wc -l); readings=$(times "$probe")
-    C0=$(cpu_ns "$PID"); sleep 6; C1=$(cpu_ns "$PID")
+    C0=$(cpu_ns "$PID"); sleep 4; C1=$(cpu_ns "$PID")
     after=$(calls | wc -l); readings=$(( $(times "$probe") - readings ))
     cpu_ms=$(( (C1 - C0) / 1000000 ))
-    echo "   $panel shown for 6 s: $readings readings ($((after - before)) commands), $cpu_ms ms of CPU ($(( cpu_ms / 60 )).$(( cpu_ms % 60 * 10 / 60 )) % of a core), $(rss_kb "$PID") kB resident"
-    need=$(( 6 / beat - 1 )); [ $need -lt 1 ] && need=1
-    check "$panel shown: read on its beat (every ${beat} s: at least $need readings in 6 s)" "[ $readings -ge $need ]"
-    check "$panel shown: under 5 % of a core" "[ $cpu_ms -lt 300 ]"
+    echo "   $panel shown for 4 s: $readings readings ($((after - before)) commands), $cpu_ms ms of CPU ($(( cpu_ms / 40 )).$(( cpu_ms % 40 * 10 / 40 )) % of a core), $(rss_kb "$PID") kB resident"
+    need=$(( 4 / beat - 1 )); [ $need -lt 1 ] && need=1
+    check "$panel shown: read on its beat (every ${beat} s: at least $need readings in 4 s)" "[ $readings -ge $need ]"
+    check "$panel shown: under 5 % of a core" "[ $cpu_ms -lt 200 ]"
     dismiss
   done
-  sleep 2
+  sleep 1
   echo "   hidden again: $(rss_kb "$PID") kB resident (it was $rss_hidden kB)"
   before=$(calls | wc -l)
-  sleep 3
+  sleep 2
   check "hidden again: the readings stop" "[ $before = $(calls | wc -l) ]"
   check "the commands run were only ever the stubs'" "! grep -q 'no stub in' '$OUT/host.log'"
   check "quit answers" "ctl quit | grep -q bye"
@@ -533,7 +542,7 @@ section_look() {
 section_audio() {
   start_panels_host
   show audio QA
-  keys_ready
+  keys_ready audio
   for text in "Speaker" "MOMENTUM 4" "Stereo Microphone" "Firefox" "mpv" "50%" "75%" "80%"; do
     check "audio shows $text" "ctl find '$text' >/dev/null"
   done
@@ -565,7 +574,7 @@ section_audio() {
 section_network() {
   start_panels_host
   show network QA
-  keys_ready
+  keys_ready network
   for text in "Home" "Lobby" "Cafe:Free" "Neighbour" "Known Away" "Work VPN" "RESCAN"; do
     check "network shows $text" "ctl find '$text' >/dev/null"
   done
@@ -582,6 +591,15 @@ section_network() {
   typed "hunter2"
   press Return
   check "the password is sent when Enter ends it" "called 'nmcli device wifi connect Neighbour password hunter2'"
+  # Connecting reranks the active network; wait for the displayed model before
+  # finding the next click, rather than clicking stale widget bounds.
+  for _ in $(seq 1 20); do
+    read -r _ neighbor_y _ _ < <(ctl find Neighbour)
+    read -r _ home_y _ _ < <(ctl find Home)
+    [ "${neighbor_y:-9999}" -lt "${home_y:-0}" ] && break
+    sleep 0.1
+  done
+  check "the connected network has settled at the first row" "[ \"${neighbor_y:-9999}\" -lt \"${home_y:-0}\" ]"
   click_text QA quadrille-network "Lobby"
   check "a click on an open network joins it" "called 'nmcli device wifi connect Lobby'"
   sleep 1.0
@@ -602,7 +620,7 @@ section_network() {
 section_bluetooth() {
   start_panels_host
   show bluetooth QA
-  keys_ready
+  keys_ready bluetooth
   for text in "Headphones" "Keyboard K1" "Speaker One" "Mystery Phone"; do
     check "bluetooth shows $text" "ctl find '$text' >/dev/null"
   done
@@ -635,7 +653,7 @@ section_bluetooth() {
 section_power() {
   start_panels_host
   show power QA
-  keys_ready
+  keys_ready power
   for text in "BALANCED" "PERFORMANCE" "POWER-SAVER" "LOCK" "SUSPEND" "LOG OUT" "REBOOT" "POWER OFF"; do
     check "power shows $text" "ctl find '$text' >/dev/null"
   done
@@ -657,11 +675,23 @@ section_power() {
   check "YES sends the command Omarchy's menu sends" "called 'omarchy-system-reboot'"
   sleep 1.5
   check "and the panel is gone" "ctl list | grep -q 'power .*hidden'"
+  show power QA
+  keys_ready power
+  click_text QA quadrille-power "REBOOT"
+  check "a click on an action asks too" "ctl find 'YES' >/dev/null"
+  click_text QA quadrille-power "NO"
+  check "a click on NO backs out" "! ctl find 'YES' >/dev/null && [ \"\$(times omarchy-system-reboot)\" = 1 ]"
+  check "quit answers" "ctl quit | grep -q bye"
+}
+
+# Separate lock holds keep every confirmation check below the live limit.
+section_power_actions() {
+  start_panels_host
   # lock 3, suspend 4, log out 5, power off 7
   for action in "omarchy-system-lock:3" "systemctl suspend:4" "omarchy-system-logout:5" "omarchy-system-shutdown:7"; do
     command=${action%:*}; position=${action##*:}
     show power QA
-    press Home
+    keys_ready power
     for _ in $(seq 1 $position); do press Down; done
     press Return
     asked=$(ctl find YES >/dev/null && echo yes || echo no)
@@ -670,12 +700,7 @@ section_power() {
     check "$command: y sends it" "called '$command'"
     sleep 1.5
   done
-  check "every session action went out exactly once" "[ \"\$(times omarchy-system-reboot)\" = 1 ] && [ \"\$(times omarchy-system-lock)\" = 1 ] && [ \"\$(times 'systemctl suspend')\" = 1 ] && [ \"\$(times omarchy-system-logout)\" = 1 ] && [ \"\$(times omarchy-system-shutdown)\" = 1 ]"
-  show power QA
-  click_text QA quadrille-power "REBOOT"
-  check "a click on an action asks too" "ctl find 'YES' >/dev/null"
-  click_text QA quadrille-power "NO"
-  check "a click on NO backs out" "! ctl find 'YES' >/dev/null && [ \"\$(times omarchy-system-reboot)\" = 1 ]"
+  check "every session action went out exactly once" "[ \"\$(times omarchy-system-lock)\" = 1 ] && [ \"\$(times 'systemctl suspend')\" = 1 ] && [ \"\$(times omarchy-system-logout)\" = 1 ] && [ \"\$(times omarchy-system-shutdown)\" = 1 ]"
   check "quit answers" "ctl quit | grep -q bye"
 }
 

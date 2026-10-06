@@ -43,7 +43,8 @@ case "${1:-}" in
     cat > "$STATE/hl.lua" <<LUA
 hl.config({
   general = { gaps_in = 0, gaps_out = 0, border_size = 0 },
-  misc = { disable_hyprland_logo = true, disable_splash_rendering = true },
+  misc = { disable_hyprland_logo = true, disable_splash_rendering = true,
+           disable_watchdog_warning = true },
   input = { follow_mouse = 1 },
 })
 hl.monitor({ output = "QA", mode = "2560x1600@60", position = "20000x0", scale = 1.666667 })
