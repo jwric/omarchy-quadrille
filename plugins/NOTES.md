@@ -1172,7 +1172,11 @@ parent-facing output before capture. Children are killed and the lock has no
 leaked holders. No wallpaper was installed or shell restarted during these tests.
 
 `surfaces/wallpaper-live.sh` prepares a disposable real-output preview using the
-actual monitor metadata and a separate IPC target/input mask. It refuses occupied
-workspaces 8/9, restores original workspaces/focus, and crops all live bar text
-from its captures. The lead runs it only after the complete Rust/nested checks;
+actual monitor metadata and a separate IPC target/input mask. It selects truly unused
+workspace IDs or reuses an output's own current empty workspace, verifies the
+actual workspace of every output before and after each grab (including no
+special workspace and no hotplug), restores original workspaces/focus, and crops
+all live bar text from its captures. The planner/guards are tested against an
+occupied laptop workspace 3 with workspace 8 already on Dell: selecting 8 from
+the laptop would jump to Dell and leave private laptop windows exposed. The lead runs it only after the complete Rust/nested checks;
 this implementation slice has not executed that live preview.
