@@ -212,7 +212,7 @@ Item {
   }
 
   function openSelector(nextImageDirs, nextImageRows, nextSelectedImage, nextSelectionFile, nextDoneFile, nextShowLabels, nextFilterable) {
-    if (!opened) screenObj = Where.focusedScreen()
+    if (!opened) screenObj = Px.focusedScreen()
     if (requestActive && doneFile && doneFile !== nextDoneFile)
       finishDoneFile(doneFile)
 
@@ -414,6 +414,10 @@ Item {
   }
 
   Settle { id: settle; window: panel }
+  // silent unless the shell runs with QUADRILLE_DEBUG_SURFACES=1: every change of size,
+  // visibility and device ratio, with a clock, of the window and of the card
+  SurfaceProbe { window: panel; tag: "picker.window" }
+  SurfaceProbe { window: card; tag: "picker.card" }
   // the card was hidden for a frame or two: take the keyboard again once it shows
   Connections {
     target: settle

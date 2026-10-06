@@ -612,11 +612,25 @@ the app placeholder is a native 11 x 11 box with the initial. `Pictograms.qml`
 ### Opening at one size (the flicker)
 
 Overlays set their `screen` to the focused output before they are shown
-(`Q/Where.qml`; a window without one is on the first output until it has been
+(`Px.focusedScreen()`; a window without one is on the first output until it has been
 shown, so its grid was resolved for the wrong output), and their content waits for
 `Settle` (the window has its output's device ratio). The menu's card also waits for
-the `when:` guards and a provider's list (`settled`, 300 ms at most) so it does not
-grow a frame after it opens. Nothing here has a Behavior or an animation on size.
+the `when:` guards the first time (`guardsLoaded`; later opens use the answers it
+already has), so it does not grow after it opens. Nothing here has a Behavior or an
+animation on size. Each surface has a silent `SurfaceProbe` for its window and card.
+
+Measured with `plugins/tools/surfaces/overlays-build.sh`, `overlays.sh QA|QB` (the
+scratch shell in a nested compositor, `QUADRILLE_DEBUG_SURFACES=1`) and
+`overlays-report.py QA|QB`, on the laptop's scale and the ultrawide's: the window
+reports the default output's ratio of 2 for a frame or two (and 1 at 1.666667,
+then 1.667), and the card is not visible until the ratio is the output's. The first
+visible card of the menu (root, Apps, and a menu opened 300 ms after a popup),
+emojis, reminders, image picker and OSD is the one final size (270 x 57.6 for the
+OSD, 349.2 x 345.6 for the emojis, 673.2 x 563.4 for the picker at 1.667); the toast
+stack's column is one size per screen (350 wide at 1.667, 388 at 1). The menu card
+is 0 wide until the layer surface has its size (50-200 ms), then final: the scrim
+shows a frame before the card, which never changes size. Rows rebuilt after open
+(the guards) change the height inside one event-loop turn, never between frames.
 
 ### Wallpaper (quadrille.background)
 

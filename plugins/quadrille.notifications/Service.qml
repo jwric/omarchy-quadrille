@@ -993,6 +993,8 @@ Item {
 
       // the stack waits for the window to have its output's device ratio (see Settle)
       Settle { id: settle; window: popupWindow }
+      SurfaceProbe { window: popupWindow; tag: "toast.window." + popupWindow.modelData.name }
+      SurfaceProbe { window: popupColumn; tag: "toast.column." + popupWindow.modelData.name }
 
       ColumnLayout {
         id: popupColumn

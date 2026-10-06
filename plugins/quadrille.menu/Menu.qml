@@ -80,6 +80,9 @@ Item {
   // menu is asked for): it opens at its final size, and never grows a frame
   // later. A timer shows it anyway after 300 ms.
   property bool settled: true
+  // the `when:` guards have been evaluated once: their answers stand until the next
+  // evaluation lands, so a menu opened after the first one need not wait for them
+  property bool guardsLoaded: false
   // The output the menu opens on (the focused one), known before the window is
   // shown so its grid is the right one from the first frame.
   property var screenObj: null
@@ -873,9 +876,9 @@ Item {
   }
 
   function openExistingMenu(initialMenu) {
-    if (!root.opened) root.screenObj = Where.focusedScreen()
-    root.settled = false
-    settleTimer.restart()
+    if (!root.opened) root.screenObj = Px.focusedScreen()
+    root.settled = root.guardsLoaded
+    if (!root.settled) settleTimer.restart()
     requestSerial += 1
     mode = "menu"
     requestActive = false
@@ -901,7 +904,7 @@ Item {
   }
 
   function openDmenu(payload) {
-    if (!root.opened) root.screenObj = Where.focusedScreen()
+    if (!root.opened) root.screenObj = Px.focusedScreen()
     root.settled = true
     requestSerial += 1
     mode = payload.mode === "input" ? "input" : "select"
@@ -1051,6 +1054,7 @@ Item {
 
     var script = MenuModel.guardScript(root.items)
     if (!script) {
+      root.guardsLoaded = true
       root.whenResults = ({})
       root.checkedResults = ({})
       return
@@ -1096,6 +1100,7 @@ Item {
       }
       root.whenResults = nextWhen
       root.checkedResults = nextChecked
+      root.guardsLoaded = true
       if (root.opened) root.rebuildDisplay()
       // Run the evaluation that had to stand aside. Deferred by a turn so the
       // process is settled before its command is set again.
@@ -1105,6 +1110,10 @@ Item {
   }
   // content waits for the window to have the device ratio of its output (see Settle)
   Settle { id: settle; window: panel }
+  // silent unless the shell runs with QUADRILLE_DEBUG_SURFACES=1: every change of size,
+  // visibility and device ratio, with a clock, of the window and of the card
+  SurfaceProbe { window: panel; tag: "menu.window" }
+  SurfaceProbe { window: card; tag: "menu.card" }
   // the card was hidden for a frame or two: take the keyboard again once it shows
   Connections {
     target: settle

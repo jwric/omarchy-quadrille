@@ -37,7 +37,7 @@ Item {
   property int historyLimit: 300
 
   function open(payloadJson) {
-    if (!root.opened) root.screenObj = Where.focusedScreen()
+    if (!root.opened) root.screenObj = Px.focusedScreen()
     root.opened = true
     root.filterText = ""
     root.selectedIndex = 0
@@ -330,6 +330,10 @@ Item {
   }
 
   Settle { id: settle; window: panel }
+  // silent unless the shell runs with QUADRILLE_DEBUG_SURFACES=1: every change of size,
+  // visibility and device ratio, with a clock, of the window and of the card
+  SurfaceProbe { window: panel; tag: "clipboard.window" }
+  SurfaceProbe { window: card; tag: "clipboard.card" }
   // the card was hidden for a frame or two: take the keyboard again once it shows
   Connections {
     target: settle

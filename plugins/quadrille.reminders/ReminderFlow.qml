@@ -37,7 +37,7 @@ Item {
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
     if (payload.fontFamily) root.fontFamily = payload.fontFamily
 
-    if (!root.opened) root.screenObj = Where.focusedScreen()
+    if (!root.opened) root.screenObj = Px.focusedScreen()
     root.opened = true
     root.step = "minutes"
     root.minutes = ""
@@ -96,6 +96,10 @@ Item {
   }
 
   Settle { id: settle; window: panel }
+  // silent unless the shell runs with QUADRILLE_DEBUG_SURFACES=1: every change of size,
+  // visibility and device ratio, with a clock, of the window and of the card
+  SurfaceProbe { window: panel; tag: "reminders.window" }
+  SurfaceProbe { window: card; tag: "reminders.card" }
   // the card was hidden for a frame or two: take the keyboard again once it shows
   Connections {
     target: settle

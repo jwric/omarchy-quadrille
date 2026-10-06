@@ -82,7 +82,7 @@ Item {
     message = next.message
     icon = next.icon
     duration = next.duration
-    if (!opened) screenObj = Where.focusedScreen()
+    if (!opened) screenObj = Px.focusedScreen()
     opened = true
     if (duration > 0) hideTimer.restart()
     else hideTimer.stop()
@@ -115,6 +115,10 @@ Item {
   }
 
   Settle { id: settle; window: panel }
+  // silent unless the shell runs with QUADRILLE_DEBUG_SURFACES=1: every change of size,
+  // visibility and device ratio, with a clock, of the window and of the card
+  SurfaceProbe { window: panel; tag: "osd.window" }
+  SurfaceProbe { window: card; tag: "osd.card" }
 
   PanelWindow {
     id: panel
