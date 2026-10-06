@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.tailscale",
+  "name": "Quadrille tailscale",
+  "version": "0.1.0",
+  "author": "jwric",
+  "license": "MIT",
+  "description": "Tailscale status, connections, exit nodes and machines on the pixel grid: a switch in the head, the connection and exit node in use an inverse block, brackets for the keyboard cursor, a 7 x 7 sprite for each machine's system.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Tailscale",
+    "description": "Toggle Tailscale, switch connections, browse machines, and copy machine IPs or names.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      }
+    ]
+  },
+  "omarchy": { "clonedFrom": "omarchy.tailscale" }
+}
