@@ -979,7 +979,13 @@ display face would be the next step if the Scale2x diagonals are not enough.
 * *tailscale*: not installed here: the not-installed card says so and where to install
   it (Omarchy menu, Install, Service, Tailscale); the states with peers were checked with
   fake data in a throwaway copy.
-* *network*: see its own commit message and the line below.
+* *network*: a native 15 x 15 hero; readings in two columns, the band group on any Wi-Fi
+  link ("One band in range" until there is a choice, where stock hid it), DNS as buttons,
+  Known / Other networks as rows, the list a fixed 10 rows tall so the scan that lands
+  about 600 ms after opening cannot grow the card (a short list leaves blank space);
+  the wifiqr and speedtest summons check the shell first (a host clone may be handed
+  a null one); settleCount 7. Not as stock: custom DNS has no inline field (stock opens
+  a terminal), the forget buttons are always visible (stock showed them on hover).
 
 **Known limits.** The popups of the stock panels not cloned (speedtest, wifi QR, dropbox,
 disk speedtest) still use the host's `KeyboardPanel`/`PopupCard` and its text, fades and
