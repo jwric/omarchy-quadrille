@@ -31,8 +31,11 @@ Item {
   height: implicitHeight
 
   Sprite {
+    id: mark
     visible: root.icon !== null
-    unit: root.g.unit * root.iconScale
+    // The sprite's own pixel (its window's grid), times 1: asking QHero's grid
+    // instead differs for a frame while a window is mapped, which reads as a mixel.
+    unit: mark.g.unit * root.iconScale
     rows: root.icon || []
     level: root.iconLevel
     color: root.iconInk
