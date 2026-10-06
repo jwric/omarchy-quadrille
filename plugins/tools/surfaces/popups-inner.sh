@@ -70,7 +70,7 @@ for t in $cases; do
     wait $cap
     mark "close"; closer $a; closer $b;;
   *)
-    capture $t 14 & cap=$!
+    capture $t ${FRAMES:-14} & cap=$!
     sleep 0.12
     mark "open $t"; out=$(opener $t 2>&1); echo "open $t -> [$out]"
     wait $cap
