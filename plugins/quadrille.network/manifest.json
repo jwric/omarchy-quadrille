@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.network",
+  "name": "Quadrille network",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "Connection, readings, band and DNS choice and the Wi-Fi list on the pixel grid: a signal-lit fan, an inverse block for the network joined, brackets for the keyboard cursor, the passphrase typed inline.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Network",
+    "description": "Wi-Fi list and connection state",
+    "category": "Network",
+    "allowMultiple": false
+  },
+  "omarchy": { "clonedFrom": "omarchy.network" }
+}
