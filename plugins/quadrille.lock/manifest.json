@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.lock",
+  "name": "Quadrille lock screen",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The lock screen's face on the pixel grid: a void and one hairline card (LOCKED, the time, a password as blocks, the failure in alarm). Service.qml, which owns the session lock and PAM, is the stock one untouched.",
+  "omarchy": {
+    "clonedFrom": "omarchy.lock",
+    "capabilities": ["authentication"]
+  },
+  "kinds": ["service"],
+  "keepLoaded": true,
+  "entryPoints": { "service": "Service.qml" }
+}

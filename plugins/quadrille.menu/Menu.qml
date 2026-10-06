@@ -75,6 +75,11 @@ Item {
   property var defaultMenuItems: []
   property var userMenuItems: []
   property bool opened: false
+  // The card is not shown until the rows that decide its height have arrived
+  // (the `when:` guards and a provider's list come from bash, a moment after the
+  // menu is asked for): it opens at its final size, and never grows a frame
+  // later. A timer shows it anyway after 300 ms.
+  property bool settled: true
   property string mode: "menu"
   readonly property bool dmenuActive: mode === "select" || mode === "input"
   property string dmenuPrompt: ""
@@ -852,7 +857,21 @@ Item {
     filterText = ""
   }
 
+  function trySettle() {
+    if (guardProc.running || root.guardsPending || providerProc.running || root.providerQueue.length > 0) return
+    root.settled = true
+    settleTimer.stop()
+  }
+
+  Timer {
+    id: settleTimer
+    interval: 300
+    onTriggered: root.settled = true
+  }
+
   function openExistingMenu(initialMenu) {
+    root.settled = false
+    settleTimer.restart()
     requestSerial += 1
     mode = "menu"
     requestActive = false
@@ -872,11 +891,13 @@ Item {
     // The shell may start before first-install packages have finished placing
     // their icons. Refresh here even when the desktop entry list did not change.
     if (root.appLibrary) root.appLibrary.refreshIcons()
+    root.trySettle()
 
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function openDmenu(payload) {
+    root.settled = true
     requestSerial += 1
     mode = payload.mode === "input" ? "input" : "select"
     dmenuPrompt = String(payload.prompt || (mode === "input" ? "Input" : "Select"))
@@ -953,6 +974,7 @@ Item {
         if (root.filterText.trim()) root.loadProvidersForSearch()
       }
       root.startNextProvider()
+      root.trySettle()
     }
   }
 
@@ -1046,6 +1068,7 @@ Item {
       // A signal leaves the exit code at 0, so the status is what tells us.
       if (exitCode !== 0 || exitStatus !== 0) {
         if (root.guardsPending) Qt.callLater(function() { root.evaluateGuards() })
+        else root.trySettle()
         return
       }
 
@@ -1072,11 +1095,12 @@ Item {
       // Run the evaluation that had to stand aside. Deferred by a turn so the
       // process is settled before its command is set again.
       if (root.guardsPending) Qt.callLater(function() { root.evaluateGuards() })
+      else root.trySettle()
     }
   }
   PanelWindow {
     id: panel
-    visible: root.opened && root.rowsLoaded
+    visible: root.opened && root.rowsLoaded && root.settled
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     WlrLayershell.namespace: "omarchy-menu"
@@ -1102,9 +1126,11 @@ Item {
     }
     onVisibleChanged: if (!visible) { cardTop = -1; maxRowsHeight = -1 }
 
-    Rectangle {
-      anchors.fill: parent
-      color: root.scrim
+    // the dim layer: the theme's scrim colour on a Bayer dither of its alpha,
+    // one cell per virtual pixel (a translucent wash where shaders are absent)
+    Scrim {
+      tone: Qt.rgba(root.scrim.r, root.scrim.g, root.scrim.b, 1)
+      density: root.scrim.a
     }
 
     MouseArea {
@@ -1239,6 +1265,21 @@ Item {
             clip: true
             spacing: root.rowSpacing
             boundsBehavior: Flickable.StopAtBounds
+            // Scrolling is by whole rows, never by a fraction of a pixel: no
+            // flick, and the wheel moves three rows at a time.
+            interactive: false
+
+            WheelHandler {
+              acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+              onWheel: function(event) {
+                var dir = Math.sign(event.angleDelta.y)
+                if (dir === 0) return
+                var top = resultList.originY
+                var bottom = Math.max(top, resultList.originY + resultList.contentHeight - resultList.height)
+                var next = resultList.contentY - dir * 3 * root.baseRowHeight
+                resultList.contentY = Math.max(top, Math.min(bottom, root.g.snap(next)))
+              }
+            }
 
             section.property: "section"
             section.criteria: ViewSection.FullString

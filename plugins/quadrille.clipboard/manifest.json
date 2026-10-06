@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.clipboard",
+  "name": "Quadrille clipboard",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The clipboard manager on the pixel grid: a hairline card, one-line rows with the row under the cursor an inverse block, the selected entry in full beside them, a dither behind it. History and capture are the stock plugin's.",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": { "overlay": "Clipboard.qml" },
+  "omarchy": { "clonedFrom": "omarchy.clipboard" }
+}

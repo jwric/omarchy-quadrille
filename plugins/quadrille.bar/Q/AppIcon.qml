@@ -29,7 +29,7 @@ Item {
 
   readonly property bool failed: source === "" || probe.status === Image.Error
   readonly property bool picture: pixel.ready
-  readonly property bool fallback: !failed && !pixel.ready && gaveUp
+  readonly property bool fallback: !failed && ((!pixel.ready && gaveUp) || pixel.shaderFailed)
   property bool gaveUp: false
   readonly property string initial: {
     var m = String(label).match(/[A-Za-z0-9]/)

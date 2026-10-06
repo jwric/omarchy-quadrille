@@ -3,6 +3,7 @@ singleton Px 1.0 Px.qml
 singleton Role 1.0 Role.qml
 singleton Sprites 1.0 Sprites.qml
 singleton Pictograms 1.0 Pictograms.qml
+singleton Pictograms13 1.0 Pictograms13.qml
 PixelText 1.0 PixelText.qml
 PixelParagraph 1.0 PixelParagraph.qml
 PixelIcon 1.0 PixelIcon.qml
@@ -33,3 +34,7 @@ singleton PanelSprites 1.0 PanelSprites.qml
 QField 1.0 QField.qml
 QTip 1.0 QTip.qml
 Scrim 1.0 Scrim.qml
+SurfaceProbe 1.0 SurfaceProbe.qml
+Pane 1.0 Pane.qml
+Prompt 1.0 Prompt.qml
+PixelEmoji 1.0 PixelEmoji.qml

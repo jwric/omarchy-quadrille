@@ -29,7 +29,9 @@ Item {
   // Where the card sits and how it is built, in vpx.
   readonly property int pad: 8
   readonly property int gap: 8
-  readonly property int iconSize: 14
+  // the icon is drawn at its own size, 13 x 13 (Pictograms13), in a 14-row slot
+  readonly property int iconSize: 13
+  readonly property int slot: 14
   readonly property int gaugeCells: 20
   // A message wraps on this many cells, over at most two lines.
   readonly property int maxMessage: 36
@@ -41,31 +43,33 @@ Item {
   readonly property int messageLines: hasProgress ? 1 : Math.max(1, Math.min(maxLines, Glyphs.wrap(root.readout, Math.max(1, messageColumns), maxLines).length))
   readonly property var look: spriteFor(iconKey, hasProgress ? Math.round(fraction * 100) : 100)
 
-  // The icon for a key from the payload, and the level its waves show.
+  // The icon for a key from the payload, and the level its waves show. The
+  // icons are drawn at 13 x 13, one pixel per virtual pixel (never the 7 x 7
+  // set scaled up); the volume has three waves.
   function spriteFor(key, percent) {
     var k = String(key || "")
+    var P = Pictograms13
     if (k.indexOf("volume") === 0 || k === "mute" || k === "muted") {
       var muted = k.indexOf("mute") !== -1 || percent <= 0
-      return { rows: muted ? Sprites.muted : Sprites.volume, level: percent < 50 ? 1 : 2 }
+      return { rows: muted ? P.muted : P.volume, level: percent < 34 ? 1 : (percent < 67 ? 2 : 3) }
     }
     if (k.indexOf("microphone") === 0 || k.indexOf("mic") === 0)
-      return { rows: k.indexOf("muted") !== -1 || k.indexOf("off") !== -1 ? Sprites.microphoneMuted : Sprites.microphone, level: 9 }
-    if (k === "brightness" || k === "display") return { rows: Sprites.brightness, level: 9 }
-    if (k === "keyboard") return { rows: Sprites.keyboard, level: 9 }
+      return { rows: k.indexOf("muted") !== -1 || k.indexOf("off") !== -1 ? P.microphoneMuted : P.microphone, level: 9 }
+    if (k === "brightness" || k === "display") return { rows: P.brightness, level: 9 }
+    if (k === "keyboard") return { rows: P.keyboard, level: 9 }
     if (k === "reboot" || k === "restart" || k === "shutdown" || k === "power" || k === "poweroff" || k === "logout" || k === "sign-out" || k === "leave")
-      return { rows: Sprites.power, level: 9 }
-    if (k === "media-play" || k === "player-play") return { rows: Sprites.play, level: 9 }
-    if (k === "media-pause" || k === "player-pause") return { rows: Sprites.pause, level: 9 }
-    if (k === "media-next" || k === "player-next") return { rows: Sprites.next, level: 9 }
-    if (k === "media-previous" || k === "player-previous") return { rows: Sprites.previous, level: 9 }
-    if (k === "lock") return { rows: Sprites.lock, level: 9 }
-    if (k === "touchpad") return { rows: Pictograms.touchpad, level: 9 }
-    if (k === "touch" || k === "touchscreen") return { rows: Pictograms.touchscreen, level: 9 }
-    if (k === "media" || k === "player" || k === "media-source" || k === "player-source") return { rows: Sprites.play, level: 9 }
+      return { rows: P.power, level: 9 }
+    if (k === "media-play" || k === "player-play" || k === "media" || k === "player" || k === "media-source" || k === "player-source") return { rows: P.play, level: 9 }
+    if (k === "media-pause" || k === "player-pause") return { rows: P.pause, level: 9 }
+    if (k === "media-next" || k === "player-next") return { rows: P.next, level: 9 }
+    if (k === "media-previous" || k === "player-previous") return { rows: P.previous, level: 9 }
+    if (k === "lock") return { rows: P.lock, level: 9 }
+    if (k === "touchpad") return { rows: P.touchpad, level: 9 }
+    if (k === "touch" || k === "touchscreen") return { rows: P.touchscreen, level: 9 }
     // a caller may pass the glyph itself, as the stock icon table does: the
     // few of them in use are mapped, the rest are a bell
-    if (k === "\udb80\udfda") return { rows: Pictograms.download, level: 9 }
-    return { rows: Sprites.bell, level: 9 }
+    if (k === "\udb80\udfda") return { rows: P.download, level: 9 }
+    return { rows: P.bell, level: 9 }
   }
 
   function show(iconName, rawMessage, rawValue, rawMax, rawProgressText, rawDuration) {
@@ -126,7 +130,7 @@ Item {
 
     Rectangle {
       id: card
-      readonly property real content: panel.g.px(Math.max(root.iconSize, root.hasProgress ? root.iconSize : root.messageLines * 12))
+      readonly property real content: panel.g.px(Math.max(root.slot, root.hasProgress ? root.slot : root.messageLines * 12))
       width: panel.g.px(root.pad * 2 + root.iconSize + root.gap)
         + (root.hasProgress ? panel.g.px(root.gaugeCells * 4 - 1 + root.gap) + readoutBox.width
                             : root.messageColumns * panel.g.cellW)
@@ -148,7 +152,6 @@ Item {
         id: iconSprite
         x: panel.g.px(root.pad + 1)
         y: panel.g.px(root.pad + 1) + panel.g.centre(card.content, height)
-        unit: 2 * panel.g.unit
         rows: root.look.rows
         level: root.look.level
         color: Role.ink
@@ -160,7 +163,7 @@ Item {
         id: gauge
         visible: root.hasProgress
         x: iconSprite.x + iconSprite.width + panel.g.px(root.gap)
-        y: panel.g.px(root.pad + 1) + panel.g.centre(iconSprite.height, height)
+        y: panel.g.px(root.pad + 1) + panel.g.centre(card.content, height)
         cells: root.gaugeCells
         cellWidth: 3
         cellHeight: 6
@@ -176,7 +179,7 @@ Item {
         width: root.hasProgress ? 4 * panel.g.cellW : 0
         height: panel.g.line
         x: root.hasProgress ? gauge.x + gauge.width + panel.g.px(root.gap) : 0
-        y: panel.g.px(root.pad + 1) + panel.g.centre(iconSprite.height, height)
+        y: panel.g.px(root.pad + 1) + panel.g.centre(card.content, height)
         visible: root.hasProgress
         PixelText {
           id: readout

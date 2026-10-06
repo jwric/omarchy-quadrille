@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.reminders",
+  "name": "Quadrille reminders",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The reminder prompt (minutes, then a message) on the pixel grid: a hairline card, the prompt in muted, the typed text in ink with a block caret, a dither behind it.",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": { "overlay": "ReminderFlow.qml" },
+  "omarchy": { "clonedFrom": "omarchy.reminders" }
+}

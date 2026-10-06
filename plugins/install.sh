@@ -19,8 +19,8 @@ mkdir -p "$dest"
 want=${1:-all}
 case $want in
   bar) ids=(quadrille.bar) ;;
-  lab) ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon quadrille.audio quadrille.power quadrille.background quadrille.lab) ;;
-  *)   ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon quadrille.audio quadrille.power quadrille.background) ;;
+  lab) ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon quadrille.audio quadrille.power quadrille.background quadrille.reminders quadrille.emojis quadrille.clipboard quadrille.image-picker quadrille.lab) ;;
+  *)   ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon quadrille.audio quadrille.power quadrille.background quadrille.reminders quadrille.emojis quadrille.clipboard quadrille.image-picker) ;;
 esac
 
 for id in "${ids[@]}"; do

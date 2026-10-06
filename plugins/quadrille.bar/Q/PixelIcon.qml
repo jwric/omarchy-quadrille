@@ -29,6 +29,9 @@ Item {
   property bool dimmed: false
 
   readonly property bool ready: probe.status === Image.Ready
+  // The shader could not be built: nothing will ever be drawn (AppIcon falls
+  // back to the plain picture).
+  readonly property bool shaderFailed: effect.status === ShaderEffect.Error
 
   implicitWidth: cells * g.unit
   implicitHeight: cells * g.unit
@@ -68,6 +71,7 @@ Item {
   }
 
   ShaderEffect {
+    id: effect
     anchors.fill: parent
     visible: root.ready
     blending: true

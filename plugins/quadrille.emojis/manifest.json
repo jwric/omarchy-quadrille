@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.emojis",
+  "name": "Quadrille emojis",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The emoji picker on the pixel grid: every emoji redrawn on a 12 x 12 grid of virtual pixels with a few colours, a hairline card, corner brackets on the selection, the name of the selected one underneath.",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": { "overlay": "Emojis.qml" },
+  "omarchy": { "clonedFrom": "omarchy.emojis" }
+}
