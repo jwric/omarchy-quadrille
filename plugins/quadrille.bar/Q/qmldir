@@ -35,6 +35,8 @@ QField 1.0 QField.qml
 QTip 1.0 QTip.qml
 Scrim 1.0 Scrim.qml
 SurfaceProbe 1.0 SurfaceProbe.qml
+Settle 1.0 Settle.qml
+SizeGate 1.0 SizeGate.qml
 Pane 1.0 Pane.qml
 Prompt 1.0 Prompt.qml
 PixelEmoji 1.0 PixelEmoji.qml

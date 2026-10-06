@@ -1,6 +1,7 @@
 pragma Singleton
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import qs.Commons
 
 // The pixel grid, per window.
@@ -42,13 +43,71 @@ QtObject {
 
   property var cache: ({})
 
+  // The scale of the output a window is on, as the compositor has it (Hyprland's
+  // monitor scale, in the 1/120 steps wp-fractional-scale speaks), or 0 if it
+  // cannot be told. It is known from the start, where a new window's own
+  // `devicePixelRatio` is the integer scale of the output (2 on a 1.666667 one)
+  // until the compositor's `preferred_scale` arrives, a frame or more after the
+  // surface is first drawn: a popup laid out from that would open on a grid of
+  // 2 logical px a vpx and then jump to 1.8.
+  // (QUADRILLE_LEGACY_DPR=1 in a scratch shell turns it off, to measure what the
+  // window-only way did.)
+  readonly property bool legacyDpr: Quickshell.env("QUADRILLE_LEGACY_DPR") === "1"
+  function outputScale(win) {
+    if (legacyDpr) return 0
+    // A popup's own `screen` is, until it has been shown, the default screen (the
+    // first output), not the one it opens on: it is the window it hangs from that
+    // says. A window with a `screen` of its own (a panel) says it itself.
+    var screen = null
+    if (win) {
+      if (win.anchor && win.anchor.window) screen = win.anchor.window.screen
+      if (!screen && win.parentWindow) screen = win.parentWindow.screen
+      if (!screen) screen = win.screen
+    }
+    var name = screen ? screen.name : ""
+    if (name === "" || !Hyprland.monitors) return 0
+    var monitors = Hyprland.monitors.values
+    for (var i = 0; i < monitors.length; i++) {
+      var m = monitors[i]
+      if (m && m.name === name && m.scale > 0) return Math.round(m.scale * 120) / 120
+    }
+    return 0
+  }
+
+  // The screen of the output that has the focus, to hand to a window that is shown
+  // on whatever has the focus (an OSD, a menu, a toast): `screen: shownOn`, set
+  // from this just before `visible` goes true. A layer surface with no `screen` is
+  // put on the focused output by the compositor, but Qt's own idea of its screen
+  // stays the first output's until the surface has been mapped, so its first frame
+  // is laid out for the wrong one. null if it cannot be told.
+  function focusedScreen() {
+    var focused = Hyprland.focusedMonitor
+    var name = focused ? focused.name : ""
+    var screens = Quickshell.screens
+    for (var i = 0; i < screens.length; i++) if (screens[i].name === name) return screens[i]
+    return null
+  }
+
   function forWindow(win) {
-    var dpr = win ? win.devicePixelRatio : 1
+    var dpr = outputScale(win)
+    if (!(dpr > 0)) dpr = win ? win.devicePixelRatio : 1
     return grid(dpr > 0 ? dpr : 1)
   }
 
+  // True once the window itself has the scale the grid was made for: until then
+  // a surface that was just mapped is drawn at the wrong device ratio (soft, for
+  // a frame). Popups keep their content invisible until it is.
+  function settled(win) {
+    if (!win) return true
+    var want = outputScale(win)
+    return !(want > 0) || Math.abs(win.devicePixelRatio - want) < 0.01
+  }
+
   function of(item) {
-    var win = item ? item.QsWindow.window : null
+    // A Quickshell window says so (QsWindow); a session-lock surface is not one,
+    // and is the QtQuick window of the item (Window), with a device pixel ratio of
+    // its own.
+    var win = item ? (item.QsWindow.window || item.Window.window) : null
     return forWindow(win)
   }
 

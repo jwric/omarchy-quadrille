@@ -3,7 +3,8 @@
 
     plugins/tools/fake_sni.py [seconds] [count]
 
-Registers `count` StatusNotifierItems (default 4) on the session bus, with
+Registers `count` StatusNotifierItems (default 4) on the session bus, each on a
+connection of its own, with
 themed icons, a drawn pixmap icon, a tooltip and a small dbusmenu (an entry, a
 separator, a check item, a submenu, a disabled entry), keeps them for `seconds`
 (default 20) and exits, taking them with it. Clicks and menu events print to
@@ -120,10 +121,18 @@ def layout_tuple(entry):
 
 
 class Item:
-    def __init__(self, conn, n, name, icon, use_pixmap):
+    def __init__(self, n, name, icon, use_pixmap):
+        # One bus connection each, as separate applications have: the watcher keys
+        # an item by its bus name, so items sharing a connection are dropped one
+        # at a time when it goes away.
+        address = Gio.dbus_address_get_for_bus_sync(Gio.BusType.SESSION, None)
+        conn = Gio.DBusConnection.new_for_address_sync(
+            address,
+            Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,
+            None, None)
         self.conn, self.n, self.name, self.icon, self.use_pixmap = conn, n, name, icon, use_pixmap
-        self.path = f"/item/{n}"
-        self.menu_path = f"/item/{n}/menu"
+        self.path = "/StatusNotifierItem"
+        self.menu_path = "/StatusNotifierItem/menu"
         node = Gio.DBusNodeInfo.new_for_xml(ITEM_XML)
         conn.register_object(self.path, node.interfaces[0], self.on_call, self.on_get, None)
         menu = Gio.DBusNodeInfo.new_for_xml(MENU_XML)
@@ -173,14 +182,13 @@ class Item:
 def main():
     seconds = float(sys.argv[1]) if len(sys.argv) > 1 else 20
     count = int(sys.argv[2]) if len(sys.argv) > 2 else 4
-    conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     specs = [("quadrille-a", "firefox", False), ("quadrille-b", "steam", False), ("quadrille-c", "", True),
              ("quadrille-d", "folder", False), ("quadrille-e", "signal-desktop", False), ("quadrille-f", "spotify", False),
              ("quadrille-g", "chromium", False), ("quadrille-h", "obsidian", False)]
-    items = [Item(conn, i + 1, *specs[i % len(specs)]) for i in range(count)]
+    items = [Item(i + 1, *specs[i % len(specs)]) for i in range(count)]
     for item in items:
-        conn.call_sync("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
-                       "RegisterStatusNotifierItem", V("(s)", (item.path,)), None, Gio.DBusCallFlags.NONE, 2000, None)
+        item.conn.call_sync("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
+                            "RegisterStatusNotifierItem", V("(s)", (item.path,)), None, Gio.DBusCallFlags.NONE, 2000, None)
     print("registered", count, flush=True)
     loop = GLib.MainLoop()
     GLib.timeout_add(int(seconds * 1000), loop.quit)

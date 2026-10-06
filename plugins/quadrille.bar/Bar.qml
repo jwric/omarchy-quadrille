@@ -110,6 +110,10 @@ Item {
   property bool tooltipShown: false
   property int tooltipRequest: 0
   property var activePopout: null
+  // True from the moment a popup opens over another that is still up until the new
+  // one is drawn (or 400 ms): the old one stays on screen that long instead of
+  // going first, so moving from popup to popup never shows the bar bare in between.
+  property bool popoutHandoff: false
   property var barDragSource: null
   property var barDragTarget: null
   property var barDragTargetGeometry: null
@@ -1136,6 +1140,23 @@ Item {
   // changes land in quick succession, stranding the bar off screen until the
   // shell restarts. `omarchy-toggle-bar` nudges this after flipping the flag
   // so the probe re-reads it even when the watch has gone quiet.
+  // QUADRILLE_DEBUG_SURFACES=1 only: show a tooltip without a pointer, on the
+  // `index`-th click target, to read its first frames in the log (SurfaceProbe).
+  IpcHandler {
+    target: "quadrille.debug"
+    enabled: Quickshell.env("QUADRILLE_DEBUG_SURFACES") === "1"
+
+    function tooltip(index: int, text: string): string {
+      var targets = root.clickTargets
+      if (!targets || index < 0 || index >= targets.length) return "no such target (" + (targets ? targets.length : 0) + ")"
+      root.tooltipTarget = targets[index]
+      root.tooltipText = text
+      root.tooltipShown = true
+      return "ok"
+    }
+    function targets(): string { return String(root.clickTargets ? root.clickTargets.length : 0) }
+  }
+
   IpcHandler {
     target: "omarchy.bar"
 
@@ -1148,8 +1169,14 @@ Item {
 
   }
 
+  // QUADRILLE_ONLY_SCREEN=NAME (a scratch shell only): one bar, on that output.
+  readonly property var barScreens: {
+    var only = Quickshell.env("QUADRILLE_ONLY_SCREEN")
+    return only ? Quickshell.screens.filter(function(s) { return s.name === only }) : Quickshell.screens
+  }
+
   Variants {
-    model: Quickshell.screens
+    model: root.barScreens
 
     delegate: Component {
       BarPanel {
@@ -1270,6 +1297,12 @@ Item {
       implicitWidth: Math.ceil(tooltipBubble.implicitWidth)
       implicitHeight: Math.ceil(tooltipBubble.implicitHeight)
 
+      SurfaceProbe {
+        window: tooltipWindow
+        tag: "tooltip"
+        extra: function() { return "bubble=" + tooltipBubble.implicitWidth + "x" + tooltipBubble.implicitHeight + " bubbleUnit=" + tooltipBubble.g.unit.toFixed(4) + " bar=" + (barWindow.screen ? barWindow.screen.name : "?") + " text=" + JSON.stringify(root.tooltipText) }
+      }
+
       anchor {
         id: tooltipAnchor
         window: barWindow
@@ -1304,8 +1337,11 @@ Item {
         }
       }
 
+      Settle { id: tooltipSettle; window: tooltipWindow }
+
       Rectangle {
         id: tooltipBubble
+        visible: tooltipSettle.ready
         readonly property var g: Px.of(tooltipBubble)
         readonly property var lines: String(root.tooltipText).split("\n")
         readonly property int columns: {
@@ -1398,18 +1434,18 @@ Item {
   // drawn for a horizontal bar only; a vertical bar keeps the stock widget.)
   Component { id: menuReplacement; QMenu { } }
   Component { id: workspacesReplacement; QWorkspaces { } }
-  property bool pixelTray: false
+  // The pixel tray is on; QUADRILLE_PIXEL_TRAY=0 in the shell's environment (or
+  // false here) brings the stock tray back.
+  property bool pixelTray: Quickshell.env("QUADRILLE_PIXEL_TRAY") !== "0"
   Component { id: trayReplacement; QTray { } }
   Component { id: indicatorsReplacement; QIndicators { } }
   function replacementFor(id) {
     switch (id) {
       case "omarchy.menu": return menuReplacement
       case "omarchy.workspaces": return root.vertical ? null : workspacesReplacement
-      // QTray (skins/QTray.qml) is written and renders, but the shell stopped
-      // answering IPC for as long as a *fake* tray item (plugins/tools/fake_sni.py)
-      // was registered, and the cause is not yet found (NOTES.md, "Status at
-      // pause (agent B)"). Real items (1Password, Claude) did not do it. Until that
-      // is understood the stock tray stays; set `pixelTray` to try ours.
+      // QTray (skins/QTray.qml). A freeze of the shell's IPC was once seen with fake
+      // tray items registered; it could not be reproduced in four setups (NOTES.md,
+      // "The tray hang"), so `pixelTray` is on; it is the switch back to the stock tray.
       case "omarchy.tray": return root.vertical || !root.pixelTray ? null : trayReplacement
       case "omarchy.indicators": return root.vertical ? null : indicatorsReplacement
       default: return null

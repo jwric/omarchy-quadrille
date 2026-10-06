@@ -432,6 +432,9 @@ to summon the OSD and a network clone the speedtest and wifiqr.
 
 ## Status at pause (agent B: the bar and the kit)
 
+(Superseded in part by "Agent B, resumed" at the end: the tray is on, the flicker is
+fixed, the hang was not reproduced.)
+
 **Done and verified** (both monitors, `crisp.py`-style: colour transitions only on
 multiples of 2 px at scale 1 and 3 px at 1.666667, at most 7 colours a section):
 the whole bar is now pixel-exact, with no stock glyph left in it. New this round:
@@ -605,3 +608,130 @@ percentage, the temperature, the date) is `BigText`, quadrille's DISPLAY and HER
 faces (Departure Mono at 22 and 33, a font pixel of 2 or 3 vpx). It is one per popup
 and it is text, not an icon; if the user wants it gone too, the hero reading becomes
 body text in an inverse block.
+
+## Agent B, resumed: the size flicker, the mixel rule, the tray hang
+
+### The size flicker on open (the user's top bug), measured
+
+"An odd size flickering when opening hovers and some of the widget windows, and
+opening between them", on the laptop (1.666667). It was not eyeballed: every
+popup window now carries a `SurfaceProbe` (`Q/SurfaceProbe.qml`, silent unless the
+shell has `QUADRILLE_DEBUG_SURFACES=1`), which logs every change of the window's
+size, visibility, screen and device ratio, and (polling every 4 ms while it is up)
+of what the card holds, with `Date.now()`, as `SURF <ms> <tag> <event> | size= vis=
+screen= dpr= unit= ...`. A scratch shell (`plugins/tools/surfaces/`) runs the
+real bar and widgets on a private session bus and a private `HOME`, inside the
+nested Hyprland (`layershell/tools/nested.sh`, outputs QA 1.666667 and QB 1),
+opens each popup through the shell's own IPC while `grim` records the corner of
+the output every ~33 ms, and reads the log.
+
+**H1 was the cause, and it is real.** A window that has just been shown reports
+the *default output's* integer scale for its first frames, and the kit took its
+unit from that. For a popup (`PopupWindow`) it is worse: its `screen` is the first
+output's too, until it has been mapped. Log of the power popup on QA, before:
+
+    +  0 ms  visible=true          dpr=2       unit=2.0  card at 980,40,  548 wide, pad 8
+    + 46 ms  dpr=1  (screen QA)
+    + 50 ms  dpr=1.6667            unit=1.8  card at 1035,36, 493 wide, pad 7.2     <- jumps 10 %
+
+and the bar's tooltip (a `PopupWindow`): 158x32 at first, then 143x29 at +59 ms,
+then 158x32 again when its `screen` changes at +60 ms, then 143x29: three sizes
+in 20 ms. A popup's card is built from the owner's lengths (the bar window's unit,
+right from the start) plus its own chrome (the popup window's unit, wrong at
+first), so even the mixture was wrong. The tray's drawer, laid out for unit 2,
+opened 10 % too big and shrank.
+
+The fix, in the kit, so every surface gets it:
+
+* `Px.forWindow(win)` takes the unit from **the output's real scale**
+  (`Hyprland.monitors`, rounded to the 1/120 steps of wp-fractional-scale) of the
+  window it *hangs from* (`anchor.window`, else `parentWindow`, else `screen`),
+  which is known before the surface exists; the window's own ratio is only the
+  fallback (no Hyprland, or a monitor not listed yet). `QUADRILLE_LEGACY_DPR=1`
+  in a scratch shell turns it off, to measure the old way. After the fix the
+  same probe reads `unit=1.8` from the first line and the card is laid out once.
+* `Q/Settle.qml`: the first frame of a window is still rasterised at the wrong
+  ratio (soft for a frame). A card or a bubble that is `visible: settle.ready`
+  skips that frame (and shows anyway after 120 ms if the compositor never says).
+* `Q/SizeGate.qml` (H2): a card is sized from data that arrives after it is open
+  (the power popup: 120, 142, then 196 px tall in the first 210 ms; the clock:
+  380 then 416; the tray menu: 15 then 141, as the D-Bus menu arrives). Drawn at
+  once it opens at one size and jumps. `QPopup` holds its card, and `PopupFrame`
+  does not map its window, until the size and place have stayed the same for three
+  polls of 16 ms, or 260 ms have passed since opening: a static popup is ready as
+  soon as its window is, one waiting for data waits at most that long.
+* Hand-over between popups (the "opening between them" half): `requestPopout`
+  closed the old popup at once and the new one needed 50-90 ms to be mapped, so the
+  bar was bare in between. A new popup now sets `bar.popoutHandoff`; the one it
+  replaces stays on screen (`handingOff`) until the newcomer's card is drawn (20 ms
+  after, so the swap is one frame) or 400 ms. `PopupFrame` also holds its
+  `dismissed()` (which resets a menu) until then.
+
+On screen, from the grim frames (about 33 ms apart, `screenshots/tooltip-first-frames.png`):
+the tooltip's first frame before the fix is 263 x 53 device px and soft, the next
+237 x 48; after, the first frame is 237 x 48 and crisp and stays. The power popup
+appears once, at its final 822 device px, and a switch from it to the clock never shows
+the bar bare: the changed-pixel count of the frames stays above 40 000 while the old
+card waits for the new one.
+
+H3 (the host's popup chrome, 140 ms fades and resizes) does not apply to the
+clones, which have no animation at all; it still applies to the stock panels that
+are not cloned (speedtest, wifi QR, tailscale, dropbox, the dev gallery). They use
+the host's `PopupCard`/`KeyboardPanel`, which this plugin cannot change; they can
+only be cloned. H4 (the host's `PanelToolTip`) sizes itself from its text after it
+is shown, inside the panel's own window, and draws in the distance-field renderer:
+the kit's `QTip` and the bar's tooltip size from bitmap metrics before they show.
+
+What O and P still have to do for their surfaces (not done here, not mine):
+
+* every `PanelWindow` that appears on "whatever has the focus" (the OSD, the menu,
+  the clipboard, emojis, the image picker, reminders, a toast) is created with no
+  `screen`, so Qt thinks it is on the first output until it is mapped and its first
+  frame is laid out for the wrong one. Give it one before `visible` goes true:
+  `property var shownOn: null; screen: shownOn`, and set
+  `shownOn = Px.focusedScreen()` in the function that opens it (`Px.focusedScreen()`
+  is the screen of Hyprland's focused monitor; it returns null if it cannot tell).
+* wrap what the window draws in `Settle` (`visible: settle.ready`), and, if the
+  content comes from a model or a process, in a `SizeGate` too;
+* put a `SurfaceProbe { window: root; tag: "..."; extra: function() { ... } }` in the
+  window and read it with `plugins/tools/surfaces/` (`build.sh`, then `flick.sh A|B`
+  in one locked hold under `flock -o`, then `analyse.py` and `frames.py`).
+
+### One pixel size to a surface: the guard
+
+`Sprite` reports (once per size) any `unit` other than the surface's own:
+`quadrille: a 7 x 7 sprite is drawn at 2.00x the surface's pixel (a mixel)`; it
+still draws it, so an old caller does not vanish. `Sprites.qml` states the sizes
+(7, 11, 15, 21, odd, one drawing each, the small one never scaled) and has a second
+tone (`o`, the sprite's `mid`) and an always-dim one (`,`) for the shading a bigger
+icon is allowed. Audit of what was there: nothing of the bar, the kit or the
+overlays passes a `unit` any more (`QHero` default is 1, the popup heroes are native
+15 and 21 sprites, the OSD's are 13); what is still scaled is `BigText`, the hero
+number of the clock, power and weather popups (P's note above). BigText is the one thing left that is scaled: not mine, P's note above names it.
+
+### The tray hang: not reproduced, so the pixel tray is switched on, with a switch
+
+The freeze under `fake_sni.py` could not be made to happen again. Tried, each with
+four fake items (pinned and in the drawer), the drawer, a menu and the manage
+popup opened over IPC while the shell was pinged every second:
+
+1. a bare `SystemTray` model in a scratch shell on a private session bus: no hang;
+2. `QTray` in a `FloatingWindow` offscreen, and in a `PanelWindow` on the live
+   compositor: none;
+3. the whole `quadrille.bar` with every widget, in a copy of the shell with its own
+   `HOME` and no services (`plugins/tools/surfaces/build.sh` builds it): none;
+4. the same on the nested compositor with three bars (the nested window's output,
+   QA, QB): none.
+
+The first freeze therefore came from something else in that live session (it was
+seen with the ultrawide plugged in, other agents restarting the shell and a gdb/
+eu-stack attach on it; the "main thread asleep at 0 %" in the pause note was not
+backed by a sample). One real difference in `fake_sni.py` was found and fixed: all
+its items shared one bus connection, so when it died the watcher dropped only one
+of them; each item now has its own connection, as an application would. `QTray`
+is on by default; `QUADRILLE_PIXEL_TRAY=0` in the shell's environment, or
+`pixelTray: false` in `Bar.qml`, brings the stock tray back. If a freeze ever
+shows up with real items, run `plugins/tools/surfaces/tray.sh` (the nested three-bar
+tray run) and look at
+`top -H` and `gdb -p` of the scratch shell (it is a child of the script, so ptrace
+is allowed), not the live one.

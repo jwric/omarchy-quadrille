@@ -21,6 +21,9 @@ PopupWindow {
   // The object the bar knows this popout by; the popup itself by default.
   property var owner: null
   property bool open: false
+  // Closed for another popup that is not on screen yet: stays up until it is.
+  property bool handingOff: false
+  property bool pendingDismiss: false
   // Content box, inside 1 vpx of hairline and `pad` vpx of air.
   property real contentWidth: g.px(40)
   property real contentHeight: g.px(20)
@@ -37,12 +40,26 @@ PopupWindow {
 
   signal dismissed()
 
+  Settle { id: settle; window: root }
+  // Do not map the window until the card's size has stopped moving (see SizeGate.qml).
+  SizeGate {
+    id: gate
+    active: root.open
+    signature: root.contentWidth.toFixed(2) + "," + root.contentHeight.toFixed(2)
+  }
+
+  SurfaceProbe {
+    window: root
+    tag: "popupframe"
+    extra: function() { return "card=" + root.cardWidth + "x" + root.cardHeight + " bar=" + (root.anchorWindow && root.anchorWindow.screen ? root.anchorWindow.screen.name : "?") }
+  }
+
   function close() {
     if (owner && "close" in owner) owner.close()
     else open = false
   }
 
-  visible: open
+  visible: (open && gate.ready) || handingOff
   color: "transparent"
   // A surface is a whole number of logical pixels; the card inside it is whole
   // device pixels.
@@ -51,10 +68,31 @@ PopupWindow {
 
   onOpenChanged: {
     if (!bar) return
-    if (open) bar.requestPopout(coordinatorKey)
-    else {
+    if (open) {
+      handingOff = false
+      if (bar.activePopout && bar.activePopout !== coordinatorKey) { bar.popoutHandoff = true; handoffTimer.restart() }
+      bar.requestPopout(coordinatorKey)
+    } else {
       if (bar.activePopout === coordinatorKey) bar.releasePopout(coordinatorKey)
-      dismissed()
+      handingOff = bar.popoutHandoff === true
+      if (handingOff) pendingDismiss = true
+      else dismissed()
+    }
+  }
+
+  Timer { id: handoffTimer; interval: 400; onTriggered: root.bar.popoutHandoff = false }
+  Timer {
+    id: handoffRelease
+    interval: 20
+    onTriggered: { handoffTimer.stop(); if (root.bar) root.bar.popoutHandoff = false }
+  }
+  Connections {
+    target: root.bar
+    ignoreUnknownSignals: true
+    function onPopoutHandoffChanged() {
+      if (root.bar.popoutHandoff) return
+      root.handingOff = false
+      if (root.pendingDismiss) { root.pendingDismiss = false; root.dismissed() }
     }
   }
 
@@ -93,6 +131,8 @@ PopupWindow {
 
   Rectangle {
     id: card
+    visible: settle.ready
+    onVisibleChanged: if (visible && root.open && root.bar && root.bar.popoutHandoff) handoffRelease.restart()
     x: 0; y: 0
     width: root.cardWidth
     height: root.cardHeight

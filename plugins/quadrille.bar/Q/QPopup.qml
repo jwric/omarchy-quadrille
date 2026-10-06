@@ -48,6 +48,8 @@ PanelWindow {
   property bool open: false
   property bool popoutSwitching: false
   property bool popoutSwitchClosing: false
+  // Closed for another popup that is not on screen yet: stays up until it is.
+  property bool handingOff: false
   property bool focusPrimed: false
 
   // Item that should take keyboard focus once the panel maps (see KeyboardPanel).
@@ -76,7 +78,7 @@ PanelWindow {
   // --- screen + lifetime ---------------------------------------------------
 
   screen: anchorWindow ? anchorWindow.screen : null
-  visible: open || popoutSwitching
+  visible: open || popoutSwitching || handingOff
   color: "transparent"
   exclusionMode: ExclusionMode.Ignore
 
@@ -87,6 +89,20 @@ PanelWindow {
     : WlrKeyboardFocus.None
 
   onBackingWindowVisibleChanged: beginFocusPrime()
+
+  Settle { id: settle; window: root }
+  // Hold the card until its size and place have stopped moving (see SizeGate.qml).
+  SizeGate {
+    id: gate
+    active: root.open
+    signature: root.contentWidth.toFixed(2) + "," + root.contentHeight.toFixed(2) + "," + root.cardOrigin.x.toFixed(2) + "," + root.cardOrigin.y.toFixed(2)
+  }
+
+  SurfaceProbe {
+    window: root
+    tag: "qpopup." + (root.owner && root.owner.moduleName ? root.owner.moduleName : "?")
+    extra: function() { return "card=" + card.x + "," + card.y + " " + card.width + "x" + card.height + " pad=" + root.padding + " shown=" + card.visible + " gate=" + gate.ready }
+  }
 
   anchors {
     top: true
@@ -203,12 +219,15 @@ PanelWindow {
     if (!bar) return
     if (open) {
       popoutSwitchClosing = false
+      handingOff = false
       popoutSwitching = bar.activePopout && bar.activePopout !== coordinatorKey
+      if (popoutSwitching) { bar.popoutHandoff = true; handoffTimer.restart() }
       bar.requestPopout(coordinatorKey)
       if (popoutSwitching) popoutSwitchTimer.restart()
     } else {
       popoutSwitchClosing = !!(owner && owner.popoutSwitchClosing)
       popoutSwitching = false
+      handingOff = bar.popoutHandoff === true
       if (bar.activePopout === coordinatorKey) bar.releasePopout(coordinatorKey)
       if (popoutSwitchClosing) closeSwitchTimer.restart()
     }
@@ -218,6 +237,19 @@ PanelWindow {
     id: focusPrimeTimer
     interval: 75
     onTriggered: if (root.open) root.focusPrimed = true
+  }
+
+  // The newcomer says it is drawn (its card is up, a frame ago); or gives up waiting.
+  Timer { id: handoffTimer; interval: 400; onTriggered: root.bar.popoutHandoff = false }
+  Timer {
+    id: handoffRelease
+    interval: 20
+    onTriggered: { handoffTimer.stop(); if (root.bar) root.bar.popoutHandoff = false }
+  }
+  Connections {
+    target: root.bar
+    ignoreUnknownSignals: true
+    function onPopoutHandoffChanged() { if (!root.bar.popoutHandoff) root.handingOff = false }
   }
 
   Timer {
@@ -329,7 +361,8 @@ PanelWindow {
     height: root.contentHeight
     antialiasing: false
     color: Role.edge
-    visible: root.open || root.popoutSwitching
+    visible: ((root.open || root.popoutSwitching) && settle.ready && (gate.ready || !root.open)) || root.handingOff
+    onVisibleChanged: if (visible && root.open && root.bar && root.bar.popoutHandoff) handoffRelease.restart()
 
     // The face, inside the hairline.
     Rectangle {
