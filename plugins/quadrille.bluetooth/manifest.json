@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.bluetooth",
+  "name": "Quadrille bluetooth",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "Bluetooth adapter and devices on the pixel grid: a switch for the radio, connected, paired and available devices with a sprite for their kind, the connected one an inverse block, brackets for the keyboard cursor.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Bluetooth",
+    "description": "Bluetooth device list with connect/disconnect",
+    "category": "Network",
+    "allowMultiple": false
+  },
+  "omarchy": { "clonedFrom": "omarchy.bluetooth" }
+}
