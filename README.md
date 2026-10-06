@@ -6,6 +6,13 @@ Omarchy themes, Departure Mono drawn without antialiasing in every toolkit, a
 whole-pixel QML bar, menu, OSD and notifications for the Omarchy shell, and
 panels drawn by quadrille itself as Wayland layer-shell surfaces.
 
+The desktop is a metric drafting graticule. Each output gets a centre-zero
+wallpaper calibrated to its physical panel, millimetre ticks, centimetre grid
+and edge rulers, a display spec plate, and a drawing of the output arrangement
+at one physical scale. The drawing describes compositor crossings and offsets.
+An always-on, click-through cursor reticle in the Rust host shows millimetres
+from the output's top-left and centre, above application windows.
+
 ![The five themes, as the bar draws them](plugins/screenshots/themes.png)
 
 ![Menu, OSD and notifications at 3 physical pixels per virtual pixel](plugins/screenshots/laptop.png)
@@ -16,7 +23,7 @@ It is three layers, each useful without the next:
 |---|---|---|
 | 1. Themes and font | five Omarchy themes generated from quadrille's palettes (terminal, paper, phosphor, amber, lcd), a dithered graticule wallpaper, square whole-pixel Hyprland borders and gaps, no animation; a fontconfig rule that turns antialiasing off for Departure Mono | `themes/`, `fontconfig/`, `tools/` |
 | 2. Shell plugins | a QML kit (lamps, gauges, tabs, groups, 24 pixel icons, text from baked bitmaps), a replacement `quadrille.bar`, and restyled menu, OSD and notifications | `plugins/` |
-| 3. Panel host | `quadrille-bar`, an iced app on a layer-shell windowing shell of its own (sctk + tiny-skia): panels summoned by a socket, dismissed by an outside click, following the Omarchy theme live. One real panel so far, a system monitor | `layershell/` |
+| 3. Panel host | `quadrille-bar`, an iced app on a layer-shell windowing shell of its own (sctk + tiny-skia): system, audio, network, Bluetooth and power panels, plus a cursor graticule, following the Omarchy theme live | `layershell/` |
 
 ## Use
 
@@ -66,6 +73,65 @@ then 1.8 per virtual pixel; both the QML kit and the panel host work in device
 pixels), at 2 gets 4. The themes' shell and Hyprland sizes assume 2 logical
 pixels (`tools/gen_themes.py --unit`).
 
+## Display calibration and cursor overlay
+
+The physical model corrects centimetre-rounded EDID sizes by snapping the
+diagonal to a nearby nominal panel size and deriving width and height from
+the native square-pixel aspect ratio. The laptop resolves to about
+344.6 × 215.4 mm. The Dell's rounded EDID diagonal is nearest to 34.1 in the
+nominal-size list, giving 799.0 × 334.4 mm; use a measured override for its
+actual 797.8 × 333.9 mm. Each millimetre mark is
+rounded to the nearest virtual pixel; individual marks are accurate within
+half a virtual pixel. The spec plate states the physical size of one vpx.
+At the laptop's 3-physical-pixel unit this is 0.40 mm; at the ultrawide's
+2-pixel unit it is 0.46 mm.
+Two independently snapped marks can differ in their gap by up to one vpx;
+the half-vpx bound applies to each mark's physical position.
+With missing EDID dimensions the model assumes 96 PPI and prefixes dimensions
+with `~`; an override removes that estimate.
+
+An optional `~/.config/quadrille/displays.toml` supplies measured dimensions.
+Nothing creates it by default. Output names take priority over make/model keys:
+
+```toml
+["eDP-2"]
+width_mm = 344.6
+height_mm = 215.4
+
+["Dell Inc. DELL U3417W"]
+width_mm = 797.8
+height_mm = 333.9
+# Alternatively, diagonal_inches = 34.0 (without width_mm/height_mm).
+```
+
+The `diagonal_inches` configuration key accepts manufacturers' nominal panel
+sizes; all on-screen labels remain metric. Width and height describe the
+native panel before rotation. Provide both dimensions or a diagonal.
+
+The overlay starts by default in every host mode, including `--no-bar`:
+
+```sh
+quadrille-bar --no-bar                     # panels and cursor overlay
+quadrille-bar --no-bar --no-overlay        # start with overlay disabled
+quadrille-bar ctl overlay on
+quadrille-bar ctl overlay off
+quadrille-bar ctl overlay status
+```
+
+The runtime switch lasts until the host exits. Wallpaper calibration is part
+of the theme. The cursor uses Hyprland IPC, polls faster while moving and
+slower while still, and hides while fullscreen or locked.
+The host applies a namespace-specific runtime layer rule to stop Hyprland
+animating the reticle's position; it disables that rule when the overlay stops.
+After editing calibration, `quadrille-bar ctl overlay off` followed by
+`quadrille-bar ctl overlay on` reloads it; the wallpaper watches the file.
+
+Hyprland 0.56.2 [floors cursor IPC coordinates to whole logical pixels](https://github.com/hyprwm/Hyprland/blob/efb50993780079460b0cbed1363e2166a2de1d9f/src/debug/HyprCtl.cpp#L1291-L1304).
+The reticle is exact on the physical grid for the reported coordinate. At
+fractional scales, IPC loses the pointer's sub-logical position and can select
+the neighbouring vpx. Exact tracking of every actual pointer pixel requires
+a compositor API exposing that precision.
+
 ## What is not exact
 
 - The stock widgets the bar keeps (tray, agents, indicators, weather), popup
@@ -75,7 +141,12 @@ pixels (`tools/gen_themes.py --unit`).
 - The shell passes a third-party menu clone no application library on Omarchy
   4.0.4, so `quadrille.menu` reads desktop entries itself (no hidden-entries
   filter, no launch feedback).
-- The panel host's `sysmon` is the only panel so far.
+- Physical calibration infers nominal diagonals from rounded EDID data. Use
+  measured overrides when tighter physical accuracy matters.
+- The strict nested overlay hotplug check currently finds one-level colour
+  fringes after a headless output is recreated. Native buffers and geometry
+  are exact; compositor presentation remains unresolved. Live previews were
+  deferred because this check did not pass; see `layershell/NOTES.md`.
 
 ## Layout
 
@@ -90,8 +161,8 @@ layershell/    the panel host: windowing shell, bar crate, nested-compositor tes
 `layershell/` depends on quadrille and on the
 [pixel-scale iced fork](https://github.com/jwric/iced/tree/0.15-pixel-scale) as
 git dependencies (uncomment the `[patch]` in `layershell/Cargo.toml` to build
-against local checkouts). Its tests run the host inside a nested Hyprland and
-never touch your session.
+against local checkouts). Tests inject input only inside a nested Hyprland.
+Its temporary visible window and empty-workspace previews take the desktop lock.
 
 ## Licence
 

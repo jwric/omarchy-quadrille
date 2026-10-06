@@ -79,6 +79,28 @@ scheduler, padded native extents, inhibition and retry-deadline unit tests
 also run in `cargo test --workspace`. Expired or removed closed surfaces no
 longer keep a past retry deadline waking the shell continuously.
 
+## Nested regression checks after the graticule
+
+Every legacy section passed: core, nobar, look, audio, network, Bluetooth,
+power and power_actions. The legacy hosts use `--no-overlay` so their original
+surface and idle-cost assertions remain meaningful; the overlay has its own
+native-buffer, inhibition and cost checks. All input remains inside nested
+Hyprland. Each section uses `flock -o` and a 55-second timeout, with cleanup
+on exit and signals. Power confirmations are split across two lock holds.
+
+The regression run exposed an existing quit-response race: the host could
+exit before the IPC client thread wrote `bye`. Responses now acknowledge the
+socket write before returning, bounded to 100 ms; an integration test checks
+the reply. Keyboard checks first place the nested pointer on the panel and
+require a new Home event. The nested panel fixture hides its software cursor
+on keypress so it cannot contaminate crispness checks. Network clicks wait
+for the newly connected row to settle before querying the next label's bounds.
+
+The strict overlay hotplug failure above prevents the requested live preview.
+Prepared helpers in `plugins/tools/surfaces/` were tested only with synthetic
+state. No running host was installed or restarted, no live input was injected,
+and the desktop lock had no holders after the final runs.
+
 Three stages, newest first. Stage 3 is four panels that read and change the
 machine (audio, network, Bluetooth, power); stage 2 is the panel host they sit
 on, with the system monitor; stage 1, the feasibility spike that the host grew
