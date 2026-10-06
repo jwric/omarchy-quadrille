@@ -19,7 +19,7 @@ import "Physical.js" as Physical
 // the double clicks. Two things differ:
 //
 //   * A quadrille graticule is drawn per output, physically calibrated, with
-//     centimetre rulers and two drafting plates. Dither, hairlines and native
+//     a true-size ruler and an active-area elevation. Dither, hairlines and native
 //     bitmap lettering share that output's whole-device-pixel grid.
 //   * That picture does not reveal: it is there at once, and the theme with it.
 //     (A photograph, or a wallpaper that is not a quadrille graticule, goes through

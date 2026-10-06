@@ -2,10 +2,11 @@ import QtQuick
 import Quickshell
 import "Q"
 import "Q/Glyphs.js" as Glyphs
+import "Q/GlyphsBig.js" as Big
 import "Physical.js" as Physical
 import "Drafting.js" as Drafting
 
-// The glow is a shader; the measuring marks are a static device-pixel raster.
+// The sheet field is a shader; all measuring marks are a static device-pixel raster.
 // Both address the same integer virtual grid. Canvas.Image also lets the real
 // marks and native bitmap lettering be checked on Qt's offscreen platform.
 Item {
@@ -15,25 +16,21 @@ Item {
   property var monitor: ({})
   property var monitors: []
   property var overrides: ({})
+  property string composition: "atlas"
   readonly property bool software: Quickshell.env("QT_QPA_PLATFORM") === "offscreen"
   readonly property bool compiled: software || glow.status === ShaderEffect.Compiled
   readonly property bool failed: !software && glow.status === ShaderEffect.Error
   readonly property var physical: Physical.resolve(monitor, overrides)
   readonly property var measured: monitors.map(function(m) { return { input: m, physical: Physical.resolve(m, root.overrides) } })
-  readonly property var drawing: Drafting.plan(monitor, physical, measured, Glyphs, Px.barVpx)
-  readonly property size devSize: Qt.size(physical.widthPx, physical.heightPx)
+  readonly property var drawing: Drafting.plan(monitor, physical, measured, Glyphs, Px.barVpx, Big, composition)
   readonly property var colors: ({ "void": Role.void_, ground: Role.ground,
-    edge: Role.edge, line: Role.line, faint: Role.faint, accent: Role.accent, ink: Role.ink })
+    edge: Role.edge, line: Role.line, faint: Role.faint, accent: Role.accent, ink: Role.ink, muted: Role.muted })
 
   ShaderEffect {
     id: glow
     anchors.fill: parent
     visible: !root.software
-    property real phys: root.phys
-    property size devSize: root.devSize
-    property size grid: Qt.size(root.drawing.width, root.drawing.height)
     property color cVoid: Role.void_
-    property color cGlow: Role.ground
     blending: false
     fragmentShader: Qt.resolvedUrl("graticule.frag.qsb")
   }

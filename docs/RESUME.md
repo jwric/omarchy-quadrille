@@ -1,60 +1,23 @@
 # Resuming the work
 
-## Calibrated drafting graticule (2026-10-06)
+## Live dimensioning redesign (2026-10-06)
 
-Implemented a physical measuring wallpaper and an always-on Rust
-cursor overlay. The shared JSON vectors in `docs/physical-vectors.json` drive
-both implementations: JS in `plugins/quadrille.background/Physical.js`, Rust
-in `layershell/crates/bar/src/physical.rs`. Both support optional
-`~/.config/quadrille/displays.toml`; README documents the exact syntax.
+Atlas sheet: hardware active-area elevation, native width hero, true 100 mm
+ruler, sparse registration and separated EDID/raster notes. Three compositions
+were compared offscreen; alternatives and final 72-image matrix are under
+`/tmp/quadrille-redesign-20261006`. Design rationale is in plugins/NOTES.md.
+The 34.1 snap entry is removed; independent anchors pass at 0.5% tolerance.
 
-Both live monitors were connected during development. Direct Hyprland IPC
-confirmed native dimensions, EDID sizes, layout and scale, cursor position,
-fullscreen state and `j/locked`. Quickshell's `lastIpcObject` supplies the same
-monitor data after an initial asynchronous refresh.
+The Rust overlay rests for 300 ms before showing nearest screen/window CAD
+measurements, all in whole mm. Movement keeps a small bracket reticle and
+releases the dimension surface. Shared glyphs are generated into Rust;
+no runtime QML parsing or compositor `eval` remains. See layershell/NOTES.md.
+The stale-output fix and regression tests from the interrupted work were kept.
 
-The specified formula gives 344.6265 × 215.3916 mm for the 16-inch laptop.
-The Dell's rounded EDID diagonal is 34.0726 inches, so the requested list's
-nearest size is 34.1: 798.9630 × 334.4496 mm. Measured 797.8 × 333.9 mm overrides
-give its actual panel size. At their actual grids one vpx is 0.4039 mm
-(3 physical px) and 0.4645 mm (2 physical px). The prompt's laptop 0.27 mm
-example was inconsistent with its 3-pixel unit; calculated values win.
-
-Verification: shared physical vectors and override parsers pass in Rust and
-Node. Wallpaper offscreen cases cover both scales, missing EDID and a single
-output; native GPU captures have zero off-grid transitions and first-paint
-geometry was final. Rulers give 72/75 px per 10 mm on the laptop (ideal
-74.283316), 42/44 on the Dell (ideal 43.055809). Maximum absolute mark errors
-are 1.466944 and 0.995437 physical pixels, respectively. The half-vpx bound
-applies to each endpoint, not the interval between two independently rounded marks.
-
-The Rust workspace has 120 passing tests and one existing ignored test.
-All existing nested panel sections pass after fixing the quit reply race,
-establishing nested keyboard focus, waiting for network row reordering, and
-splitting power checks into shorter lock holds. Overlay input pass-through,
-fullscreen and session lock pass; traces prove zero cursor queries while
-inhibited. Final six-second measurements: idle 0.125% of one core, moving
-2.564%, both 14.17 MiB RSS; off 0.002%, 14.04 MiB.
-
-Two compositor limits remain. Cursor IPC floors fractional logical positions,
-so exact placement is relative to the reported coordinate, not every actual
-pointer pixel. The strict overlay hotplug screenshot check finds 840 opaque
-pixels differing by one colour level after recreating nested QB. Native
-buffers and geometry remain exact; multiple transport experiments did not
-remove it. The evidence is consistent with compositor output filtering.
-The strict test remains failing. The requested verification gate therefore
-prevented any live wallpaper or overlay preview. Prepared preview helpers
-remain available, with tested empty-workspace guards and cleanup.
-
-Nothing from this round is pushed or installed into `~/.local/bin`. The running
-host must be rebuilt and installed by the lead after review. Its default
-overlay is present with `--no-bar`; `--no-overlay` disables it initially, and
-`quadrille-bar ctl overlay on|off|status` controls it at runtime. Do not modify
-Hyprland/uwsm configuration, monitor scales, theme or font during verification.
-
-The task report is `last.md`; detailed logs and captures are under
-`/tmp/quadrille-graticule-output`. Per-component findings are in the calibrated
-graticule sections of `plugins/NOTES.md` and `layershell/NOTES.md`.
+Build is only in layershell/target; no new host was installed. A temporary
+diagnostic accidentally quit the installed host; restoration approval is
+pending. The lead installs/restarts the host after review. No push is authorized.
+Report, precise verification outcomes and costs: `/tmp/quadrille-redesign-20261006/last.md`.
 
 Written at a pause (2026-10-05, evening). Read this, then `plugins/NOTES.md` and
 `layershell/NOTES.md` (each has a "Status at pause" section from the agent that

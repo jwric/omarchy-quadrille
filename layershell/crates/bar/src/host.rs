@@ -866,7 +866,10 @@ impl Host {
                 .any(|candidate| &candidate.name == output)
             {
                 surfaces.push((
-                    self.id(format!("reticle:{output}"), Role::Reticle),
+                    self.id(
+                        format!("reticle:{output}:{}", settings.namespace),
+                        Role::Reticle,
+                    ),
                     settings,
                 ));
             }

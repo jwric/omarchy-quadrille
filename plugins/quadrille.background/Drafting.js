@@ -50,182 +50,180 @@ function layout(monitors) {
   return placed
 }
 
-function plan(input, physical, monitors, glyphs, topInset) {
-  var phys = physical.pixelsPerVpx
-  // Edge ticks need complete cells; a mode can end with a partial virtual pixel.
-  var w = Math.floor(physical.widthPx / phys), h = Math.floor(physical.heightPx / phys)
-  var strokes = [], labels = [], plates = []
-  topInset = Math.max(0, Math.round(topInset || 0))
-  function rect(x, y, width, height, role) {
-    x = Math.round(x); y = Math.round(y); width = Math.round(width); height = Math.round(height)
-    if (width > 0 && height > 0) strokes.push({ x: x, y: y, w: width, h: height, role: role })
-  }
-  function outline(x, y, width, height, role) {
-    rect(x, y, width, 1, role); rect(x, y + height - 1, width, 1, role)
-    rect(x, y, 1, height, role); rect(x + width - 1, y, 1, height, role)
-  }
-  function text(value, x, y, room, role, backed) {
-    value = String(value)
-    if (glyphs.length(value) * 6 + 1 > room) return false
-    x = Math.round(x); y = Math.round(y)
-    if (x < 0 || y < 0 || x + glyphs.length(value) * 6 + 1 > w || y + 12 > h) return false
-    labels.push({ text: value, x: x, y: y, room: room })
-    if (backed) rect(x - 1, y + 1, glyphs.length(value) * 6 + 3, 10, "void")
-    var runs = glyphs.runs(value)
-    for (var i = 0; i < runs.length; i++) rect(x + runs[i].x, y + runs[i].y, runs[i].w, 1, role || "ink")
-    return true
-  }
-  var estimated = physical.estimated ? "~" : ""
-  var axisX = [], axisY = []
-  function ruler(axis, size, pixels, density, marks) {
-    var last = -1000
-    for (var mm = -Math.floor(size / 2); mm <= Math.floor(size / 2); mm++) {
-      var at = mark(mm, pixels, density, phys)
-      if (at < 0 || at >= (axis === "x" ? w : h)) continue
-      var length = mm % 10 === 0 ? 8 : mm % 5 === 0 ? 4 : 2
-      var role = mm % 10 === 0 ? "edge" : mm % 5 === 0 ? "line" : "faint"
-      if (axis === "x") { rect(at, topInset, 1, length, role); rect(at, h - length, 1, length, role) }
-      else { rect(0, at, length, 1, role); rect(w - length, at, length, 1, role) }
-      if (mm % 10 !== 0) continue
-      marks.push({ mm: mm, vpx: at })
-      var mainRole = mm % 50 === 0 ? "line" : "edge"
-      if (axis === "x") rect(at, 9, 1, h - 18, mainRole)
-      else rect(9, at, w - 18, 1, mainRole)
-      var label = estimated + (mm > 0 ? "+" : "") + (mm / 10)
-      var width = glyphs.length(label) * 6 + 1
-      if (axis === "x") {
-        var x = at - Math.floor(width / 2)
-        if (x < 48 || x + width > w - 48 || x <= last + 4) continue
-        text(label, x, topInset + 10, width, "ink", true); text(label, x, h - 23, width, "ink", true)
-        last = x + width
-      } else {
-        var y = at - 6
-        if (y < topInset + 28 || y + 12 > h - 28 || y <= last + 4) continue
-        text(label, 10, y, width, "ink", true); text(label, w - width - 10, y, width, "ink", true)
-        last = y + 12
-      }
-    }
-  }
-  ruler("x", physical.widthMm, physical.widthPx, physical.pxPerMmX, axisX)
-  ruler("y", physical.heightMm, physical.heightPx, physical.pxPerMmY, axisY)
-  var cx = mark(0, physical.widthPx, physical.pxPerMmX, phys)
-  var cy = mark(0, physical.heightPx, physical.pxPerMmY, phys)
-  rect(cx - 13, cy, 10, 1, "accent"); rect(cx + 4, cy, 10, 1, "accent")
-  rect(cx, cy - 13, 1, 10, "accent"); rect(cx, cy + 4, 1, 10, "accent")
-  text("cm", 10, topInset + 10, 18, "ink")
-
-  function plate(x, y, width, height, title) {
-    rect(x, y, width, height, "void")
-    outline(x, y, width, height, "edge")
-    rect(x + 1, y + 17, width - 2, 1, "edge")
-    text(title, x + 5, y + 3, width - 10, "ink")
-    plates.push({ x: x, y: y, w: width, h: height })
-  }
-  var titleWidth = Math.min(250, w >= 740 ? Math.floor(w * 0.4) : w - 48)
-  var makeModel = (String(input.make || "") + " " + String(input.model || "")).trim()
-  var modelLines = glyphs.wrap(makeModel, Math.max(1, Math.floor((titleWidth - 10) / 6)), 100)
-  var titleLines = modelLines.concat([
-    estimated + physical.widthMm.toFixed(1) + " x " + estimated + physical.heightMm.toFixed(1) + " mm",
-    "diagonal " + estimated + (physical.diagonalMm / 10).toFixed(1) + " cm",
-    physical.widthPx + " x " + physical.heightPx + " / " + Number(input.refreshRate || 0).toFixed(1) + " Hz",
-    estimated + physical.pxPerMmX.toFixed(1) + " px/mm",
-    "1 vpx = " + estimated + physical.mmPerVpxX.toFixed(2) + " mm",
-    "scale " + Number(input.scale || 1).toFixed(6)])
-  if (physical.estimated) titleLines.push("est. / assumed density")
-  var titleHeight = 27 + titleLines.length * 14
-  var tx = w - titleWidth - 24, ty = h - titleHeight - 28
-  if (titleWidth >= 166 && ty > 40) {
-    plate(tx, ty, titleWidth, titleHeight, "DISPLAY / " + (input.name || "OUTPUT"))
-    for (var row = 0; row < titleLines.length; row++) text(titleLines[row].trim(), tx + 5, ty + 22 + row * 14, titleWidth - 10)
-  }
-
-  var placed = layout(monitors)
-  if (placed.length && w >= 300 && h >= 220) {
-    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, smallest = Infinity
-    for (var k = 0; k < placed.length; k++) {
-      var p = placed[k], m = p.monitor.physical
-      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y)
-      maxX = Math.max(maxX, p.x + m.widthMm); maxY = Math.max(maxY, p.y + m.heightMm)
-      smallest = Math.min(smallest, m.widthPx / m.pixelsPerVpx)
-    }
-    var drawingWidth = Math.max(64, Math.floor(Math.min(w * 0.25, smallest * 0.25)))
-    var mmPerVpx = Math.max(1, Math.ceil((maxX - minX) / drawingWidth), Math.ceil((maxY - minY) / Math.max(60, h * 0.24)))
-    var dw = Math.ceil((maxX - minX) / mmPerVpx), dh = Math.ceil((maxY - minY) / mmPerVpx)
-    var pw = Math.min(w - 48, Math.max(dw + 84, 262)), ph = dh + 122, lx = 24, ly = h - ph - 28
-    if (lx + pw + 8 >= tx) ly = ty - ph - 8
-    if (ly > topInset + 30) {
-      plate(lx, ly, pw, ph, "OUTPUT LAYOUT / " + mmPerVpx + " mm/vpx")
-      var ox = lx + 14, oy = ly + 50
-      var dimensions = []
-      for (var n = 0; n < placed.length; n++) {
-        var entry = placed[n], mp = entry.monitor.physical
-        var x = ox + Math.round((entry.x - minX) / mmPerVpx), y = oy + Math.round((entry.y - minY) / mmPerVpx)
-        var rw = Math.max(1, Math.round(mp.widthMm / mmPerVpx)), rh = Math.max(1, Math.round(mp.heightMm / mmPerVpx))
-        var here = entry.monitor.input.name === input.name
-        if (here) rect(x, y, rw, rh, "line")
-        outline(x, y, rw, rh, here ? "accent" : "edge")
-        text(here ? "HERE" : entry.monitor.input.name, x + 4, y + 4, rw - 8, here ? "ink" : "ink")
-        dimensions.push({ physical: mp, x: x, y: y, width: rw, height: rh })
-      }
-      // Bodies are drawn before dimensions so a solid HERE rectangle cannot
-      // erase another output's lettering when their edges meet.
-      for (var dim = 0; dim < dimensions.length; dim++) {
-        var dimension = dimensions[dim], mp = dimension.physical
-        var x = dimension.x, y = dimension.y, rw = dimension.width, rh = dimension.height
-        var prefix = mp.estimated ? "~" : ""
-        var wy = y - 12
-        rect(x, wy, rw, 1, "edge"); rect(x, wy - 2, 1, 5, "edge"); rect(x + rw - 1, wy - 2, 1, 5, "edge")
-        for (var arrow = 0; arrow < 4; arrow++) {
-          rect(x + arrow, wy - arrow, 1, 2 * arrow + 1, "edge")
-          rect(x + rw - 1 - arrow, wy - arrow, 1, 2 * arrow + 1, "edge")
-        }
-        var widthLabel = prefix + mp.widthMm.toFixed(1) + " mm"
-        var tw = glyphs.length(widthLabel) * 6 + 1
-        text(widthLabel, x + Math.floor((rw - tw) / 2), wy - 14, rw, "ink", true)
-        var hx = x + rw + 10
-        rect(hx, y, 1, rh, "edge"); rect(hx - 2, y, 5, 1, "edge"); rect(hx - 2, y + rh - 1, 5, 1, "edge")
-        for (var arow = 0; arow < 4; arow++) {
-          rect(hx - arow, y + arow, 2 * arow + 1, 1, "edge")
-          rect(hx - arow, y + rh - 1 - arow, 2 * arow + 1, 1, "edge")
-        }
-        var heightLabel = prefix + mp.heightMm.toFixed(1) + " mm"
-        var heightRoom = pw - (hx - lx) - 9
-        if (!text(heightLabel, hx + 4, y + Math.floor((rh - 12) / 2), heightRoom))
-          text(prefix + mp.heightMm.toFixed(1), hx + 4, y + Math.floor((rh - 12) / 2), heightRoom)
-      }
-      text("cursor layout / mm", lx + 5, ly + ph - 58, pw - 10)
-      text("offsets follow compositor", lx + 5, ly + ph - 44, pw - 10)
-      text("not desk placement", lx + 5, ly + ph - 30, pw - 10)
-      text("edge rulers / cm", lx + 5, ly + ph - 16, pw - 10)
-    }
-  }
-  return { width: w, height: h, pixelWidth: physical.widthPx, pixelHeight: physical.heightPx,
-    strokes: strokes, labels: labels, plates: plates, xMarks: axisX, yMarks: axisY }
+function overlaps(a, b, gap) {
+  gap = gap || 0
+  return a.x < b.x + b.w + gap && b.x < a.x + a.w + gap &&
+    a.y < b.y + b.h + gap && b.y < a.y + a.h + gap
 }
 
-function paint(ctx, drawing, phys, colors, glow, dpr) {
-  ctx.reset()
-  ctx.scale(1 / dpr, 1 / dpr)
-  ctx.clearRect(0, 0, drawing.pixelWidth, drawing.pixelHeight)
-  if (glow) {
-    ctx.fillStyle = colors.void
-    ctx.fillRect(0, 0, drawing.pixelWidth, drawing.pixelHeight)
-    ctx.fillStyle = colors.ground
-    var bayer = [[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]]
-    var w = drawing.width, h = drawing.height, cx = Math.floor(w / 2), cy = Math.floor(h / 2)
-    for (var y = 0; y < h; y++) {
-      var ny = (y - cy) / (h * 0.62)
-      for (var x = 0; x < w; x++) {
-        var nx = (x - cx) / (w * 0.55)
-        var level = Math.max(0, 1 - Math.sqrt(nx * nx + ny * ny))
-        if (level * 16 > bayer[y % 4][x % 4] + 0.5) ctx.fillRect(x * phys, y * phys, phys, phys)
+// Three deliberately different sheet arrangements share one physical drawing.
+// Only "atlas" is used by the desktop; the others remain renderable for review.
+function plan(input, physical, monitors, glyphs, topInset, big, composition) {
+  var ps = physical.pixelsPerVpx
+  var w = Math.floor(physical.widthPx / ps), h = Math.floor(physical.heightPx / ps)
+  var strokes = [], labels = [], plates = [], bodies = [], dimensions = []
+  var est = physical.estimated ? "~" : ""
+  var top = Math.max(16, Math.round(topInset || 0)) + 16
+  composition = composition || "atlas"
+  function rect(x, y, width, height, role) {
+    var s = {x: Math.round(x), y: Math.round(y), w: Math.round(width), h: Math.round(height), role: role}
+    if (s.w > 0 && s.h > 0 && s.x >= 0 && s.y >= 0 && s.x+s.w <= w && s.y+s.h <= h) strokes.push(s)
+  }
+  function outline(x,y,width,height,role) {
+    rect(x,y,width,1,role); rect(x,y+height-1,width,1,role)
+    rect(x,y,1,height,role); rect(x+width-1,y,1,height,role)
+  }
+  function text(value,x,y,role,n) {
+    value = String(value); n = n || 1
+    var width = glyphs.length(value)*6*n+n, height = 12*n
+    var box = {text:value, x:Math.round(x), y:Math.round(y), w:width, h:height, room:width}
+    if (box.x < 24 || box.y < top || box.x+width > w-24 || box.y+height > h-24) return false
+    for (var i=0;i<labels.length;i++) if (overlaps(box,labels[i],2)) return false
+    labels.push(box)
+    var runs = n===1 ? glyphs.runs(value) : big.rects(value,n)
+    for (var i=0;i<runs.length;i++) rect(box.x+runs[i].x,box.y+runs[i].y,runs[i].w,runs[i].h||1,role||"ink")
+    return true
+  }
+  function cross(x,y,role) { rect(x-2,y,5,1,role); rect(x,y-2,1,5,role) }
+  // Registration only: no wallpaper-wide lattice or fictitious physical bezel.
+  outline(12,top-8,w-24,h-top-4,"edge")
+  for (var x=50;x<w-30;x+=100) rect(x,h-15,1,7,"edge")
+  for (var y=top+50;y<h-30;y+=100) rect(9,y,7,1,"edge")
+  text("QUADRILLE / LIVE DIMENSIONING",32,top,"ink")
+  var index = Math.max(0,monitors.findIndex(function(m){return m.input.name===input.name}))+1
+  text((index<10?"0":"")+index+" / "+monitors.length,w-92,top,"accent")
+  text("ACTIVE AREA / COMPOSITOR ELEVATION",32,top+18,"muted")
+
+  var narrow = w<740
+  var rulerY = h-91, rulerX = 40
+  var heroX = narrow ? w-180 : w-260, heroY = top+98
+  var figureX = 48, figureY = top+92
+  var budgetW = narrow ? w-150 : Math.floor(w*.44)
+  var budgetH = narrow ? h-370 : h-290
+  if (composition==="comparator") {
+    figureX=Math.floor(w*.25); figureY=top+115; budgetW=Math.floor(w*.48)
+    heroX=40; heroY=top+60; rulerY=top+62; rulerX=w-Math.round(100/physical.mmPerVpxX)-50
+  } else if (composition==="section") {
+    figureX=Math.floor(w*.48); figureY=top+128; budgetW=Math.floor(w*.36)
+    heroX=48; heroY=top+110; rulerY=h-91
+  }
+  if (narrow) { heroX=w-180; heroY=top+45; figureX=48; figureY=top+225; budgetW=w-150; budgetH=Math.max(55,h-460); rulerX=40; rulerY=h-91 }
+  if (physical.estimated) text("~",heroX-12,heroY+16,"accent")
+  text(physical.widthMm.toFixed(1),heroX,heroY,"accent",big?3:1)
+  text("mm / ACTIVE WIDTH",heroX,heroY+40,"ink")
+  text(est+physical.heightMm.toFixed(1)+" mm HIGH",heroX,heroY+60,"muted")
+  text(input.name||"OUTPUT",heroX,heroY+86,"ink")
+  var model=(String(input.make||"")+" "+String(input.model||"")).trim()
+  var modelLines=glyphs.wrap(model,Math.floor((w-24-heroX)/6),2)
+  for (var i=0;i<modelLines.length;i++) text(modelLines[i],heroX,heroY+104+i*14,"muted")
+
+  budgetH=Math.min(budgetH,rulerY-figureY-112-14*monitors.length)
+  var placed=layout(monitors), minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity
+  for(var i=0;i<placed.length;i++) {
+    var a=placed[i], p=a.monitor.physical
+    minX=Math.min(minX,a.x); minY=Math.min(minY,a.y)
+    maxX=Math.max(maxX,a.x+p.widthMm); maxY=Math.max(maxY,a.y+p.heightMm)
+  }
+  var mmPerVpx=Math.max(1,Math.ceil((maxX-minX)/Math.max(40,budgetW)),Math.ceil((maxY-minY)/Math.max(50,budgetH)))
+  var dw=Math.round((maxX-minX)/mmPerVpx), dh=Math.round((maxY-minY)/mmPerVpx)
+  for(var i=0;i<placed.length;i++) {
+    var a=placed[i], p=a.monitor.physical, here=a.monitor.input.name===input.name
+    var b={x:figureX+Math.round((a.x-minX)/mmPerVpx),y:figureY+Math.round((a.y-minY)/mmPerVpx),
+      w:Math.max(2,Math.round(p.widthMm/mmPerVpx)),h:Math.max(2,Math.round(p.heightMm/mmPerVpx)),here:here,name:a.monitor.input.name}
+    bodies.push(b)
+    outline(b.x,b.y,b.w,b.h,here?"accent":"line")
+    // A sparse 50 mm registration patch belongs to the current panel only.
+    if(here) for(var my=50;my<p.heightMm-20;my+=50) for(var mx=50;mx<p.widthMm-20;mx+=50)
+      cross(b.x+Math.round(mx/mmPerVpx),b.y+Math.round(my/mmPerVpx),"edge")
+  }
+  // Dimensions may occupy an exposed side only. The keyed schedule below is
+  // always complete, including layouts where another panel blocks both sides.
+  var occupied=bodies.slice()
+  for(var i=0;i<bodies.length;i++) {
+    var b=bodies[i], p=placed[i].monitor.physical
+    for(var axis of ["w","h"]) {
+      var value=(p.estimated?"~":"")+(axis==="w"?p.widthMm:p.heightMm).toFixed(1)+" mm"
+      var tw=glyphs.length(value)*6+1, accepted=false
+      for(var side=0;side<2&&!accepted;side++) {
+        var lines=[], label
+        if(axis==="w") {
+          var at=side===0?b.y-12:b.y+b.h+12
+          label={x:b.x+Math.floor((b.w-tw)/2),y:side===0?at-15:at+4,w:tw,h:12}
+          lines=[{x:b.x,y:at,w:b.w,h:1},{x:b.x,y:Math.min(at-3,b.y-2),w:1,h:Math.abs(at-b.y)+6},
+            {x:b.x+b.w-1,y:Math.min(at-3,b.y-2),w:1,h:Math.abs(at-b.y)+6}]
+          if(side===1) { lines[1].y=b.y+b.h+2; lines[2].y=lines[1].y; lines[1].h=14; lines[2].h=14 }
+        } else {
+          var at=side===0?b.x+b.w+12:b.x-12
+          label={x:side===0?at+5:at-tw-5,y:b.y+Math.floor((b.h-12)/2),w:tw,h:12}
+          lines=[{x:at,y:b.y,w:1,h:b.h},{x:side===0?b.x+b.w+2:at-3,y:b.y,w:14,h:1},
+            {x:side===0?b.x+b.w+2:at-3,y:b.y+b.h-1,w:14,h:1}]
+        }
+        var all=lines.concat([label]), free=true
+        for(var c=0;c<all.length;c++) {
+          var box=all[c]
+          if(box.x<26||box.y<top+40||box.x+box.w>w-26||box.y+box.h>h-150) free=false
+          for(var o=0;o<occupied.length;o++) if(overlaps(box,occupied[o],1)) free=false
+          for(var o=0;o<labels.length;o++) if(overlaps(box,labels[o],3)) free=false
+        }
+        if(!free) continue
+        for(var l=0;l<lines.length;l++) rect(lines[l].x,lines[l].y,lines[l].w,lines[l].h,"line")
+        if(axis==="w") for(var t=-3;t<=3;t++) {rect(b.x+t,at+t,1,1,"line");rect(b.x+b.w-1+t,at+t,1,1,"line")}
+        else for(var t=-3;t<=3;t++) {rect(at+t,b.y+t,1,1,"line");rect(at+t,b.y+b.h-1+t,1,1,"line")}
+        if(text(value,label.x,label.y,"ink")) dimensions.push({label:label,lines:lines,axis:axis,output:b.name})
+        occupied=occupied.concat(all); accepted=true
       }
     }
   }
-  var last = ""
-  for (var i = 0; i < drawing.strokes.length; i++) {
-    var s = drawing.strokes[i]
-    if (last !== s.role) { ctx.fillStyle = colors[s.role]; last = s.role }
-    ctx.fillRect(s.x * phys, s.y * phys, s.w * phys, s.h * phys)
+  var legendY=figureY+dh+38
+  text("1:"+(mmPerVpx/physical.mmPerVpxX).toFixed(1)+" / ACTIVE RECTANGLES",figureX,legendY,"muted")
+  for(var i=0;i<placed.length;i++) {
+    var p=placed[i].monitor.physical, name=placed[i].monitor.input.name
+    text((name===input.name?"> ":"  ")+name+"  "+(p.estimated?"~":"")+p.widthMm.toFixed(1)+" x "+p.heightMm.toFixed(1)+" mm",figureX,legendY+18+i*14,"muted")
+  }
+  text("Offsets follow compositor",figureX,legendY+22+placed.length*14,"muted")
+
+  // True-size reference: absolute mm locations rounded individually, including
+  // the origin. The annotation states raster error, never calibration accuracy.
+  var length=Math.min(100,Math.floor((w-80)*physical.mmPerVpxX/10)*10)
+  var labelStep=100
+  for(var step of [10,20,50,100]) {
+    if(step/physical.mmPerVpxX >= glyphs.length(est+Math.max(0,length-step))*6+3) { labelStep=step; break }
+  }
+  var xMarks=[], yMarks=[]
+  for(var mm=0;mm<=length;mm++) {
+    var at=rulerX+Math.round(mm/physical.mmPerVpxX)
+    var tick=mm%10===0?10:mm%5===0?6:3
+    rect(at,rulerY,1,tick,mm%10===0?"ink":"line")
+    if(mm%10===0) {
+      xMarks.push({mm:mm,vpx:at-rulerX})
+      if(mm%labelStep===0) text(est+mm,at-3,rulerY+14,"muted")
+    }
+  }
+  var span=Math.round(length/physical.mmPerVpxX)
+  rect(rulerX,rulerY,span+1,1,"ink")
+  var caption="HOLD A RULER HERE / "+est+length+" mm / 1:1"
+  text(caption,Math.min(rulerX,w-26-glyphs.length(caption)*6-1),rulerY-22,"ink")
+  var noteX=narrow?w-218:(composition==="comparator"?w-318:Math.max(rulerX+span+36,w-318)), noteY=narrow?h-40:h-102
+  text("1 vpx = "+est+physical.mmPerVpxX.toFixed(2)+" mm",noteX,noteY,"muted")
+  if(!narrow) {
+    text("MARK ERROR <= "+(Math.ceil(physical.mmPerVpxX/2*100)/100).toFixed(2)+" mm",noteX,noteY+16,"muted")
+    text("EDID "+(input.physicalWidth||0)+" x "+(input.physicalHeight||0)+" mm / "+physical.source,noteX,noteY+38,"muted")
+    text(physical.widthPx+" x "+physical.heightPx+" / "+ps+" px PER vpx",noteX,noteY+54,"muted")
+  }
+  text("DRAWN BY quadrille / REV 02",32,h-40,"muted")
+  return {width:w,height:h,pixelWidth:physical.widthPx,pixelHeight:physical.heightPx,
+    strokes:strokes,labels:labels,plates:plates,bodies:bodies,dimensions:dimensions,xMarks:xMarks,yMarks:yMarks,
+    ruler:{x:rulerX,y:rulerY,length:length,labelStep:labelStep},composition:composition}
+}
+
+function paint(ctx, drawing, phys, colors, background, dpr) {
+  ctx.reset(); ctx.scale(1/dpr,1/dpr)
+  ctx.clearRect(0,0,drawing.pixelWidth,drawing.pixelHeight)
+  if(background) {ctx.fillStyle=colors.void;ctx.fillRect(0,0,drawing.pixelWidth,drawing.pixelHeight)}
+  var last=""
+  for(var i=0;i<drawing.strokes.length;i++) {
+    var s=drawing.strokes[i]
+    if(last!==s.role) {ctx.fillStyle=colors[s.role];last=s.role}
+    ctx.fillRect(s.x*phys,s.y*phys,s.w*phys,s.h*phys)
   }
 }

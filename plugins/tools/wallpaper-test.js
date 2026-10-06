@@ -1,59 +1,70 @@
 #!/usr/bin/env node
-// The actual painter's plan, using the same physical cases as Rust and QML.
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const assert = require('node:assert/strict');
-const repo = path.resolve(__dirname, '../..');
-function library(file) {
-  const context = vm.createContext({});
-  vm.runInContext(fs.readFileSync(path.join(repo, file), 'utf8').replace(/^\.pragma library\s*$/m, ''), context);
-  return context;
+// Geometry assertions for the real drawing plan; --json emits the render matrix.
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'../..');
+function lib(file,globals={}) {
+  const ctx=vm.createContext(globals);
+  vm.runInContext(fs.readFileSync(path.join(root,file),'utf8').replace(/^\.(pragma|import).*$/gm,''),ctx);return ctx;
 }
-const physical = library('plugins/quadrille.background/Physical.js');
-const drafting = library('plugins/quadrille.background/Drafting.js');
-const glyphs = library('plugins/quadrille.bar/Q/Glyphs.js');
-const vectors = JSON.parse(fs.readFileSync(path.join(repo, 'docs/physical-vectors.json'), 'utf8'));
-const metrics = {};
-for (const vector of vectors.cases) {
-  const p = physical.resolve(vector.input, vector.overrides);
-  const drawing = drafting.plan(vector.input, p, [{ input: vector.input, physical: p }], glyphs, 16);
-  assert.equal(drawing.width, Math.floor(p.widthPx / p.pixelsPerVpx));
-  assert.equal(drawing.height, Math.floor(p.heightPx / p.pixelsPerVpx));
-  for (const stroke of drawing.strokes) {
-    for (const key of ['x', 'y', 'w', 'h']) assert(Number.isInteger(stroke[key]), `${vector.id}: ${key}`);
-    assert(stroke.w > 0 && stroke.h > 0);
-    assert(stroke.x >= 0 && stroke.y >= 0 && (stroke.x + stroke.w) * p.pixelsPerVpx <= p.widthPx &&
-      (stroke.y + stroke.h) * p.pixelsPerVpx <= p.heightPx, `${vector.id}: clipped virtual pixel stroke`);
+const physical=lib('plugins/quadrille.background/Physical.js');
+const drafting=lib('plugins/quadrille.background/Drafting.js');
+const glyphs=lib('plugins/quadrille.bar/Q/Glyphs.js');
+const big=lib('plugins/quadrille.bar/Q/GlyphsBig.js',{Glyphs:glyphs});
+const vectors=JSON.parse(fs.readFileSync(path.join(root,'docs/physical-vectors.json')));
+const laptop={...vectors.cases.find(v=>v.id==='laptop').input,make:'AU Optronics',model:'0x07B2',x:0,y:0};
+const dell={...vectors.cases.find(v=>v.id==='ultrawide').input,model:'DELL U3417W',x:-952,y:-1440};
+const layouts={real:[laptop,dell],vertical:[laptop,{...dell,x:0,y:-1440}],side:[laptop,{...dell,x:1536,y:0}],
+  three:[laptop,dell,{...laptop,name:'DP-1',x:1536,y:0}],portrait:[{...laptop,transform:1}],single:[laptop],
+  estimated:[{...laptop,name:'Virtual-1',physicalWidth:0,physicalHeight:0}]};
+const matrix=[];
+function check(input,outputs,composition,overrides={}) {
+  const p=physical.resolve(input,overrides), monitors=outputs.map(input=>({input,physical:physical.resolve(input,overrides)}));
+  const d=drafting.plan(input,p,monitors,glyphs,16,big,composition);
+  for(const s of d.strokes) {
+    for(const k of ['x','y','w','h']) assert(Number.isInteger(s[k]));
+    assert(s.x>=0&&s.y>=0&&s.w>0&&s.h>0&&s.x+s.w<=d.width&&s.y+s.h<=d.height);
   }
-  for (const label of drawing.labels) assert(glyphs.length(label.text) * 6 + 1 <= label.room, `${vector.id}: cut label`);
-  for (const [marks, pixels, density] of [[drawing.xMarks, p.widthPx, p.pxPerMmX], [drawing.yMarks, p.heightPx, p.pxPerMmY]]) {
-    for (const mark of marks) {
-      const error = Math.abs(mark.vpx * p.pixelsPerVpx - (pixels / 2 + mark.mm * density));
-      assert(error <= p.pixelsPerVpx / 2 + 1e-9, `${vector.id}: ruler error ${error}`);
+  for(let i=0;i<d.labels.length;i++) {
+    const a=d.labels[i];assert(a.x>=24&&a.y>=32&&a.x+a.w<=d.width-24&&a.y+a.h<=d.height-24);
+    for(const b of d.labels.slice(0,i)) assert(!drafting.overlaps(a,b,2),`labels ${a.text}/${b.text}`);
+    for(const b of d.bodies) assert(!drafting.overlaps(a,b),`label inside body: ${a.text} ${JSON.stringify(a)} ${JSON.stringify(b)}`);
+  }
+  for(let i=0;i<d.dimensions.length;i++) {
+    const dim=d.dimensions[i];
+    for(const b of d.bodies) assert(!drafting.overlaps(dim.label,b),`dimension inside body ${dim.output}`);
+  }
+  for(const m of d.xMarks) assert(Math.abs(m.vpx*p.pixelsPerVpx-m.mm*p.pxPerMmX)<=p.pixelsPerVpx/2+1e-9);
+  for(let i=1;i<d.xMarks.length;i++) {
+    const step=d.xMarks[i].vpx-d.xMarks[i-1].vpx, ideal=10/p.mmPerVpxX;
+    assert([Math.floor(ideal),Math.ceil(ideal)].includes(step),'inconsistent ruler steps');
+  }
+  if(d.width>=533) {
+    assert(d.labels.some(l=>l.text.includes('HOLD A RULER HERE')),`${input.name}/${composition}: missing ruler caption`);
+    assert(d.labels.some(l=>l.text.startsWith('1 vpx = ')),`${input.name}/${composition}/${input.scale}/${input.transform}: missing quantisation`);
+    assert(d.labels.some(l=>l.text==='DRAWN BY quadrille / REV 02'),`${input.name}/${composition}: missing revision`);
+    for(let mm=0;mm<=d.ruler.length;mm+=d.ruler.labelStep) {
+      const x=d.ruler.x+Math.round(mm/p.mmPerVpxX)-3;
+      assert(d.labels.some(l=>l.text===(p.estimated?'~':'')+mm&&l.x===x&&l.y===d.ruler.y+14),
+        `${input.name}/${composition}: inconsistent ruler label at ${mm}`);
     }
-    const ideal = 10 * density / p.pixelsPerVpx;
-    for (let i = 1; i < marks.length; i++) assert([Math.floor(ideal), Math.ceil(ideal)].includes(marks[i].vpx - marks[i - 1].vpx));
   }
-  if (p.estimated) assert(drawing.labels.some(label => label.text.startsWith('1 vpx = ~')));
-  assert(drawing.labels.every(label => !/inches|\bPPI\b/.test(label.text)));
-  if (['laptop', 'ultrawide'].includes(vector.id)) {
-    const intervals = drawing.xMarks.slice(1).map((mark, i) => (mark.vpx - drawing.xMarks[i].vpx) * p.pixelsPerVpx);
-    const errors = drawing.xMarks.map(mark => Math.abs(mark.vpx * p.pixelsPerVpx - (p.widthPx / 2 + mark.mm * p.pxPerMmX)));
-    metrics[vector.id] = { idealPxPer10Mm: 10 * p.pxPerMmX, intervalsPx: [...new Set(intervals)].sort((a, b) => a - b),
-      maxAbsoluteMarkErrorPx: Math.max(...errors), maxIntervalErrorPx: Math.max(...intervals.map(i => Math.abs(i - 10 * p.pxPerMmX))),
-      pixelsPerVpx: p.pixelsPerVpx, xMarks: drawing.xMarks, yMarks: drawing.yMarks };
+  return d;
+}
+for(const scale of [1,1.666667]) for(const [name,list] of Object.entries(layouts)) {
+  for(let current=0;current<list.length;current++) {
+    const outputs=list.map(m=>({...m})); outputs[current].scale=scale;
+    if(['real','vertical','three'].includes(name)) outputs[1].y=-outputs[1].height/outputs[1].scale;
+    if(name==='side') outputs[1].x=outputs[0].width/outputs[0].scale;
+    if(name==='three') outputs[2].x=outputs[0].width/outputs[0].scale;
+    for(const composition of ['atlas','comparator','section']) {
+      try {check(outputs[current],outputs,composition);} catch(e) {console.error(name,current,scale,composition);throw e;}
+    }
+    const drawing=check(outputs[current],outputs,'atlas');
+    matrix.push({ruler:drawing.ruler,marks:drawing.xMarks,id:`${name}-${current}-${scale}`,name,scale,current,outputs});
   }
 }
-const laptop = vectors.cases.find(v => v.id === 'laptop');
-const ultrawide = vectors.cases.find(v => v.id === 'ultrawide');
-const monitors = [{ input: { ...laptop.input, x: 0, y: 0 }, physical: physical.resolve(laptop.input, {}) },
-  { input: { ...ultrawide.input, x: -952, y: -1440 }, physical: physical.resolve(ultrawide.input, {}) }];
-const arrangement = drafting.layout(monitors);
-assert.equal(arrangement[0].monitor.input.name, 'eDP-2');
-assert(Math.abs(arrangement[1].y + arrangement[1].monitor.physical.heightMm) < 1e-9, 'shared compositor edge');
-const flipped = drafting.layout([monitors[0], { input: { ...ultrawide.input, x: 1536, y: 0 }, physical: monitors[1].physical }]);
-assert(Math.abs(flipped[1].x - monitors[0].physical.widthMm) < 0.001, 'different-DPI horizontal adjacency');
-if (process.argv[2]) fs.writeFileSync(process.argv[2], JSON.stringify(metrics, null, 2));
-console.log(`wallpaper: ${vectors.cases.length} physical cases, virtual-grid strokes, dropped labels, rulers and mixed-DPI adjacency pass`);
-for (const [name, value] of Object.entries(metrics)) console.log(`${name}: ${value.idealPxPer10Mm.toFixed(6)} px/10 mm; intervals ${value.intervalsPx.join('/')}; max mark error ${value.maxAbsoluteMarkErrorPx.toFixed(6)} px`);
+for(const v of vectors.cases) check(v.input,[v.input],'atlas',v.overrides);
+const arr=drafting.layout([laptop,dell].map(input=>({input,physical:physical.resolve(input,{})})));
+assert(Math.abs(arr[1].y+arr[1].monitor.physical.heightMm)<1e-9);
+if(process.argv[2]==='--json') fs.writeFileSync(process.argv[3],JSON.stringify(matrix));
+console.log(`wallpaper: ${matrix.length} layouts x 3 compositions; bounds, collisions, complete ruler captions and exact mark steps pass`);

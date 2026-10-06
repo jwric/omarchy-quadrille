@@ -6,12 +6,9 @@ Omarchy themes, Departure Mono drawn without antialiasing in every toolkit, a
 whole-pixel QML bar, menu, OSD and notifications for the Omarchy shell, and
 panels drawn by quadrille itself as Wayland layer-shell surfaces.
 
-The desktop is a metric drafting graticule. Each output gets a centre-zero
-wallpaper calibrated to its physical panel, millimetre ticks, centimetre grid
-and edge rulers, a display spec plate, and a drawing of the output arrangement
-at one physical scale. The drawing describes compositor crossings and offsets.
-An always-on, click-through cursor reticle in the Rust host shows millimetres
-from the output's top-left and centre, above application windows.
+The desktop is a calibrated drawing set: active monitor elevations, a true-size
+100 mm ruler and a sparse sheet frame. Its click-through cursor draws live CAD
+measurements after resting for 300 ms; moving leaves only a small drafting reticle.
 
 ![The five themes, as the bar draws them](plugins/screenshots/themes.png)
 
@@ -75,23 +72,16 @@ pixels (`tools/gen_themes.py --unit`).
 
 ## Display calibration and cursor overlay
 
-The physical model corrects centimetre-rounded EDID sizes by snapping the
-diagonal to a nearby nominal panel size and deriving width and height from
-the native square-pixel aspect ratio. The laptop resolves to about
-344.6 × 215.4 mm. The Dell's rounded EDID diagonal is nearest to 34.1 in the
-nominal-size list, giving 799.0 × 334.4 mm; use a measured override for its
-actual 797.8 × 333.9 mm. Each millimetre mark is
-rounded to the nearest virtual pixel; individual marks are accurate within
-half a virtual pixel. The spec plate states the physical size of one vpx.
-At the laptop's 3-physical-pixel unit this is 0.40 mm; at the ultrawide's
-2-pixel unit it is 0.46 mm.
-Two independently snapped marks can differ in their gap by up to one vpx;
-the half-vpx bound applies to each mark's physical position.
-With missing EDID dimensions the model assumes 96 PPI and prefixes dimensions
-with `~`; an override removes that estimate.
+Centimetre-rounded EDID is snapped to a nominal panel family, then width and
+height follow the native pixel aspect. This machine resolves to 344.6 × 215.4 mm
+and 796.6 × 333.5 mm; these are inferred sizes. A mark rounds to the nearest vpx:
+0.404 mm on the laptop, 0.463 mm on the Dell. The sheet's mark-error bound is
+half a vpx, conservatively rounded upward; it is not a calibration guarantee.
+Missing EDID uses an explicitly estimated density and `~` labels.
 
 An optional `~/.config/quadrille/displays.toml` supplies measured dimensions.
-Nothing creates it by default. Output names take priority over make/model keys:
+Nothing creates it by default. Replace these example sizes with measurements;
+output names take priority over make/model keys:
 
 ```toml
 ["eDP-2"]
@@ -99,8 +89,8 @@ width_mm = 344.6
 height_mm = 215.4
 
 ["Dell Inc. DELL U3417W"]
-width_mm = 797.8
-height_mm = 333.9
+width_mm = 797.2
+height_mm = 333.7
 # Alternatively, diagonal_inches = 34.0 (without width_mm/height_mm).
 ```
 
@@ -118,19 +108,20 @@ quadrille-bar ctl overlay off
 quadrille-bar ctl overlay status
 ```
 
-The runtime switch lasts until the host exits. Wallpaper calibration is part
-of the theme. The cursor uses Hyprland IPC, polls faster while moving and
-slower while still, and hides while fullscreen or locked.
-The host applies a namespace-specific runtime layer rule to stop Hyprland
-animating the reticle's position; it disables that rule when the overlay stops.
-After editing calibration, `quadrille-bar ctl overlay off` followed by
-`quadrille-bar ctl overlay on` reloads it; the wallpaper watches the file.
+The switch lasts until the host exits. Cursor IPC adapts from 60 Hz to 5 Hz;
+fullscreen and lock suppress both surfaces. Rest shows the nearest horizontal
+and vertical screen distances (`S`) and, over a visible window, its nearest
+horizontal and vertical edges (`W`). Plates avoid one another; spanning-window
+edges on another output are omitted. Values are whole millimetres because IPC
+reports whole logical pixels. Movement destroys the larger dimension surface
+and returns its memory. Only read-only compositor IPC is sent by the host.
 
-Hyprland 0.56.2 [floors cursor IPC coordinates to whole logical pixels](https://github.com/hyprwm/Hyprland/blob/efb50993780079460b0cbed1363e2166a2de1d9f/src/debug/HyprCtl.cpp#L1291-L1304).
-The reticle is exact on the physical grid for the reported coordinate. At
-fractional scales, IPC loses the pointer's sub-logical position and can select
-the neighbouring vpx. Exact tracking of every actual pointer pixel requires
-a compositor API exposing that precision.
+If a compositor configuration still fades layers, this **optional** line belongs
+in the user's own Lua config (the host never installs it):
+`hl.layer_rule({match={namespace="^quadrille-(reticle|dimensions)$"},no_anim=true})`
+
+Off/on reloads display overrides. The wallpaper watches existing overrides;
+`omarchy-shell background refresh` also loads a newly created file.
 
 ## What is not exact
 
@@ -143,10 +134,6 @@ a compositor API exposing that precision.
   filter, no launch feedback).
 - Physical calibration infers nominal diagonals from rounded EDID data. Use
   measured overrides when tighter physical accuracy matters.
-- The strict nested overlay hotplug check currently finds one-level colour
-  fringes after a headless output is recreated. Native buffers and geometry
-  are exact; compositor presentation remains unresolved. Live previews were
-  deferred because this check did not pass; see `layershell/NOTES.md`.
 
 ## Layout
 

@@ -1,319 +1,221 @@
 #!/usr/bin/env python3
-"""Check native buffers against the nested output, then measure host threads."""
+"""One nested-only overlay check: timing, CAD geometry, input, hotplug and cost.
+
+    python3 layershell/tools/overlay-test.py OUT
+
+Takes the live lock for at most 55 seconds; every vptr/dispatch targets nested.sh.
+Native ARGB dumps are enabled only during geometry checks. No live input or host.
+"""
+import argparse
 import json
-import atexit
 import math
 import os
+from pathlib import Path
 import re
 import signal
-from pathlib import Path
 import subprocess
 import sys
 import time
-
 from PIL import Image, ImageChops, ImageDraw
 
-HERE, OUT, PID = Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3])
-N = str(HERE / "tools/nested.sh")
-BIN = str(HERE / "target/release/quadrille-bar")
-CHILDREN = []
-MOVERS = []
+ROOT=Path(__file__).resolve().parents[1]
+N=ROOT/'tools/nested.sh'; BIN=ROOT/'target/release/quadrille-bar'
+children=[]
+holder=None
 
 
-def stop_child(child):
-    def descendants(pid):
-        try:
-            children = [int(p) for p in Path(f"/proc/{pid}/task/{pid}/children").read_text().split()]
-        except OSError:
-            return []
-        return [p for kid in children for p in descendants(kid)] + children
-    for pid in descendants(child.pid) + [child.pid]:
-        try:
-            os.kill(pid,signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-    try:
-        child.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        child.kill()
-        child.wait()
+def run(*args):
+    return subprocess.check_output(list(map(str,args)),text=True).strip()
 
 
-def cleanup_children():
-    for child in CHILDREN:
-        if child.poll() is None:
-            stop_child(child)
-            try:
-                child.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-
-
-atexit.register(cleanup_children)
-
-
-def run(*args, **kwargs):
-    return subprocess.check_output([str(a) for a in args], text=True, **kwargs).strip()
-
-
+def nc(*args): return run(N,'ctl',*args)
 def ctl(*args):
-    return run(BIN, "ctl", *args)
+    if os.environ.get('QUADRILLE_BAR_SOCKET') != 'quadrille-overlay-test.sock':
+        raise RuntimeError('refusing control without the isolated test socket')
+    return run(BIN,'ctl',*args)
+
+def launch(args,log,env=None):
+    p=subprocess.Popen(list(map(str,args)),stdout=log.open('w'),stderr=subprocess.STDOUT,env=env,start_new_session=True)
+    children.append(p); return p
 
 
-def cursor_queries():
-    return (OUT / "reticle.polls").read_text().splitlines().count("j/cursorpos")
-
-
-def frame():
-    metadata, pixels = (OUT / "reticle.frame").read_bytes().split(b"\n", 1)
-    return json.loads(metadata), pixels
-
-
-def wait_output(name, ps=None, scale=None, cursor=None):
-    for _ in range(40):
+def wait(predicate,timeout=2):
+    end=time.monotonic()+timeout
+    while time.monotonic()<end:
         try:
-            value, _ = frame()
-            if value["output"] == name and (ps is None or value["vpx"] == ps) and (scale is None or abs(value["scale"] - scale) < 0.00001) and (cursor is None or value["cursor"] == cursor):
-                return value
-        except (OSError, ValueError):
-            pass
-        time.sleep(0.05)
-    raise AssertionError(f"no reticle on {name} at pixel scale {ps}: {ctl('overlay', 'status')}")
+            value=predicate()
+            if value: return value
+        except (OSError,ValueError,subprocess.CalledProcessError): pass
+        time.sleep(.015)
+    raise AssertionError('condition timed out')
 
 
-def move(output, x, y, extent):
-    for old in MOVERS:
-        if old.poll() is None:
-            stop_child(old)
-    MOVERS.clear()
-    arguments=[N,"run","env",f"VPTR_EXTENT={extent}",str(HERE/"target/release/vptr"),output]
-    for _ in range(150):
-        arguments += ["move",str(x),str(y),"sleep","16"]
-    mover = subprocess.Popen(arguments, stdout=subprocess.DEVNULL)
-    CHILDREN.append(mover)
-    MOVERS.append(mover)
-    time.sleep(0.3)
-    return mover
+def frame(out):
+    meta,pixels=(out/'reticle.frame').read_bytes().split(b'\n',1)
+    return json.loads(meta),pixels
 
 
-def verify(name, x, y, extent, label):
-    mover = move(name, x, y, extent)
-    monitor = next(m for m in json.loads(run(N,"ctl","monitors","-j")) if m["name"] == name)
-    ew, eh = map(int, extent.split("x"))
-    scale = monitor["scale"]
-    expected = [monitor["x"] + math.floor(x * monitor["width"] / scale / ew), monitor["y"] + math.floor(y * monitor["height"] / scale / eh)]
-    info = wait_output(name, cursor=expected)
-    time.sleep(0.08)
-    info, pixels = frame()
-    assert info["output"] == name and info["cursor"] == expected, (label,info,expected)
-    (OUT / f"{label}.argb").write_bytes(pixels)
-    (OUT / f"{label}.json").write_text(json.dumps(info, indent=2))
-    width, height = info["size"]
-    raw = Image.frombytes("RGBA", (width, height), (OUT / f"{label}.argb").read_bytes(), "raw", "BGRA")
-    raw.save(OUT / f"{label}-buffer.png")
-    run(N, "ctl", "dismissnotify")
-    shot = OUT / f"{label}-output.png"
-    run(N, "run", "grim", "-o", name, shot)
-    image = Image.open(shot).convert("RGB")
-    (OUT / f"{label}-layers.txt").write_text(run(N, "ctl", "layers"))
-    ps, scale = info["vpx"], info["scale"]
-    left, top = [math.floor(value * scale + 0.5) for value in info["margin"]]
-    centre = [info["centre"][i] * ps + info["offset"][i] + [left, top][i] for i in (0, 1)]
-    assert centre == info["snapped"], (centre, info)
-    mask = raw.getchannel("A")
-    draw = ImageDraw.Draw(mask)
-    draw.rectangle((centre[0]-left-3, centre[1]-top-3, centre[0]-left+47, centre[1]-top+47), fill=0)
-    # Mask the cropped physical edges of outputs.
-    visible = Image.new("L", (width, height))
-    ImageDraw.Draw(visible).rectangle((max(0,-left),max(0,-top),min(width-1,image.width-left-1),min(height-1,image.height-top-1)),fill=255)
-    mask = ImageChops.multiply(mask, visible)
-    for attempt in range(10):
-        difference = ImageChops.difference(raw.convert("RGB"), image.crop((left,top,left+width,top+height)))
-        r, g, b = difference.split()
-        difference = ImageChops.multiply(ImageChops.lighter(ImageChops.lighter(r,g),b),mask)
-        bad = sum(difference.histogram()[1:])
-        if not bad:
-            break
-        time.sleep(0.12)
-        run(N, "run", "grim", "-o", name, shot)
-        image = Image.open(shot).convert("RGB")
-    if bad:
-        image.crop((left,top,left+width,top+height)).save(OUT / f"{label}-failure.png")
-        shot.unlink()
-        raise AssertionError(f"{label}: {bad} opaque pixels differ from the native buffer")
-    x0, y0 = max(0, centre[0] - 165 * ps), max(0, centre[1] - 55 * ps)
-    x0, y0 = x0 // ps * ps, y0 // ps * ps
-    x1, y1 = min(image.width // ps * ps, centre[0] + 165 * ps), min(image.height // ps * ps, centre[1] + 55 * ps)
-    crop = image.crop((x0, y0, x1, y1))
-    crop.save(OUT / f"{label}.png")
-    # The readout plate is free of the compositor's own cursor sprite.
-    plate_x = 0 if info["centre"][0] == 151 else 18
-    plate_y = 1 if info["centre"][1] == 41 else 18
-    px0, py0 = left + info["offset"][0] + plate_x * ps, top + info["offset"][1] + plate_y * ps
-    plate = image.crop((px0, py0, px0 + 142 * ps, py0 + 30 * ps))
-    plate.save(OUT / f"{label}-plate.png")
-    run("python3", HERE / "tools/crisp.py", OUT / f"{label}-plate.png", f"0,0,{plate.width},{plate.height}", ps, label, "--check")
-    shot.unlink()
-    stop_child(mover)
-    print(f"ok {label}: containing virtual pixel {centre}, exact residual {info['offset']}, native/screenshot pixels equal")
+def current(out,name,resting):
+    info,_=frame(out)
+    return info if info['output']==name and info['resting']==resting else None
 
 
-def cpu_ns():
-    return sum(int(p.read_text().split()[0]) for p in Path(f"/proc/{PID}/task").glob("*/schedstat"))
+def move(name,x,y):
+    global holder
+    if holder and holder.poll() is None:
+        os.killpg(holder.pid,signal.SIGTERM);holder.wait(timeout=2)
+    args=[N,'run','env',f'VPTR_EXTENT={"1536x960" if name=="QA" else "3440x1440"}',ROOT/'target/release/vptr',name]
+    for i in range(500):args+=['move',str(x),str(y),'sleep','16']
+    holder=launch(args,Path(os.environ['QUADRILLE_NESTED_DIR']).parent/'pointer.log')
+    time.sleep(.045)
 
 
-def rss_kb():
-    for line in Path(f"/proc/{PID}/status").read_text().splitlines():
-        if line.startswith("VmRSS:"):
-            return int(line.split()[1])
+def layers(): return nc('layers')
+def hidden(): return not re.search(r'namespace: quadrille-(reticle|dimensions)',layers())
 
 
-def cost(label, mover=None):
-    before, started = cpu_ns(), time.monotonic()
-    process = subprocess.Popen(mover, stdout=subprocess.DEVNULL) if mover else None
-    time.sleep(6)
-    if process:
-        process.wait(timeout=1)
-    seconds = time.monotonic() - started
-    ns = cpu_ns() - before
-    return {"state": label, "seconds": seconds, "cpu_ms": ns / 1e6,
-            "cpu_percent": ns / 1e9 / seconds * 100, "rss_kb": rss_kb()}
+def raster_check(out,name,label,resting=True):
+    info=wait(lambda: current(out,name,resting))
+    time.sleep(.08)
+    info,pixels=frame(out); w,h=info['size']; ps=info['vpx']
+    raw=Image.frombytes('RGBA',(w,h),pixels,'raw','BGRA')
+    left,top=[math.floor(v*info['scale']+.5) for v in info['margin']]
+    centre=[info['centre'][i]*ps+info['offset'][i]+[left,top][i] for i in [0,1]]
+    assert centre==info['snapped'],(centre,info)
+    mask=raw.getchannel('A'); draw=ImageDraw.Draw(mask)
+    gap=16 if resting else 4
+    draw.rectangle((centre[0]-left-gap,centre[1]-top-gap,centre[0]-left+100,centre[1]-top+100),fill=0)
+    assert mask.getbbox(), 'cursor exclusion must leave measurable marks'
+    # Inspect output-aligned native cells, even when logical margins have a residual.
+    aligned=Image.new('RGBA',((w+ps*2)//ps*ps,(h+ps*2)//ps*ps))
+    aligned.paste(raw,(left%ps,top%ps))
+    buffer=out/f'{label}-buffer.png';aligned.save(buffer)
+    run('python3',ROOT/'tools/crisp.py',buffer,f'0,0,{aligned.width},{aligned.height}',ps,'--check')
+    shot=out/f'{label}-screen.png';nc('dismissnotify');run(N,'run','grim','-o',name,shot)
+    screen=Image.open(shot).convert('RGB')
+    presented=screen.crop((left,top,left+w,top+h));shot.unlink()
+    edge=ImageDraw.Draw(mask)
+    if screen.width-left<w:edge.rectangle((screen.width-left,0,w,h),fill=0)
+    if screen.height-top<h:edge.rectangle((0,screen.height-top,w,h),fill=0)
+    diff=ImageChops.difference(raw.convert('RGB'),presented)
+    r,g,b=diff.split();diff=ImageChops.multiply(ImageChops.lighter(ImageChops.lighter(r,g),b),mask)
+    bad=sum(diff.histogram()[1:]);maximum=max(i for i,n in enumerate(diff.histogram()) if n)
+    if bad:diff.save(out/f'{label}-difference.png')
+    raw.save(out/f'{label}.png')
+    (out/f'{label}.json').write_text(json.dumps(info,indent=2))
+    print(f'{label}: {bad} differing opaque pixels, maximum channel delta {maximum}',flush=True)
+    return {'label':label,'bad':bad,'max_delta':maximum},info
 
 
-for _ in range(50):
-    try:
-        ctl("overlay", "status")
-        break
-    except subprocess.CalledProcessError:
-        time.sleep(0.1)
+def cpu(pid): return sum(int(p.read_text().split()[0]) for p in Path(f'/proc/{pid}/task').glob('*/schedstat'))
+def rss(pid): return int(next(l for l in Path(f'/proc/{pid}/status').read_text().splitlines() if l.startswith('VmRSS:')).split()[1])
+def cost(pid,label):
+    before=cpu(pid);started=time.monotonic();time.sleep(2)
+    dt=time.monotonic()-started
+    (Path(os.environ['QUADRILLE_NESTED_DIR']).parent/f'{label}.smaps').write_text(Path(f'/proc/{pid}/smaps').read_text())
+    return {'state':label,'cpu_percent':(cpu(pid)-before)/1e9/dt*100,'rss_mib':rss(pid)/1024,'seconds':dt}
 
-if not os.environ.get("QUADRILLE_OVERLAY_CONTROLS_ONLY"):
-    verify("QA", 103, 207, "1536x960", "QA-residual")
-    PID = int(re.search(r"namespace: quadrille-reticle, pid: (\d+)", run(N, "ctl", "layers")).group(1))
-    verify("QA", 39, 99, "15360x9600", "QA-fractional")
-    fractional = json.loads((OUT / "QA-fractional.json").read_text())
-    assert fractional["cursor"] == [20003.0, 9.0], fractional
-    assert fractional["snapped"] == [3, 15], fractional
-    assert [math.floor(value * 5 / 3 / 3) * 3 for value in (3.9, 9.9)] == [6, 15]
-    print("ok precision limit proven: actual fractional pointer vpx [6,15], IPC-reported vpx [3,15]")
-    verify("QA", 1500, 935, "1536x960", "QA-flip")
-    verify("QB", 113, 209, "3440x1440", "QB-residual")
-    verify("QB", 3380, 1370, "3440x1440", "QB-flip")
-    assert "off" in ctl("overlay", "off")
-    time.sleep(0.15)
-    assert "quadrille-reticle" not in run(N, "ctl", "layers")
-    assert "on" in ctl("overlay", "on")
-    scale_mover = move("QA", 400, 250, "1536x960")
-    for scale in [1, 2, 1.25, 1.666667]:
-        run(N, "ctl", "eval", f'hl.monitor({{output="QA",mode="2560x1600@60",position="20000x0",scale={scale}}})')
-        wait_output("QA", math.floor(2 * scale + 0.5), scale)
-        print(f"ok stationary pointer follows QA scale {scale}")
-    stop_child(scale_mover)
-    run(N, "ctl", "output", "remove", "QB")
-    time.sleep(0.15)
-    run(N, "ctl", "output", "create", "headless", "QB")
-    time.sleep(0.65)
-    verify("QB", 420, 300, "3440x1440", "QB-hotplug")
 
-else:
-    mover = move("QB",420,300,"3440x1440")
-    ctl("overlay","off")
-    ctl("overlay","on")
-    wait_output("QB")
-    PID = int(re.search(r"namespace: quadrille-reticle, pid: (\d+)", run(N,"ctl","layers")).group(1))
-    stop_child(mover)
+def main(out):
+    out.mkdir(parents=True,exist_ok=True)
+    for p in out.glob('reticle.*'):p.unlink()
+    os.environ.update(QUADRILLE_NESTED_DIR=str(out/'nested'),QUADRILLE_BAR_SOCKET='quadrille-overlay-test.sock')
+    home=out/'home';(home/'.config/quadrille').mkdir(parents=True,exist_ok=True)
+    (home/'.config/quadrille/displays.toml').write_text('[QA]\nwidth_mm=344.6265107477\nheight_mm=215.3915692173\n[QB]\nwidth_mm=796.620037497\nheight_mm=333.468852906\n')
+    capture=out/'reticle.capture';capture.touch()
+    run(N,'up');nc('eval','hl.config({animations={enabled=false}})');move('QB',420,300)
+    env=dict(os.environ,HOME=str(home),XDG_CONFIG_HOME=str(home/'.config'),QUADRILLE_RETICLE_DUMP=str(out/'reticle'),QUADRILLE_COMMANDS=str(ROOT/'tools/stubs'),
+             QUADRILLE_STUB_STATE=str(out/'stubs'),RUST_LOG='quadrille_bar=debug,iced_layer=debug',WAYLAND_DEBUG='1')
+    host=launch([N,'run',BIN,'--no-bar','--theme-dir',ROOT.parent/'themes/quadrille-terminal'],out/'host.log',env)
+    wait(lambda:'on' in ctl('overlay','status'));move('QB',420,300)
+    wait(lambda:current(out,'QB',True))
+    pid=int(re.search(r'namespace: quadrille-dimensions, pid: (\d+)',layers())[1])
+    evidence=[]; timings=[]
+    for name in ['QA','QB']:
+        for x,y in [(103,207),(700,500)]:
+            started=time.monotonic();move(name,x,y)
+            wait(lambda:current(out,name,False));assert 'quadrille-dimensions' not in layers()
+            wait(lambda:current(out,name,True));elapsed=time.monotonic()-started
+            assert .25<elapsed<2,elapsed;timings.append(elapsed)
+            actual=re.findall(r'namespace: quadrille-(?:dimensions|reticle), pid: '+str(pid),layers())
+            assert len(actual)==1,actual
+            e,_=raster_check(out,name,f'{name}-{x}-{y}');evidence.append(e)
+    decisions=[int(n) for n in re.findall(r'cursor rested (\d+) ms',(out/'host.log').read_text())]
+    assert decisions and all(300<=n<330 for n in decisions),decisions
+    print('rest detection seconds:',timings,'scheduler decisions ms:',decisions)
+    # Known floating rectangle, independently commanded then checked via j/clients.
+    move('QB',450,300)
+    fixture=launch([N,'run','foot','--app-id=quadrille-dimension-fixture','-e','sleep','50'],out/'fixture.log')
+    active=wait(lambda:json.loads(nc('activewindow','-j')).get('pid'))
+    for expr in ['hl.dsp.window.float({action="set"})','hl.dsp.window.resize({x=600,y=400,relative=false})',
+                 'hl.dsp.window.move({x=30100,y=100,relative=false})']:
+        nc('dispatch',expr)
+    time.sleep(.25)
+    c=next(c for c in json.loads(nc('clients','-j')) if c['pid']==active)
+    assert c['at']==[30100,100] and c['size']==[600,400],(c['at'],c['size'])
+    move('QB',450,300);wait(lambda:current(out,'QB',True));time.sleep(.1)
+    e,info=raster_check(out,'QB','window-600x400');evidence.append(e)
+    measured={(d['kind'],d['axis']):d['mm'] for d in info['dimensions']}
+    assert measured[('W','x')]==round(250*796.620037497/3440),measured
+    assert measured[('W','y')]==round(200*333.468852906/1440),measured
+    print('known window nearest-edge distances:',measured)
+    # Empty input region: a nested click passes through and focuses the fixture.
+    move('QB',450,300);run(N,'run','env','VPTR_EXTENT=3440x1440',ROOT/'target/release/vptr','QB','click','sleep','50')
+    assert json.loads(nc('activewindow','-j'))['pid']==active
+    nc('dispatch','hl.dsp.window.fullscreen({mode="fullscreen",action="set"})')
+    wait(lambda:'fullscreen' in ctl('overlay','status'));wait(hidden)
+    rows=[cost(pid,'still_suppressed')]
+    os.kill(active,signal.SIGTERM);fixture.wait(timeout=2)
+    move('QB',420,300);wait(lambda:current(out,'QB',True))
+    # Session lock belongs exclusively to the nested compositor; no PAM.
+    lock=out/'lock.qml';lock.write_text('import Quickshell\nimport Quickshell.Wayland\nimport Quickshell.Io\nShellRoot { WlSessionLock { id: l; locked: false; WlSessionLockSurface {color: "black"} } IpcHandler { target: "overlaytest"; function lock(): void { l.locked=true } function unlock(): void { l.locked=false } } }')
+    locker=launch([N,'run','quickshell','-p',lock],out/'lock.log');time.sleep(.4)
+    run(N,'run','quickshell','ipc','-p',lock,'call','overlaytest','lock');wait(lambda:'locked' in ctl('overlay','status'));wait(hidden)
+    run(N,'run','quickshell','ipc','-p',lock,'call','overlaytest','unlock');time.sleep(.25)
+    # Exactly-sized bar control; sampling freezes so before/after content matches.
+    control_env=dict(env,QUADRILLE_BAR_SOCKET='quadrille-overlay-control.sock');control_env.pop('QUADRILLE_RETICLE_DUMP')
+    control=launch([N,'run',BIN,'--no-overlay','--output','QB','--bar-tick-ms','0','--theme-dir',ROOT.parent/'themes/quadrille-terminal'],out/'control.log',control_env)
+    time.sleep(.35)
+    move('QB',420,300);wait(lambda:current(out,'QB',True))
+    for label in ['before-hotplug','after-hotplug']:
+        if label.startswith('after'):
+            nc('output','remove','QB');time.sleep(.12);assert 'output QB' not in ctl('overlay','status')
+            nc('output','create','headless','QB');time.sleep(.4);move('QB',420,300)
+        e,_=raster_check(out,'QB',label);evidence.append(e)
+        for step in [0,1]:
+            move('QB',430+step*20,310);e,_=raster_check(out,'QB',label+f'-small-{step}',False);evidence.append(e)
+        shot=out/f'{label}-control.png';move('QA',300,200);time.sleep(.04)
+        run(N,'run','grim','-o','QB',shot)
+        im=Image.open(shot).crop((0,0,240,64));im.save(shot)
+        result=subprocess.run(['python3',str(ROOT/'tools/crisp.py'),str(shot),'0,0,240,64','2','--check'],stdout=(out/f'{label}-control.crisp.log').open('w'),stderr=subprocess.STDOUT)
+        evidence.append({'label':label+'-bar-control','crisp':result.returncode==0})
+    capture.unlink();move('QB',420,300);time.sleep(.5)
+    rows.append(cost(pid,'resting_dimensions'))
+    # Continuous motion outlasts the sample; its surfaces stay small.
+    args=[N,'run','env','VPTR_EXTENT=3440x1440',ROOT/'target/release/vptr','QB']
+    for i in range(150): args+=['move',str(400+i%100),'300','sleep','16']
+    if holder and holder.poll() is None:os.killpg(holder.pid,signal.SIGTERM);holder.wait(timeout=2)
+    mover=launch(args,out/'mover.log');time.sleep(.15);rows.append(cost(pid,'moving'))
+    os.killpg(mover.pid,signal.SIGTERM);mover.wait(timeout=2)
+    ctl('overlay','off');time.sleep(.2);wait(hidden);rows.append(cost(pid,'off'))
+    (out/'cost.json').write_text(json.dumps(rows,indent=2));(out/'evidence.json').write_text(json.dumps({'timings':timings,'comparisons':evidence,'window':measured.__repr__()},indent=2))
+    assert rows[1]['rss_mib']-rows[2]['rss_mib']>10 and abs(rows[0]['rss_mib']-rows[3]['rss_mib'])<3,rows
+    assert all(e.get('bad',0)==0 for e in evidence),evidence
+    for row in rows:print(f"{row['state']}: {row['cpu_percent']:.3f}% core, {row['rss_mib']:.2f} MiB RSS")
+    assert all(row['cpu_percent']<.5 for row in rows if row['state']!='moving'),rows
+    assert rows[2]['cpu_percent']<5,rows
+    ctl('quit')
 
-# The reticle never claims pointer or keyboard input from the panel beneath it.
-ctl("summon", "audio", '{"output":"QB"}')
-time.sleep(0.45)
-run(N, "run", "wtype", "-k", "Home")
-time.sleep(0.1)
-assert "key Home" in (OUT / "host.log").read_text()
-fx, fy, fw, fh = map(float, ctl("find", "mpv").split())
-layers = run(N, "ctl", "layers")
-box = re.search(r"xywh: (-?\d+) (-?\d+) (\d+) (\d+), a: \d+, namespace: quadrille-audio", layers)
-assert box, layers
-mx, my = map(int, box.groups()[:2])
-output = next(m for m in json.loads(run(N, "ctl", "monitors", "-j")) if m["name"] == "QB")
-qx, qy = float(output["x"]), float(output["y"])
-cx, cy = round(mx - qx + (fx + fw / 2) * 2), round(my - qy + (fy + fh / 2) * 2)
-run(N, "run", "env", "VPTR_EXTENT=3440x1440", HERE / "target/release/vptr", "QB", "move", cx, cy, "sleep", 250, "click", "sleep", 250)
-assert "pactl set-sink-input-mute 42 toggle" in (OUT / "stubs/calls.log").read_text()
-ctl("hide")
-time.sleep(0.2)
-print("ok reticle passes pointer click and keyboard to the underlying panel")
 
-# A blank nested window proves compositor fullscreen inhibition.
-foot_log = open(OUT / "fullscreen.log", "w")
-foot = subprocess.Popen([N, "run", "foot", "--app-id=quadrille-overlay-fixture", "-e", "sleep", "15"], stdout=foot_log, stderr=foot_log)
-CHILDREN.append(foot)
-time.sleep(0.4)
-active = json.loads(run(N,"ctl","activewindow","-j"))
-assert active["class"] == "quadrille-overlay-fixture", active.get("class")
-run(N, "ctl", "dispatch", 'hl.dsp.window.fullscreen({mode="fullscreen"})')
-time.sleep(0.25)
-assert "fullscreen" in ctl("overlay", "status")
-assert "quadrille-reticle" not in run(N, "ctl", "layers")
-before = cursor_queries()
-time.sleep(0.25)
-assert cursor_queries() == before
-os.kill(active["pid"],signal.SIGTERM)
-foot.wait(timeout=2)
-time.sleep(0.25)
-print("ok fullscreen unmaps the reticle and leaving it resumes")
-
-# This is only the nested compositor's lock, with no PAM or real-session action.
-lock_qml = OUT / "lock.qml"
-lock_qml.write_text('''import Quickshell
-import Quickshell.Wayland
-import Quickshell.Io
-ShellRoot {
-  WlSessionLock { id: sessionLock; locked: false
-    WlSessionLockSurface { color: "black" }
-  }
-  IpcHandler { target: "reticletest"
-    function lock(): void { sessionLock.locked = true }
-    function unlock(): void { sessionLock.locked = false }
-  }
-}
-''')
-lock_log = open(OUT / "lock.log", "w")
-locker = subprocess.Popen([N, "run", "quickshell", "-p", str(lock_qml)], stdout=lock_log, stderr=lock_log)
-CHILDREN.append(locker)
-time.sleep(0.5)
-run(N, "run", "quickshell", "ipc", "-p", lock_qml, "call", "reticletest", "lock")
-time.sleep(0.4)
-assert json.loads(run(N, "ctl", "locked", "-j"))["locked"]
-assert "locked" in ctl("overlay", "status")
-assert "quadrille-reticle" not in run(N, "ctl", "layers")
-before = cursor_queries()
-time.sleep(0.25)
-assert cursor_queries() == before
-run(N, "run", "quickshell", "ipc", "-p", lock_qml, "call", "reticletest", "unlock")
-time.sleep(0.4)
-assert not json.loads(run(N, "ctl", "locked", "-j"))["locked"]
-stop_child(locker)
-locker.wait(timeout=2)
-mover = move("QB", 420, 300, "3440x1440")
-wait_output("QB",cursor=[qx+420,qy+300])
-stop_child(mover)
-assert "output QB" in ctl("overlay", "status")
-print("ok nested session lock unmaps the reticle and unlocking resumes")
-(OUT / "reticle.capture").unlink()
-time.sleep(0.5)
-numbers = [cost("idle")]
-args = [N, "run", "env", "VPTR_EXTENT=3440x1440", str(HERE / "target/release/vptr"), "QB"]
-for index in range(350):
-    args += ["move", str(400 + index % 200), "300", "sleep", "16"]
-numbers += [cost("moving", args)]
-ctl("overlay", "off")
-time.sleep(0.3)
-numbers += [cost("off")]
-(OUT / "cost.json").write_text(json.dumps(numbers, indent=2))
-for row in numbers:
-    print(f"{row['state']}: {row['cpu_ms']:.2f} ms / {row['seconds']:.2f} s = {row['cpu_percent']:.3f}% core; RSS {row['rss_kb']/1024:.2f} MiB")
-assert numbers[0]["cpu_percent"] < 0.5
-assert numbers[1]["cpu_percent"] < 5
-assert numbers[2]["cpu_ms"] < 5
-ctl("quit")
+if __name__=='__main__':
+    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('out',type=Path);ap.add_argument('--locked',action='store_true');args=ap.parse_args()
+    out=args.out.resolve()
+    if not args.locked:
+        sys.exit(subprocess.call(['flock','-o','-w','900','/tmp/quadrille-live.lock','timeout','-k','2','55',sys.executable,__file__,str(out),'--locked']))
+    try:main(out)
+    finally:
+        for child in reversed(children):
+            if child.poll() is None:
+                try:os.killpg(child.pid,signal.SIGTERM);child.wait(timeout=2)
+                except (ProcessLookupError,subprocess.TimeoutExpired):pass
+        subprocess.run([str(N),'down'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)

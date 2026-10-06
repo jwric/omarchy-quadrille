@@ -396,6 +396,32 @@ fn physical_size(logical: (u32, u32), scale: f64) -> Size<u32> {
     )
 }
 
+// Large resting overlays are transient. After the last declaration drops,
+// return glibc's free arena pages as well as the Wayland pool's mappings.
+fn release_raster(settings: Option<SurfaceSettings>) {
+    if let Some(raster) = settings.as_ref().and_then(|s| s.raster.as_ref()) {
+        log::debug!(
+            "release raster: {} bytes, {} remaining references",
+            raster.pixels.len(),
+            std::sync::Arc::strong_count(&raster.pixels)
+        );
+    }
+    let large = settings
+        .as_ref()
+        .and_then(|s| s.raster.as_ref())
+        .is_some_and(|r| r.pixels.len() >= 1024 * 1024);
+    drop(settings);
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    if large {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+        // No live allocation is touched; only pages already free in the arena.
+        let returned = unsafe { malloc_trim(0) };
+        log::debug!("release raster: malloc_trim returned {returned}");
+    }
+}
+
 fn retain_retries(
     closed: &mut HashMap<window::Id, Instant>,
     wanted: &HashMap<window::Id, SurfaceSettings>,
@@ -575,7 +601,7 @@ where
 
                 let _ = windows.remove(&id);
                 wl.destroy_surface(id);
-                let _ = declared.remove(&id);
+                release_raster(declared.remove(&id));
             }
         }
 
@@ -699,7 +725,7 @@ where
 
                 let _ = windows.remove(&id);
                 wl.destroy_surface(id);
-                let _ = declared.remove(&id);
+                release_raster(declared.remove(&id));
                 let _ = closed_at.insert(id, Instant::now());
 
                 continue;

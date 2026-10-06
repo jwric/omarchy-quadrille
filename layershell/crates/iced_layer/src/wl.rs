@@ -311,6 +311,7 @@ pub struct Surface {
     pub version: u64,
     raster_pool: Option<SlotPool>,
     raster_presented: Option<RasterBuffer>,
+    raster_geometry_dirty: bool,
 }
 
 impl Surface {
@@ -684,6 +685,7 @@ impl Wl {
                 version: 0,
                 raster_pool: None,
                 raster_presented: None,
+                raster_geometry_dirty: true,
             },
         );
     }
@@ -752,10 +754,23 @@ impl Wl {
         let Some(raster) = surface.settings.raster.clone() else {
             return Ok(());
         };
-        if !surface.is_ready() || surface.raster_presented.as_ref() == Some(&raster) {
+        if !surface.is_ready() {
+            return Ok(());
+        }
+        if surface.raster_presented.as_ref() == Some(&raster) {
+            if surface.raster_geometry_dirty {
+                let surface = self.surfaces.get_mut(&id).expect("The surface exists");
+                surface.layer.commit();
+                surface.raster_geometry_dirty = false;
+            }
             return Ok(());
         }
         let logical = surface.configured.expect("A ready surface has its size");
+        log::debug!(
+            "native raster {id:?}: buffer {:?}, destination {logical:?}, scale {}",
+            raster.size,
+            surface.scale
+        );
         self.set_destination(id, logical);
         let surface = self.surfaces.get_mut(&id).expect("The surface exists");
         if surface.raster_pool.is_none() {
@@ -784,6 +799,7 @@ impl Wl {
             .damage_buffer(0, 0, raster.size.0 as i32, raster.size.1 as i32);
         surface.layer.commit();
         surface.raster_presented = Some(raster);
+        surface.raster_geometry_dirty = false;
         Ok(())
     }
 
@@ -822,6 +838,7 @@ impl Wl {
         }
 
         surface.applied = Some(wanted);
+        surface.raster_geometry_dirty = true;
         if surface.settings.raster.is_none() || size_changed {
             surface.layer.commit();
         }
@@ -1331,6 +1348,7 @@ impl Dispatch<WpFractionalScaleV1, FractionalData> for Wl {
         _: &QueueHandle<Self>,
     ) {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            log::debug!("fractional scale {:?}: {scale}/120", data.0);
             state.set_scale(data.0, f64::from(scale) / 120.0);
         }
     }
