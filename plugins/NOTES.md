@@ -1097,3 +1097,82 @@ when the cause here was making the same rows again. The lesson for a popup is no
 differently", it is **never give a Repeater a model that is a new array each time something
 changes**: give it a count, or a model that is edited in place. If a popup is ever slow to open again:
 `FRAMES=45 flock -o ... popups.sh QA "<case>"`, `timeline.py QA <case>`, look for `gap=`.
+
+
+## Physically calibrated drafting wallpaper (2026-10-06)
+
+`quadrille.background` now paints measuring marks and drafting plates instead of
+resampling a theme PNG. The existing background IPC, photograph transitions,
+selector double clicks, and shader-error PNG fallback remain. `install.sh` already
+links/enables the background clone; `stock.sh` disables it and restores the stock
+service, so neither script needed another change. `gen_themes.py` is unchanged.
+
+`Physical.js` supplies the same calibrated dimensions as the Rust host, tested
+against `docs/physical-vectors.json`. Every millimetre mark is rounded from the
+physical centre to the nearest virtual pixel; 10 mm grid lines use `edge`, 50 mm
+ones use the stronger `line` with the same one-vpx thickness. Edge rulers have 1/5/10 mm ticks
+and signed centimetre labels in native `Glyphs.js` bitmaps. Labels that collide
+are dropped. Their `void` backing keeps grid lines out of the letters. The top
+ruler is inset by `Px.barVpx`, keeping it below the normal bar.
+
+The lower right spec plate states the output, make/model, mode/refresh, metric
+size/diagonal, density, scale and millimetres per vpx. Estimated dimensions have
+`tildes` and an `est.` note. The lower left drawing uses one whole millimetres-per-
+vpx scale for all outputs and solid 45-degree dimension arrows. Its current output
+is solid with HERE. On narrow rotated outputs the drawing stacks above the spec
+plate. Physical extents belong to each output; a graph rooted nearest compositor
+(0,0) preserves adjacent edges, and relative offsets/gaps use the displaced
+output's own mm-per-logical-pixel. Different DPI screens do not define one global
+physical coordinate system: this is a cursor-layout drawing, expressly labelled
+as such, rather than a drawing of the monitors on the desk.
+
+The Bayer glow remains in `graticule.frag.qsb`; all marks and lettering share a
+static Canvas.Image raster. Qt's Context2D already multiplies by DPR: painting
+physical coordinates needs an inverse-DPR transform, otherwise a 3 px line on
+1.666667 becomes 5 px. No smoothing or interpolated colours are used. The
+software/offscreen platform draws the same Bayer pattern from JS because it
+cannot run ShaderEffect. The normal renderer keeps the shader fallback contract.
+No data/paint timer runs between changes. A single 300 ms startup retry lets
+Hyprland IPC connect. Monitor/config events, screen geometry/DPR changes, theme
+roles and the override FileView drive later refreshes. Content waits for populated
+monitor metadata and Settle; every visible nested paint was the final buffer size.
+
+The optional `~/.config/quadrille/displays.toml` is only read, never created.
+Existing files are watched; `omarchy-shell background refresh` rereads it,
+including a file first created after startup. Invalid TOML warns and uses EDID or
+estimated dimensions. This differs from precision metrology: EDID rounds to cm
+and commercial diagonal snapping is an inference. The requested examples contain
+inconsistent figures. The shared model truthfully yields 344.6265 x 215.3916 mm,
+7.42833 px/mm, 0.40386 mm/vpx at 3 physical px for the laptop. Its Dell nearest
+34.1 diagonal gives 798.9630 x 334.4496 mm, 4.30558 px/mm, 0.46451 mm/vpx at 2 px.
+Measured width/height overrides give the user's measured dimensions directly.
+
+Verification artifacts are outside the repository at
+`/tmp/quadrille-graticule-output/wallpaper/`. `wallpaper-test.js` exercises the
+actual plan with all 15 physical cases, integer strokes, dropped labels, nearest
+marks and mixed-DPI adjacency. Full native offscreen laptop/ultrawide, estimated
+and single-output PNGs were inspected: seven colours, every transition on mod 3
+or mod 2 as appropriate. `wallpaper-ruler.py` checks actual painted columns: the
+laptop has 72/75 physical px intervals per 10 mm (ideal 74.283316); maximum
+absolute mark error 1.466944 px, below half a vpx. Dell has 42/44 (ideal 43.055809),
+maximum absolute error 0.995437 px. An interval is the difference of two rounded
+marks, so its error can exceed half a vpx even though each mark meets that bound.
+
+`surfaces/wallpaper.sh` runs the real clone with synthetic QA/QB EDID in a private
+nested compositor, under the live lock. Both full GPU captures pass crisp.py with
+seven colours and zero off-grid transitions, and paint logs prove final
+2560x1600@3 / 3440x1440@2 geometry from their first visible paints. The private
+D-Bus config has no activation service directories and Qt portal/accessibility
+lookup is disabled: no private portal is started. A previous wrapper placed the
+clone inside the Quickshell config root, where its sibling type was unresolved;
+keeping it outside the root, as offscreen/run.sh does, fixes that. The focused
+nested output's compositor warning/cursor initially polluted crispness; nested.sh
+now disables the warning, and vptr moves only the nested pointer to the unused
+parent-facing output before capture. Children are killed and the lock has no
+leaked holders. No wallpaper was installed or shell restarted during these tests.
+
+`surfaces/wallpaper-live.sh` prepares a disposable real-output preview using the
+actual monitor metadata and a separate IPC target/input mask. It refuses occupied
+workspaces 8/9, restores original workspaces/focus, and crops all live bar text
+from its captures. The lead runs it only after the complete Rust/nested checks;
+this implementation slice has not executed that live preview.

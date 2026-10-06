@@ -1,12 +1,14 @@
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import Quickshell.Hyprland
 import QtQuick
 import QtQuick.Effects
 import QtQuick.Shapes
 import qs.Commons
 import qs.Ui
 import "Q"
+import "Physical.js" as Physical
 
 // quadrille.background: omarchy.background (cloned; MIT), with the graticule
 // wallpaper drawn instead of scaled.
@@ -16,14 +18,9 @@ import "Q"
 // ~/.local/state/omarchy/current/background link, the reveal between pictures,
 // the double clicks. Two things differ:
 //
-//   * When the background is one of the quadrille themes' graticules, each output
-//     draws the picture itself (Graticule.qml: a fragment shader that is
-//     tools/gen_themes.py's graticule() at that output's own pixel grid) instead of
-//     scaling the 3440 x 1440 PNG. A virtual pixel is then a whole number of that
-//     output's device pixels (2 at scale 1, 3 at 1.666667), so the dither and the
-//     lines are even on every screen; the PNG, cropped and resampled by 1.11 on a
-//     2560 x 1600 output, was not. The colours are the live theme's roles, so a
-//     theme switch re-colours it in the same frame as the shell.
+//   * A quadrille graticule is drawn per output, physically calibrated, with
+//     centimetre rulers and two drafting plates. Dither, hairlines and native
+//     bitmap lettering share that output's whole-device-pixel grid.
 //   * That picture does not reveal: it is there at once, and the theme with it.
 //     (A photograph, or a wallpaper that is not a quadrille graticule, goes through
 //     the stock path whole: the same reveal, the same smooth scaling.)
@@ -35,6 +32,59 @@ Item {
   readonly property string home: Quickshell.env("HOME")
   readonly property string stateHome: home + "/.local/state"
   readonly property string currentBackgroundLink: stateHome + "/omarchy/current/background"
+  readonly property bool hyprlandSession: Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE") !== ""
+  property var displayOverrides: ({})
+  property bool monitorRefreshQueued: false
+  readonly property var monitorData: {
+    var values = Hyprland.monitors.values
+    var out = []
+    for (var i = 0; i < values.length; i++) {
+      var object = values[i].lastIpcObject
+      if (object && object.width > 0 && object.height > 0 && object.scale > 0) out.push(object)
+    }
+    return out
+  }
+
+  function monitorFor(screen) {
+    for (var i = 0; i < monitorData.length; i++) if (monitorData[i].name === screen.name) return monitorData[i]
+    // Non-Hyprland fallback, or a compositor without monitor metadata.
+    if (hyprlandSession) return null
+    var scale = screen.devicePixelRatio > 0 ? screen.devicePixelRatio : 1
+    return { name: screen.name, width: Math.round(screen.width * scale), height: Math.round(screen.height * scale), scale: scale }
+  }
+
+  function refreshDisplays() {
+    if (!hyprlandSession || monitorRefreshQueued) return
+    monitorRefreshQueued = true
+    Qt.callLater(function() { root.monitorRefreshQueued = false; Hyprland.refreshMonitors() })
+  }
+
+  FileView {
+    id: displayFile
+    path: root.home + "/.config/quadrille/displays.toml"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      try { root.displayOverrides = Physical.parseOverrides(text()) }
+      catch (error) { console.warn("quadrille.background: displays.toml:", error); root.displayOverrides = ({}) }
+    }
+    onLoadFailed: root.displayOverrides = ({})
+  }
+
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event && (String(event.name).indexOf("monitor") === 0 || event.name === "configreloaded")) root.refreshDisplays()
+    }
+  }
+  Connections {
+    target: Quickshell
+    function onScreensChanged() { root.refreshDisplays() }
+  }
+  // The IPC singleton connects after component creation. This is a startup
+  // retry, not a poll; events alone refresh it for the lifetime of the shell.
+  Timer { interval: 300; running: true; onTriggered: root.refreshDisplays() }
 
   property string currentBackground: ""
   // Whether currentBackground is a quadrille graticule (isPixelWallpaper).
@@ -62,6 +112,8 @@ Item {
   }
 
   function refreshBackground() {
+    displayFile.reload()
+    refreshDisplays()
     if (!readlinkProc.running) readlinkProc.running = true
   }
 
@@ -239,6 +291,21 @@ Item {
 
       // The grid of this output: a virtual pixel is `g.phys` device pixels.
       readonly property var g: Px.forWindow(panel)
+      readonly property var monitor: root.monitorFor(modelData)
+
+      Connections {
+        target: panel.modelData
+        ignoreUnknownSignals: true
+        function onWidthChanged() { root.refreshDisplays() }
+        function onHeightChanged() { root.refreshDisplays() }
+        function onXChanged() { root.refreshDisplays() }
+        function onYChanged() { root.refreshDisplays() }
+        function onDevicePixelRatioChanged() { root.refreshDisplays() }
+      }
+      Connections {
+        target: panel
+        function onDevicePixelRatioChanged() { root.refreshDisplays() }
+      }
       // The graticule is drawn here unless it could not be built.
       readonly property bool drawGraticule: root.pixelMode && !graticule.failed
 
@@ -260,10 +327,15 @@ Item {
       Graticule {
         id: graticule
         anchors.fill: parent
-        visible: root.pixelMode
+        visible: root.pixelMode && panel.monitor !== null && settle.ready
         phys: panel.g.phys
-        dpr: panel.devicePixelRatio
+        dpr: panel.g.dpr
+        monitor: panel.monitor || { width: 1, height: 1 }
+        monitors: root.monitorData.length ? root.monitorData : (panel.monitor ? [panel.monitor] : [])
+        overrides: root.displayOverrides
       }
+
+      Settle { id: settle; window: panel }
 
       Image {
         id: base
