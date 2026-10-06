@@ -9,12 +9,14 @@ mod app;
 mod focus_grab;
 mod handle;
 mod keys;
+mod raster;
 mod shell;
 mod wl;
 
 pub use app::{Application, application};
+pub use raster::{RasterBuffer, RasterRect};
 pub use shell::{Error, Layered, run};
 pub use wl::{
-    Anchor, Env, Exclusive, Geometry, Grab, KeyboardInteractivity, Layer, OutputInfo, RasterBuffer,
+    Anchor, Env, Exclusive, Geometry, Grab, KeyboardInteractivity, Layer, OutputInfo,
     SurfaceSettings, geometry, is_exact, logical_for, logical_for_native,
 };

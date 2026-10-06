@@ -28,6 +28,7 @@ usage: quadrille-bar [OPTIONS]
 options:
   --no-bar, --panels-only  no bar; panels and the cursor overlay remain available
   --no-overlay           start without the always-on cursor overlay
+  --overlay-rest-ms N     dimension after N ms of rest (0: live, default)
   --output NAME          a bar on this output only; repeat for several (default: all)
   --backend NAME         tiny-skia (the default here) or wgpu
   --bar-tick-ms MS       how often the bar's gauges are read; 0 never (2000)
@@ -69,6 +70,11 @@ fn parse() -> Result<Options, String> {
             }
             "--no-bar" | "--panels-only" => options.no_bar = true,
             "--no-overlay" => options.no_overlay = true,
+            "--overlay-rest-ms" => {
+                options.overlay_rest_ms = value("--overlay-rest-ms")?
+                    .parse()
+                    .map_err(|_| "--overlay-rest-ms needs a nonnegative integer")?;
+            }
             "--no-exclusive" => options.exclusive = false,
             "--height" => {
                 options.height = value("--height")?

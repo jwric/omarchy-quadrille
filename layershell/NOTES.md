@@ -2,12 +2,13 @@
 
 ## Live dimensioning
 
-Moving uses a 25 × 25 vpx drafting reticle. At 300 ms rest, a separately owned
-output-sized native raster shows nearest screen X/Y and visible-window X/Y
-measurements; movement destroys it. Whole-logical margins position the small
-buffer, with an integer residual inside it aligning the grid. Rest is anchored
-at the output origin. Geometry is clipped to complete vpx cells; label plates
-are bounded and do not overlap. Millimetres are integers, including estimates.
+Dimensions are live by default (`--overlay-rest-ms 0`): an output-sized native
+raster follows nearest screen X/Y and visible-window X/Y distances during motion.
+`--overlay-rest-ms N` restores the calm behaviour for N > 0, with a 25 × 25 vpx
+reticle until rest. Whole-logical margins position that small buffer, with an
+integer residual aligning the grid; dimensions anchor at the output origin.
+Geometry is clipped to complete vpx cells; label plates are bounded and do not
+overlap. Millimetres are integers, including estimates.
 
 Both surfaces have empty input regions, no keyboard interaction or focus grab,
 and exclusive zone -1. Failed cursor queries clear the old location; crossings
@@ -17,25 +18,43 @@ or retained compositor variable. The optional no-animation line is in README.
 
 Cursor polling is 60 Hz through 400 ms after movement, then 5 Hz; lock state is
 checked at 5 Hz because there is no socket2 lock event. Monitor changes remain
-event-driven. `j/clients` is read at rest, then at 5 Hz to follow keyboard
-resizing, and on relevant compositor events; unchanged geometry never redraws.
+event-driven. Position probes also detect a return from a layout gap without a
+focus event; gaps have no surface. Fullscreen/lock stop cursor queries, and off
+stops the watcher. `j/clients` is read at about 4 Hz during movement and on relevant
+window events, with slower idle refresh for keyboard resizing. Retained rectangles
+damage only changed old/new lines and plates. Each reusable shm slot keeps its
+own previous frame, so skipped frames cannot leave trails; unchanged pixels are
+untouched. Off, fullscreen and lock destroy the large surface and buffer pool.
 Only visible geometry is retained, never application titles or classes.
 `gen_glyphs.py` emits committed QML/Rust tables together; their equality is a
 unit test, and the runtime performs no text parsing. Large raster destruction
 also returns glibc free arena pages, as well as dropping the Wayland shm pool.
 
 `python3 tools/overlay-test.py OUT` is the single overlay check. It takes the
-lock for at most 55 seconds, uses vptr only inside nested Hyprland, compares
+lock for at most 55 seconds per mode, uses vptr only inside nested Hyprland, compares
 native pixels with presentation, commands a known 600 × 400 window, checks
-rest/move, crossing, hotplug, click-through, fullscreen and nested lock, and
-records CPU/RSS for moving, dimensioning, suppressed and off states. Raw buffers,
-protocol/geometry logs and a fixed bar control support hotplug diagnosis.
-Artifacts and final measurements: `/tmp/quadrille-redesign-20261006/`.
+live motion, a 300 ms calm run, crossing, scale, theme, hotplug, click-through,
+fullscreen and nested lock. It records CPU/RSS while moving with dimensions,
+still and off on QA and QB, with full-buffer dumps disabled during samples.
+Every test/diagnostic control call uses `nested.sh bar-ctl`, which requires an
+isolated socket and refuses the live path (including normalized aliases).
 
-Final two-second samples, one core / RSS MiB: moving 1.521% / 9.56;
-resting dimensions 0.114% / 48.95; still suppressed 0.114% / 9.47;
-off 0.000% / 9.55. Dismissal returns the large allocation. An identical moving
-bitmap still commits changed layer margins; the nested check covers this.
+Two-second nested samples, one core / RSS MiB, with a fresh host and no dumps:
+
+| Output | Moving with dimensions | Still with dimensions | Off |
+| --- | --- | --- | --- |
+| QA: 2560 × 1600 at 1.666667 | 1.551% / 25.02 | 0.130% / 25.04 | 0.000% / 9.30 |
+| QB: 3440 × 1440 at 1 | 1.515% / 28.26 | 0.178% / 28.26 | 0.000% / 9.30 |
+
+Fullscreen suppression on QB: 0.105% / 9.32 MiB. Plate glyphs share one damage
+rectangle; separate glyph regions initially cost 9.66% on QA. Dismissal returns
+the large shm allocation. Native/presented comparisons are exact at both scales,
+including theme, scale and hotplug changes. No installed host was touched.
+
+Workspace tests: 127 passed, one ignored. All eight existing nested sections
+passed; Bluetooth needed one rerun after its keyboard readiness check missed
+every key on the first run. Live and 300 ms calm checks passed at both scales;
+calm rest decisions were exactly 300 ms. No live-host verification or installation.
 
 Hotplug diagnosis: saved legacy 330 × 100 bytes replayed with both explicit
 source/destination and unset viewport, default buffer scale 1, at 40/350 ms
@@ -45,7 +64,7 @@ new QA/QB buffers also compare exactly. The archived 840 one-level differences
 are real but their cause was not reproduced; the earlier filtering claim is
 withdrawn. Evidence: `hotplug-bisect/` and `overlay-final/` in the output directory.
 
-Existing nested sections ran once: seven passed, including core/nobar/look;
+An earlier nested run passed seven sections, including core/nobar/look;
 power failed eight keyboard/focus assertions with overlay off. Its separate
 power_actions section passed. No repeat of the failed section was performed.
 The temporary diagnostic accidentally addressed the installed host's control

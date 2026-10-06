@@ -396,20 +396,13 @@ fn physical_size(logical: (u32, u32), scale: f64) -> Size<u32> {
     )
 }
 
-// Large resting overlays are transient. After the last declaration drops,
+// Large measuring overlays are transient. After the last declaration drops,
 // return glibc's free arena pages as well as the Wayland pool's mappings.
 fn release_raster(settings: Option<SurfaceSettings>) {
-    if let Some(raster) = settings.as_ref().and_then(|s| s.raster.as_ref()) {
-        log::debug!(
-            "release raster: {} bytes, {} remaining references",
-            raster.pixels.len(),
-            std::sync::Arc::strong_count(&raster.pixels)
-        );
-    }
     let large = settings
         .as_ref()
         .and_then(|s| s.raster.as_ref())
-        .is_some_and(|r| r.pixels.len() >= 1024 * 1024);
+        .is_some_and(|r| r.byte_len() >= 1024 * 1024);
     drop(settings);
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     if large {

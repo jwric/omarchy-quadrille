@@ -49,7 +49,7 @@ pass() { echo "  ok    $*"; }
 fail() { echo "  FAIL  $*"; FAILS=$((FAILS + 1)); }
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 
-ctl() { QUADRILLE_BAR_SOCKET=$SOCK XDG_RUNTIME_DIR=$RUNTIME "$BIN/quadrille-bar" ctl "$@"; }
+ctl() { QUADRILLE_BAR_SOCKET=$SOCK XDG_RUNTIME_DIR=$RUNTIME "$N" bar-ctl "$@"; }
 # The nested compositor shows its own warnings as a banner over the top of the
 # output, which would be in every screenshot: dismiss them first.
 shot() { "$N" ctl dismissnotify >/dev/null 2>&1; sleep 0.2; "$N" run grim -o "$1" "$OUT/$2.png"; }

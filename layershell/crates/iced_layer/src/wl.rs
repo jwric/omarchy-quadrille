@@ -34,7 +34,8 @@ use smithay_client_toolkit::shell::wlr_layer::{
     LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure,
 };
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
-use smithay_client_toolkit::shm::slot::SlotPool;
+use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
+use crate::RasterBuffer;
 use smithay_client_toolkit::{
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
     delegate_registry, delegate_seat, delegate_shm, registry_handlers,
@@ -46,7 +47,6 @@ use crate::focus_grab::protocol::hyprland_focus_grab_v1::{self, HyprlandFocusGra
 pub use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long a surface waits for the compositor to tell it its scale before it
@@ -135,21 +135,6 @@ pub struct SurfaceSettings {
     /// Programs that track content changes can spare unrelated windows a
     /// redraw when a small independent surface changes.
     pub repaint_revision: Option<u64>,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct RasterBuffer {
-    pub size: (u32, u32),
-    pub pixels: Arc<[u8]>,
-}
-
-impl std::fmt::Debug for RasterBuffer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RasterBuffer")
-            .field("size", &self.size)
-            .field("bytes", &self.pixels.len())
-            .finish()
-    }
 }
 
 impl Default for SurfaceSettings {
@@ -311,6 +296,7 @@ pub struct Surface {
     pub version: u64,
     raster_pool: Option<SlotPool>,
     raster_presented: Option<RasterBuffer>,
+    raster_slots: Vec<(Buffer, Option<RasterBuffer>)>,
     raster_geometry_dirty: bool,
 }
 
@@ -685,6 +671,7 @@ impl Wl {
                 version: 0,
                 raster_pool: None,
                 raster_presented: None,
+                raster_slots: Vec::new(),
                 raster_geometry_dirty: true,
             },
         );
@@ -745,8 +732,8 @@ impl Wl {
         }
     }
 
-    /// Presents only a small native buffer. Buffers are released by the
-    /// compositor and the slot pool reuses their memory on subsequent moves.
+    /// Reuses released native buffers, painting and damaging changed rectangles.
+    /// Each slot retains its own frame, so alternating buffers cannot leave trails.
     pub fn present_raster(&mut self, id: window::Id) -> Result<(), String> {
         let Some(surface) = self.surfaces.get(&id) else {
             return Ok(());
@@ -773,30 +760,59 @@ impl Wl {
         );
         self.set_destination(id, logical);
         let surface = self.surfaces.get_mut(&id).expect("The surface exists");
+        if surface
+            .raster_presented
+            .as_ref()
+            .is_some_and(|old| old.size != raster.size)
+        {
+            surface.raster_slots.clear();
+            surface.raster_pool = None;
+            surface.raster_presented = None;
+        }
         if surface.raster_pool.is_none() {
             surface.raster_pool = Some(
-                SlotPool::new(raster.pixels.len() * 3, &self.shm)
+                SlotPool::new(raster.byte_len() * 2, &self.shm)
                     .map_err(|error| error.to_string())?,
             );
         }
-        let (buffer, canvas) = surface
-            .raster_pool
-            .as_mut()
-            .unwrap()
-            .create_buffer(
-                raster.size.0 as i32,
-                raster.size.1 as i32,
-                raster.size.0 as i32 * 4,
-                smithay_client_toolkit::reexports::client::protocol::wl_shm::Format::Argb8888,
-            )
-            .map_err(|error| error.to_string())?;
-        canvas[..raster.pixels.len()].copy_from_slice(&raster.pixels);
+        let pool = surface.raster_pool.as_mut().unwrap();
+        let available = surface
+            .raster_slots
+            .iter()
+            .position(|(buffer, _)| buffer.canvas(pool).is_some());
+        let slot = if let Some(index) = available {
+            index
+        } else {
+            // Bound memory even if the compositor holds all buffers. A release
+            // event wakes the shell to present the newest frame.
+            if surface.raster_slots.len() == 3 {
+                return Ok(());
+            }
+            let format =
+                smithay_client_toolkit::reexports::client::protocol::wl_shm::Format::Argb8888;
+            let (buffer, _) = pool
+                .create_buffer(
+                    raster.size.0 as i32,
+                    raster.size.1 as i32,
+                    raster.size.0 as i32 * 4,
+                    format,
+                )
+                .map_err(|error| error.to_string())?;
+            surface.raster_slots.push((buffer, None));
+            surface.raster_slots.len() - 1
+        };
+        let (buffer, previous) = &mut surface.raster_slots[slot];
+        raster.draw(
+            buffer.canvas(pool).expect("A released buffer"),
+            previous.as_ref(),
+        );
+        *previous = Some(raster.clone());
         buffer
-            .attach_to(surface.wl_surface())
+            .attach_to(surface.layer.wl_surface())
             .map_err(|error| error.to_string())?;
-        surface
-            .wl_surface()
-            .damage_buffer(0, 0, raster.size.0 as i32, raster.size.1 as i32);
+        for [x, y, w, h] in raster.damage(surface.raster_presented.as_ref()) {
+            surface.layer.wl_surface().damage_buffer(x, y, w, h);
+        }
         surface.layer.commit();
         surface.raster_presented = Some(raster);
         surface.raster_geometry_dirty = false;

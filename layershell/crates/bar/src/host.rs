@@ -137,6 +137,7 @@ pub struct Options {
     /// beside another bar and keeps its cursor overlay unless disabled.
     pub no_bar: bool,
     pub no_overlay: bool,
+    pub overlay_rest_ms: u64,
     pub backend: Option<String>,
     /// How often the bar's gauges are read, in milliseconds; 0 never.
     pub bar_tick_ms: u64,
@@ -159,6 +160,7 @@ impl Default for Options {
             outputs: Vec::new(),
             no_bar: false,
             no_overlay: false,
+            overlay_rest_ms: 0,
             backend: None,
             bar_tick_ms: 2000,
             exclusive: true,
@@ -698,7 +700,10 @@ impl Host {
             Subscription::run(|| ipc::requests().map(Message::Request)),
         ];
         if self.overlay.enabled {
-            subscriptions.push(Subscription::run(overlay::watch).map(Message::Overlay));
+            subscriptions.push(
+                Subscription::run_with(self.options.overlay_rest_ms, |rest| overlay::watch(*rest))
+                    .map(Message::Overlay),
+            );
         }
 
         // The bar's clock and gauges, which a host with no bar does not have.

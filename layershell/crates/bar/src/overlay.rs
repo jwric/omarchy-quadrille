@@ -1,12 +1,12 @@
 //! The compositor's pointer, measured on each output's own physical grid.
-//! Native small buffers keep protocol margins separate from physical pixels.
+//! Retained native rectangles keep motion cheap on the output's pixel grid.
 use crate::physical::{DisplayInput, Overrides, PhysicalSize};
 use iced_core::Color;
 use iced_futures::{
     futures::{SinkExt, StreamExt},
     stream,
 };
-use iced_layer::{Anchor, Exclusive, Layer, RasterBuffer, SurfaceSettings};
+use iced_layer::{Anchor, Exclusive, Layer, RasterBuffer, RasterRect, SurfaceSettings};
 use quadrille::Theme;
 use smol::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use std::{
@@ -16,7 +16,7 @@ use std::{
 };
 
 const SIZE: (u32, u32) = (25, 25);
-const REST: Duration = Duration::from_millis(300);
+const CLIENTS: Duration = Duration::from_millis(250);
 const MOVING: Duration = Duration::from_millis(400);
 const FAST: Duration = Duration::from_micros(16_667);
 const STILL: Duration = Duration::from_millis(200);
@@ -396,9 +396,11 @@ fn render(
     // Plates are painted last, so every dimension keeps its own legible label.
     for d in &dims {
         let (x, y, w, h) = d.plate;
+        raster.damage_bounds = Some(raster.bounds(x, y, w, h));
         raster.rect(x, y, w, h, roles.void);
         raster.outline(x, y, w, h, roles.edge);
         raster.text(x + 3, y + 2, &d.text, roles.ink);
+        raster.damage_bounds = None;
     }
     let (cx, cy) = p.centre;
     // Four small drafting brackets surround a clear cursor cell.
@@ -423,7 +425,13 @@ fn render(
                     "snapped":[containing_pixel(cursor.0-monitor.x,monitor.scale,ps),containing_pixel(cursor.1-monitor.y,monitor.scale,ps)]}).to_string();
                 let mut frame = metadata.into_bytes();
                 frame.push(b'\n');
-                frame.extend_from_slice(&raster.pixels);
+                let buffer = RasterBuffer {
+                    size: physical,
+                    rects: raster.rects.clone().into(),
+                };
+                let mut pixels = vec![0; buffer.byte_len()];
+                buffer.draw(&mut pixels, None);
+                frame.extend_from_slice(&pixels);
                 if std::fs::write(path.with_extension("tmp"), frame).is_ok() {
                     let _ =
                         std::fs::rename(path.with_extension("tmp"), path.with_extension("frame"));
@@ -447,7 +455,7 @@ fn render(
         output: Some(monitor.name.clone()),
         raster: Some(RasterBuffer {
             size: physical,
-            pixels: raster.pixels.into(),
+            rects: raster.rects.into(),
         }),
         ..SurfaceSettings::default()
     }
@@ -458,7 +466,8 @@ struct Raster {
     height: u32,
     ps: i32,
     offset: (i32, i32),
-    pixels: Vec<u8>,
+    rects: Vec<RasterRect>,
+    damage_bounds: Option<[i32; 4]>,
 }
 
 impl Raster {
@@ -468,18 +477,31 @@ impl Raster {
             height,
             ps: ps as i32,
             offset,
-            pixels: vec![0; (width * height * 4) as usize],
+            rects: Vec::new(),
+            damage_bounds: None,
         }
+    }
+    fn bounds(&self, x: i32, y: i32, w: i32, h: i32) -> [i32; 4] {
+        [
+            x * self.ps + self.offset.0,
+            y * self.ps + self.offset.1,
+            w * self.ps,
+            h * self.ps,
+        ]
     }
     fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
         let [r, g, b, a] = color.into_rgba8();
         let pixel = [b, g, r, a];
-        let (x, y) = (x * self.ps + self.offset.0, y * self.ps + self.offset.1);
-        for yy in y.max(0)..(y + h * self.ps).min(self.height as i32) {
-            for xx in x.max(0)..(x + w * self.ps).min(self.width as i32) {
-                let index = ((yy * self.width as i32 + xx) * 4) as usize;
-                self.pixels[index..index + 4].copy_from_slice(&pixel);
-            }
+        let [x, y, w, h] = self.bounds(x, y, w, h);
+        let right = (x + w).min(self.width as i32);
+        let bottom = (y + h).min(self.height as i32);
+        let (x, y) = (x.max(0), y.max(0));
+        if right > x && bottom > y {
+            self.rects.push(RasterRect {
+                bounds: [x, y, right - x, bottom - y],
+                pixel,
+                damage_bounds: self.damage_bounds,
+            });
         }
     }
     fn outline(&mut self, x: i32, y: i32, w: i32, h: i32, color: Color) {
@@ -529,7 +551,7 @@ fn cursor_position(value: &serde_json::Value) -> Option<(f64, f64)> {
 }
 
 async fn request(command: &str) -> std::io::Result<String> {
-    if matches!(command, "j/cursorpos" | "j/locked")
+    if matches!(command, "j/cursorpos" | "j/locked" | "j/clients")
         && std::env::var_os("QUADRILLE_NESTED").is_some()
     {
         if let Some(path) = std::env::var_os("QUADRILLE_RETICLE_DUMP") {
@@ -617,6 +639,10 @@ fn windows(value: &serde_json::Value, monitors: &[Monitor]) -> Vec<Window> {
         .collect()
 }
 
+fn dimensioning(allowed: bool, last_moved: Instant, now: Instant, rest: Duration) -> bool {
+    allowed && now.duration_since(last_moved) >= rest
+}
+
 fn interval(last_moved: Instant, now: Instant, allowed: bool) -> Option<Duration> {
     allowed.then_some(if now.duration_since(last_moved) < MOVING {
         FAST
@@ -627,8 +653,9 @@ fn interval(last_moved: Instant, now: Instant, allowed: bool) -> Option<Duration
 
 /// Cursor queries stop when inhibited. A separate cheap lock-state query is
 /// needed because Hyprland exposes `j/locked` but no socket2 lock event.
-pub fn watch() -> impl iced_futures::futures::Stream<Item = Snapshot> {
-    stream::channel(2, async |mut output| {
+pub fn watch(rest_ms: u64) -> impl iced_futures::futures::Stream<Item = Snapshot> {
+    let rest = Duration::from_millis(rest_ms);
+    stream::channel(2, async move |mut output| {
         let Some(path) = socket(".socket2.sock") else {
             return std::future::pending::<()>().await;
         };
@@ -646,6 +673,7 @@ pub fn watch() -> impl iced_futures::futures::Stream<Item = Snapshot> {
             let mut last_moved = Instant::now() - MOVING;
             let mut last_lock = Instant::now() - STILL;
             let mut next_cursor = Instant::now();
+            let mut last_clients = Instant::now() - CLIENTS;
             let mut event_refresh = true;
             let mut output_revision = OUTPUT_REVISION.load(Ordering::Relaxed);
             loop {
@@ -669,11 +697,6 @@ pub fn watch() -> impl iced_futures::futures::Stream<Item = Snapshot> {
                         != 0;
                     changed |= state.fullscreen != fullscreen;
                     state.fullscreen = fullscreen;
-                    state.windows = query("j/clients")
-                        .await
-                        .ok()
-                        .map(|v| windows(&v, &state.monitors))
-                        .unwrap_or_default();
                 }
                 if now.duration_since(last_lock) >= STILL || event_refresh {
                     let locked = query("j/locked")
@@ -688,9 +711,10 @@ pub fn watch() -> impl iced_futures::futures::Stream<Item = Snapshot> {
                     state.locked = locked;
                     last_lock = now;
                 }
-                let allowed = !state.fullscreen
-                    && !state.locked
-                    && (state.monitor().is_some() || state.cursor.is_none() || event_refresh);
+                // A pointer in a layout gap must still be able to return to the
+                // same output without a focusedmon event. Keep the idle probe,
+                // while withholding every surface until an output contains it.
+                let allowed = !state.fullscreen && !state.locked;
                 let mut sampled_cursor = false;
                 if allowed && (now >= next_cursor || event_refresh) {
                     sampled_cursor = true;
@@ -706,16 +730,16 @@ pub fn watch() -> impl iced_futures::futures::Stream<Item = Snapshot> {
                     }
                     next_cursor = now + interval(last_moved, now, true).unwrap_or(STILL);
                 }
-                let resting = state.visible() && now.duration_since(last_moved) >= REST;
-                if resting && !state.resting {
+                let resting = dimensioning(state.visible(), last_moved, now, rest);
+                if !rest.is_zero() && resting && !state.resting {
                     log::debug!(
                         "cursor rested {} ms",
                         now.duration_since(last_moved).as_millis()
                     );
                 }
-                if resting
-                    && (!state.resting
-                        || (sampled_cursor && now.duration_since(last_moved) >= MOVING))
+                if state.visible()
+                    && (event_refresh
+                        || (sampled_cursor && now.duration_since(last_clients) >= CLIENTS))
                 {
                     let windows = query("j/clients")
                         .await
@@ -724,6 +748,7 @@ pub fn watch() -> impl iced_futures::futures::Stream<Item = Snapshot> {
                         .unwrap_or_default();
                     changed |= state.windows != windows;
                     state.windows = windows;
+                    last_clients = now;
                 }
                 changed |= state.resting != resting;
                 state.resting = resting;
@@ -744,11 +769,13 @@ pub fn watch() -> impl iced_futures::futures::Stream<Item = Snapshot> {
                     }
                 }
                 event_refresh = false;
-                let mut next = interval(last_moved, now, state.visible())
+                let mut next = interval(last_moved, now, allowed)
                     .map(|_| next_cursor)
                     .map_or(last_lock + STILL, |cursor| cursor.min(last_lock + STILL));
                 if state.visible() && !state.resting {
-                    next = next.min(last_moved + REST);
+                    if let Some(deadline) = last_moved.checked_add(rest) {
+                        next = next.min(deadline);
+                    }
                 }
                 let result = smol::future::race(async { Some(lines.next().await) }, async {
                     smol::Timer::at(next).await;
@@ -857,6 +884,18 @@ mod tests {
         );
         assert_eq!(interval(moved, moved + MOVING, true), Some(STILL));
         assert_eq!(interval(moved, moved, false), None);
+        assert!(dimensioning(true, moved, moved, Duration::ZERO));
+        assert!(!dimensioning(false, moved, moved, Duration::ZERO));
+        let calm = Duration::from_millis(300);
+        assert!(!dimensioning(
+            true,
+            moved,
+            moved + calm - Duration::from_millis(1),
+            calm
+        ));
+        assert!(dimensioning(true, moved, moved + calm, calm));
+        // Each movement starts a fresh calm delay.
+        assert!(!dimensioning(true, moved + calm, moved + calm, calm));
     }
 
     #[test]
@@ -1018,6 +1057,55 @@ mod tests {
                     assert!(iced_layer::is_exact(geom.size.0, scale));
                     assert!(iced_layer::is_exact(geom.size.1, scale));
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn live_damage_is_exact_and_bounded_through_motion_and_theme_changes() {
+        for scale in [1.0, 5.0 / 3.0] {
+            let monitor = monitor(scale);
+            let windows = [Window {
+                at: (100.0, 100.0),
+                size: (600.0, 400.0),
+            }];
+            let mut previous = None;
+            let mut pixels = Vec::new();
+            for (i, cursor) in [
+                (200.0, 200.0),
+                (201.0, 203.0),
+                (280.0, 300.0),
+                (650.0, 450.0),
+                (0.0, 0.0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let theme = if i == 3 {
+                    Theme::PAPER
+                } else {
+                    Theme::TERMINAL
+                };
+                let frame = render(&monitor, cursor, &theme, true, &windows)
+                    .raster
+                    .unwrap();
+                pixels.resize(frame.byte_len(), 0);
+                frame.draw(&mut pixels, previous.as_ref());
+                let mut full = vec![0; frame.byte_len()];
+                frame.draw(&mut full, None);
+                assert_eq!(pixels, full, "scale {scale}, step {i}");
+                assert!(frame.damage(Some(&frame)).is_empty());
+                if previous.is_some() {
+                    assert!(
+                        frame
+                            .damage(previous.as_ref())
+                            .iter()
+                            .map(|r| (r[2] * r[3]) as usize)
+                            .sum::<usize>()
+                            < frame.byte_len() / 4 / 8
+                    );
+                }
+                previous = Some(frame);
             }
         }
     }

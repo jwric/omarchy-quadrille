@@ -13,6 +13,7 @@
 #                                QUADRILLE_NESTED marks the display as safe for
 #                                vptr; refuses if it is not up
 #   tools/nested.sh ctl ARGS...  hyprctl, on it
+#   tools/nested.sh bar-ctl ... isolated test host only (socket env required)
 #   tools/nested.sh down         stop it and remove what it left
 #
 # Hyprland has no headless-only mode in 0.56 (a nested one is a window of the
@@ -34,6 +35,18 @@ read_state() {
 }
 
 case "${1:-}" in
+  bar-ctl)
+    shift
+    [ -n "${QUADRILLE_BAR_SOCKET:-}" ] || die "bar-ctl requires an isolated QUADRILLE_BAR_SOCKET"
+    case "$QUADRILLE_BAR_SOCKET" in
+      /*) control_path=$QUADRILLE_BAR_SOCKET ;;
+      *) control_path=$RUNTIME/$QUADRILLE_BAR_SOCKET ;;
+    esac
+    control_path=$(readlink -m "$control_path")
+    [ "$control_path" != /run/user/1000/quadrille-bar.sock ] &&
+      [ "$control_path" != "$(readlink -m "$RUNTIME/quadrille-bar.sock")" ] || die "refusing the live host socket"
+    QUADRILLE_BAR_SOCKET=$control_path exec "$(dirname "$0")/../target/release/quadrille-bar" ctl "$@"
+    ;;
   up)
     [ -f "$STATE/pid" ] && kill -0 "$(cat "$STATE/pid")" 2>/dev/null && die "already up"
     rm -rf "$STATE"; mkdir -p "$STATE"
@@ -106,5 +119,5 @@ LUA
     rm -rf "$STATE"
     echo "nested: down"
     ;;
-  *) die "usage: nested.sh up | run CMD... | ctl ARGS... | env | down" ;;
+  *) die "usage: nested.sh up | run CMD... | ctl ARGS... | bar-ctl ARGS... | env | down" ;;
 esac

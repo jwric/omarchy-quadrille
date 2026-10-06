@@ -8,7 +8,7 @@ panels drawn by quadrille itself as Wayland layer-shell surfaces.
 
 The desktop is a calibrated drawing set: active monitor elevations, a true-size
 100 mm ruler and a sparse sheet frame. Its click-through cursor draws live CAD
-measurements after resting for 300 ms; moving leaves only a small drafting reticle.
+measurements that update as the pointer moves whenever the overlay is enabled.
 
 ![The five themes, as the bar draws them](plugins/screenshots/themes.png)
 
@@ -107,18 +107,27 @@ The overlay starts by default in every host mode, including `--no-bar`:
 ```sh
 quadrille-bar --no-bar                     # panels and cursor overlay
 quadrille-bar --no-bar --no-overlay        # start with overlay disabled
+quadrille-bar --no-bar --overlay-rest-ms 300 # small reticle until 300 ms of rest
 quadrille-bar ctl overlay on
 quadrille-bar ctl overlay off
 quadrille-bar ctl overlay status
 ```
 
-The switch lasts until the host exits. Cursor IPC adapts from 60 Hz to 5 Hz;
-fullscreen and lock suppress both surfaces. Rest shows the nearest horizontal
+The switch lasts until the host exits. `--overlay-rest-ms N` defaults to 0 (live);
+positive values keep a small reticle while moving and show dimensions after N ms
+of rest. Cursor IPC adapts from 60 Hz to 5 Hz; fullscreen and lock suppress the
+overlay. Dimensions show the nearest horizontal
 and vertical screen distances (`S`) and, over a visible window, its nearest
 horizontal and vertical edges (`W`). Plates avoid one another; spanning-window
 edges on another output are omitted. Values are whole millimetres because IPC
-reports whole logical pixels. Movement destroys the larger dimension surface
-and returns its memory. Only read-only compositor IPC is sent by the host.
+reports whole logical pixels. Motion repaints and damages only changed line and
+plate rectangles in reusable buffers; window geometry is queried at about 4 Hz
+and on window events. Off and suppression free the large surface. Only read-only
+compositor IPC is sent by the host.
+
+Nested measurements (one core / RSS): moving with dimensions costs 1.55% / 25.02
+MiB on QA (2560 × 1600 at 1.666667), 1.52% / 28.26 MiB on QB (3440 × 1440 at 1).
+Still costs 0.13–0.18%; off costs 0.00% / 9.30 MiB. Details are in `layershell/NOTES.md`.
 
 If a compositor configuration still fades layers, this **optional** line belongs
 in the user's own Lua config (the host never installs it):
