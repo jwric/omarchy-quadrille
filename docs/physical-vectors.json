@@ -49,22 +49,22 @@
       },
       "overrides": {},
       "expected": {
-        "widthMm": 798.9630376072965,
-        "heightMm": 334.44964364956604,
-        "diagonalMm": 866.14,
+        "widthMm": 796.6200374970111,
+        "heightMm": 333.46885290572556,
+        "diagonalMm": 863.5999999999999,
         "widthPx": 3440,
         "heightPx": 1440,
         "estimated": false,
         "source": "edid",
         "pixelsPerVpx": 2,
-        "mmPerPixelX": 0.23225669697886528,
-        "mmPerPixelY": 0.2322566969788653,
-        "pxPerMmX": 4.30558090684893,
-        "pxPerMmY": 4.30558090684893,
-        "mmPerVpxX": 0.46451339395773056,
-        "mmPerVpxY": 0.4645133939577306,
-        "mmPerLogicalPixelX": 0.23225669697886528,
-        "mmPerLogicalPixelY": 0.2322566969788653
+        "mmPerPixelX": 0.23157559229564278,
+        "mmPerPixelY": 0.23157559229564276,
+        "pxPerMmX": 4.318244380104368,
+        "pxPerMmY": 4.318244380104369,
+        "mmPerVpxX": 0.46315118459128557,
+        "mmPerVpxY": 0.4631511845912855,
+        "mmPerLogicalPixelX": 0.23157559229564278,
+        "mmPerLogicalPixelY": 0.23157559229564276
       }
     },
     {
@@ -115,22 +115,22 @@
       },
       "overrides": {},
       "expected": {
-        "widthMm": 334.44964364956604,
-        "heightMm": 798.9630376072965,
-        "diagonalMm": 866.14,
+        "widthMm": 333.46885290572556,
+        "heightMm": 796.6200374970111,
+        "diagonalMm": 863.5999999999999,
         "widthPx": 1440,
         "heightPx": 3440,
         "estimated": false,
         "source": "edid",
         "pixelsPerVpx": 2,
-        "mmPerPixelX": 0.2322566969788653,
-        "mmPerPixelY": 0.23225669697886528,
-        "pxPerMmX": 4.30558090684893,
-        "pxPerMmY": 4.30558090684893,
-        "mmPerVpxX": 0.4645133939577306,
-        "mmPerVpxY": 0.46451339395773056,
-        "mmPerLogicalPixelX": 0.2322566969788653,
-        "mmPerLogicalPixelY": 0.23225669697886528
+        "mmPerPixelX": 0.23157559229564276,
+        "mmPerPixelY": 0.23157559229564278,
+        "pxPerMmX": 4.318244380104369,
+        "pxPerMmY": 4.318244380104368,
+        "mmPerVpxX": 0.4631511845912855,
+        "mmPerVpxY": 0.46315118459128557,
+        "mmPerLogicalPixelX": 0.23157559229564276,
+        "mmPerLogicalPixelY": 0.23157559229564278
       }
     },
     {
@@ -617,5 +617,61 @@
     "[\"eDP-2\"]\ndiagonal_inches=1e999",
     "[\"eDP-2\"]\n",
     "[bad name]\ndiagonal_inches=16"
+  ],
+  "anchors": [
+    {
+      "id": "published-16-16x10",
+      "input": {
+        "name": "anchor-laptop",
+        "width": 2560,
+        "height": 1600,
+        "physicalWidth": 340,
+        "physicalHeight": 220,
+        "scale": 1.666667,
+        "transform": 0
+      },
+      "widthMm": 344.7,
+      "heightMm": 215.4,
+      "nominalDiagonalMm": 406.4,
+      "relativeTolerance": 0.005,
+      "source": "https://psrefstuff.lenovo.com/syspool/Sys/PDF/datasheet/Lenovo%20L16%20Monitor_Final%20Version_Datasheet_9902-F-200426_AEM.pdf",
+      "note": "Published 16:10 active area; aspect is unchanged at 2560x1600. Nominal 16-inch family is independently specified."
+    },
+    {
+      "id": "published-dell-34-active-surface",
+      "input": {
+        "name": "anchor-dell-surface",
+        "width": 3440,
+        "height": 1440,
+        "physicalWidth": 800,
+        "physicalHeight": 330,
+        "scale": 1,
+        "transform": 0
+      },
+      "widthMm": 799.8,
+      "heightMm": 334.8,
+      "nominalDiagonalMm": 863.6,
+      "relativeTolerance": 0.005,
+      "source": "https://dl.dell.com/manuals/all-products/esuprt_display_projector/esuprt_display/dell-u3417w-monitor_user's-guide_en-us.pdf",
+      "note": "Published active surface of the curved U3417W, distinct from the chord approximation below. Nominal 34-inch aspect inference is within 0.5%, not a guarantee of measured chord accuracy."
+    },
+    {
+      "id": "dell-34-chord",
+      "input": {
+        "name": "anchor-dell",
+        "width": 3440,
+        "height": 1440,
+        "physicalWidth": 800,
+        "physicalHeight": 330,
+        "scale": 1,
+        "transform": 0
+      },
+      "widthMm": 797.2,
+      "heightMm": 333.7,
+      "nominalDiagonalMm": 863.6,
+      "relativeTolerance": 0.005,
+      "source": "https://dl.dell.com/manuals/all-products/esuprt_display_projector/esuprt_display/dell-u3417w-monitor_user's-guide_en-us.pdf",
+      "note": "Chord approximation supplied in the design brief, not claimed as Dell specification. Dell publishes 799.80x334.80 active surface area and a nominal 34-inch family; curvature/arc and nominal-diagonal inference explain their difference. Tolerance 0.5%; independent nominal-family assertion rejects the unsupported 34.1 snap."
+    }
   ]
 }

@@ -1,6 +1,7 @@
 //! A panel host: a bar on every output, and panels summoned over a socket,
 //! drawn by quadrille on layer-shell surfaces.
 mod commands;
+mod glyphs;
 mod graphics;
 mod host;
 mod ipc;

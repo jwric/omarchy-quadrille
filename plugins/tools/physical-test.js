@@ -28,6 +28,13 @@ for (const vector of vectors.cases) {
 for (const vector of vectors.marks)
     assert.equal(physical.snapMm(vector.mm, vector.pxPerMm, vector.pixelsPerVpx),
         vector.expected, vector.id);
+for (const anchor of vectors.anchors) {
+    const actual = physical.resolve(anchor.input, {});
+    for (const axis of ['widthMm', 'heightMm'])
+        assert(Math.abs(actual[axis] / anchor[axis] - 1) <= anchor.relativeTolerance, `${anchor.id}.${axis}`);
+    assert(Math.abs(actual.diagonalMm - anchor.nominalDiagonalMm) < 0.001, `${anchor.id}: nominal family`);
+    console.log(`${anchor.id}: ${actual.widthMm.toFixed(3)} x ${actual.heightMm.toFixed(3)} mm (tolerance ${anchor.relativeTolerance * 100}%)`);
+}
 for (const vector of vectors.overrideParsers)
     assert.deepEqual(JSON.parse(JSON.stringify(physical.parseOverrides(vector.text))),
         vector.expected, vector.id);

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 const PANEL_DIAGONALS: &[f64] = &[
     13.3, 13.5, 14.0, 15.6, 16.0, 17.0, 17.3, 21.5, 23.8, 24.0, 24.5, 25.0, 27.0, 28.0, 31.5, 32.0,
-    34.0, 34.1, 35.0, 38.0, 40.0, 42.0, 43.0, 49.0, 55.0,
+    34.0, 35.0, 38.0, 40.0, 42.0, 43.0, 49.0, 55.0,
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -363,6 +363,27 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn independent_panel_anchors() {
+        for anchor in vectors()["anchors"].as_array().unwrap() {
+            let input = DisplayInput::from_monitor(&anchor["input"]).unwrap();
+            let actual = PhysicalSize::resolve(&input, &Overrides::default());
+            let tolerance = anchor["relativeTolerance"].as_f64().unwrap();
+            for (axis, found) in [("widthMm", actual.width_mm), ("heightMm", actual.height_mm)] {
+                assert!(
+                    (found / anchor[axis].as_f64().unwrap() - 1.0).abs() <= tolerance,
+                    "{}.{axis}: {found}",
+                    anchor["id"]
+                );
+            }
+            assert!(
+                (actual.diagonal_mm - anchor["nominalDiagonalMm"].as_f64().unwrap()).abs() < 0.001,
+                "{}: nominal family",
+                anchor["id"]
+            );
+        }
     }
 
     #[test]

@@ -3,7 +3,7 @@
 // EDID's basic size is rounded to centimetres. Recover a square-pixel panel
 // from its nearest nominal diagonal; explicit measured sizes stay explicit.
 var panelDiagonals = [13.3, 13.5, 14, 15.6, 16, 17, 17.3, 21.5, 23.8, 24,
-                      24.5, 25, 27, 28, 31.5, 32, 34, 34.1, 35, 38, 40, 42,
+                      24.5, 25, 27, 28, 31.5, 32, 34, 35, 38, 40, 42,
                       43, 49, 55];
 
 function positive(value) {

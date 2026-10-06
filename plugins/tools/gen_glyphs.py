@@ -50,6 +50,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("font", nargs="?")
     parser.add_argument("--out", default=str(HERE.parent / "quadrille.bar/Q/Glyphs.js"))
+    parser.add_argument("--rust-out", default=str(HERE.parents[1] / "layershell/crates/bar/src/glyphs.rs"))
     args = parser.parse_args()
 
     path = Path(args.font) if args.font else next((p for p in DEFAULT_FONTS if p.exists()), None)
@@ -174,6 +175,27 @@ def main():
         "",
     ]
     Path(args.out).write_text("\n".join(lines))
+    rust = ["// Generated with Q/Glyphs.js by plugins/tools/gen_glyphs.py; do not edit.",
+            "pub const GLYPHS: &[(u32, [u8; 12])] = &["]
+    for cp, hexrows in items:
+        rows = ", ".join(str(int(hexrows[i:i + 2], 16)) for i in range(0, 24, 2))
+        rust.append(f"    ({cp}, [{rows}]),")
+    rust += ["];", "", "pub fn glyph(code: u32) -> &'static [u8; 12] {",
+             "    GLYPHS.binary_search_by_key(&code, |(cp, _)| *cp)",
+             "        .map(|i| &GLYPHS[i].1)",
+             "        .unwrap_or(&[62, 34, 34, 34, 34, 34, 34, 34, 34, 62, 0, 0])",
+             "}", "", "#[cfg(test)]", "mod tests {", "    #[test]",
+             "    fn qml_and_rust_tables_match() {",
+             '        let source = include_str!("../../../../plugins/quadrille.bar/Q/Glyphs.js");',
+             '        let body = source.split_once("var glyphs = {").expect("QML glyph table").1',
+             "            .split_once('}').expect(\"QML table end\").0;",
+             '        let qml: std::collections::BTreeMap<String, String> = serde_json::from_str(&format!("{{{body}}}")).expect("QML glyph data");',
+             "        assert_eq!(qml.len(), super::GLYPHS.len());",
+             "        for (cp, rows) in super::GLYPHS {",
+             '            let hex: String = rows.iter().map(|row| format!("{row:02x}")).collect();',
+             "            assert_eq!(qml.get(&cp.to_string()), Some(&hex), \"glyph {cp}\");",
+             "        }", "    }", "}", ""]
+    Path(args.rust_out).write_text("\n".join(rust))
     print(f"{len(table)} glyphs from {path.name}; {len(set(clipped))} reach outside their seven columns: "
           f"{[hex(c) for c in sorted(set(clipped))[:12]]}")
 
