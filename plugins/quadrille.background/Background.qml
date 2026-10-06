@@ -328,7 +328,6 @@ Item {
         id: graticule
         anchors.fill: parent
         visible: root.pixelMode && panel.monitor !== null && settle.ready
-        phys: panel.g.phys
         dpr: panel.g.dpr
         monitor: panel.monitor || { width: 1, height: 1 }
         monitors: root.monitorData.length ? root.monitorData : (panel.monitor ? [panel.monitor] : [])

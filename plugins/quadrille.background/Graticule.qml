@@ -10,7 +10,7 @@ import "Drafting.js" as Drafting
 // marks and native bitmap lettering be checked on Qt's offscreen platform.
 Item {
   id: root
-  property real phys: 2
+  property real phys: physical.pixelsPerVpx
   property real dpr: 1
   property var monitor: ({})
   property var monitors: []
