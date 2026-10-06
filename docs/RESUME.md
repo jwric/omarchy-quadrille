@@ -31,45 +31,62 @@ perfectness, everything else". Four slices were running in parallel:
 Each wrote its own "Status at pause" section when told to pause. To resume, give a
 fresh agent the section's "next steps", plus the rules below.
 
-## State at the pause (what each slice reported)
+## State after the fix round (2026-10-06, all four slices reported)
 
-All four slices stopped cleanly; the shell answered `omarchy-shell shell ping`
-and the quadrille bar was active. Each wrote a "Status at pause" section with
-next steps (`plugins/NOTES.md`: agents B, O, P; `layershell/NOTES.md`).
+Everything is committed; the nested test suite passes (core, nobar, look, audio,
+network, bluetooth, power; one teardown flake in `look`, `ctl quit` not answering
+`bye`, did not repeat in two re-runs); `cargo test --workspace` passes (111).
+Per-slice detail is in `plugins/NOTES.md` ("Status", "agent B/O/P" sections) and
+`layershell/NOTES.md`.
 
-- **P (popups, theme tokens).** Done: the theme fix for overlapping stock popups
-  (the cause was spacing not scaled with the 22 px type, not only the font pins):
-  `[spacing] scale = 2.0`, `scale-with-font = false`, heading 22, display-large 44,
-  icon-large 33. Stock audio, bluetooth, network, monitor, power, weather, clock and
-  agents popups were checked on both monitors; the final regenerated file was only
-  re-checked on the bar, and tailscale was not checked. The popup kit (QPopup, QRow,
-  QSlider, ...) and the `quadrille.audio` and `quadrille.power` clones are enabled and
-  pixel-crisp. **Not started:** bluetooth, network, monitor, tailscale, agents,
-  weather and clock clones (brief in `plugins/tools/popup-brief.md`).
-- **B (bar, kit).** Round-3 files committed. **The pixel tray is not finished:**
-  `pixelTray: false` in `plugins/quadrille.bar/Bar.qml` keeps the stock tray. With
-  fake tray items registered (`plugins/tools/fake_sni.py`) the shell stopped
-  answering IPC until they exited: investigate before enabling it. Pitfalls in NOTES.
-- **O (menu, OSD, toasts, icons, wallpaper).** Done: menu empty-state overlap,
-  readable selected sub-text, icon boxes, placeholder icons for missing app icons,
-  pixel Confirm; OSD touchpad/touch/download icons and two-line messages; toasts
-  placed under the bar's real height; kit pieces (Pictograms, AppIcon, Confirm,
-  Scrim). `quadrille.background` draws the wallpaper at each output's pixel grid.
-  **Not done:** reminders, emojis, clipboard, image picker clones; no lock or polkit
-  clone exists (do not enable one without a safe test). `AppIcon` wraps B's shader
-  `PixelIcon` and is unverified on the real GPU.
-- **H (iced panels).** `audio`, `network`, `bluetooth`, `power` panels are built and
-  registered beside `sysmon` (release build clean, 98 unit tests pass; nested tests
-  pass for audio and network with stubbed commands). Bluetooth has 2 failing keyboard
-  checks (probably the test's row counting); the power and look test sections have
-  not run; idle numbers and the registry tests remain. **Not installed:** the
-  user's `~/.local/bin/quadrille-bar` is still the earlier build, and the running host
-  is that one.
-- Housekeeping done by the lead: `plugins/install.sh` and `stock.sh` now include the
-  audio, power and background clones, so `stock.sh` is a full way back again.
-- Side effects to know about: test notifications were created and deleted from the
-  notification history, but rotation had already dropped two older entries; one agent
-  photographed the user's workspace while checking and deleted the file.
+- **Popups (P).** All nine stock popups cloned (audio, power, bluetooth, network,
+  display/monitor, weather, clock, agents enabled; tailscale linked, off, because the
+  stock widget is not in the bar). Theme: `[spacing] scale = 2.0` plus re-pinned font
+  tokens fixed the overlaps. Hero icons are native sprites; `BigText` is expanded with
+  Scale2x/3x from the small face (not hand-drawn: a candidate for hand-drawn large
+  faces). Not exact: network is a fixed 10-row list; long hero names end in an
+  ellipsis; monitor does not dim the last display on. Scale 1 was only measured in the
+  nested harness and offscreen (the ultrawide was unplugged all session).
+- **Bar and kit (B).** The size-flicker root cause was a new window reporting the
+  default output's scale until it is mapped (first frame laid out with the wrong grid;
+  a popup card went 548 px then 493 px). Fixed in the kit (`Px` from the output's real
+  scale, `Settle`, `SizeGate`, popups drawn before the old one closes). The pixel tray
+  is ON (`QUADRILLE_PIXEL_TRAY=0` for the stock one; the earlier "freeze" could not be
+  reproduced). `Sprite` warns on a scaled unit (mixel guard). Vertical bars are
+  unsupported; bottom is not re-measured.
+- **Menu, OSD, toasts, overlays, icons (O).** Fixed and one size from the first frame.
+  Reminders, emojis, clipboard, image picker restyled; OSD icons native 13x13; app
+  icons on 11 and 16 grids with a placeholder; wallpaper drawn per output grid. The
+  clipboard clone was never opened live (it would show real history): try it once.
+  Thin line-art icons nearly vanish in `PixelIcon`. **Lock screen:** `quadrille.lock`
+  was tested end to end in a nested session with a stub PAM, but is DISABLED on the
+  live session (a failure would lock the user out): `plugins/install.sh lock` enables
+  it, with a text console ready. Polkit stays stock (a clone cannot be driven from a
+  nested compositor).
+- **Panel host (H).** `sysmon`, `audio`, `network`, `bluetooth`, `power` panels; idle 0
+  CPU hidden. The final build is installed in `~/.local/bin/quadrille-bar` and was
+  started by hand (not autostarted: see "Waiting on the user").
+- **Terminal.** `tools/quadrille-foot` + a user-level `foot.desktop` (installed):
+  Departure Mono on whole pixels per monitor (11 px at scale 1, 13.2 px at 1.666667).
+  `tools/term-test.sh` renders candidates in a nested compositor.
+
+Side effects to know about
+- Nested-compositor test runs coincided with 31 SIGSEGV coredumps of
+  `xdg-desktop-portal-hyprland` (a short-lived portal process in the terminal's cgroup,
+  crashing in `exit()`; the user's own portal, running since login, was untouched; the
+  crash handler raised "Process crashed" toasts). A bare nested compositor, `grim`, `foot`
+  and the panel host do NOT trigger it (tested); the trigger is something in the QML
+  scratch-shell harnesses. Fix before running them again: run such harnesses under their
+  own session bus (`dbus-run-session`) and find the process that starts the portal.
+- The shared live lock was wedged twice by orphaned `inotifywait` children that kept
+  the lock fd; harnesses must start children with the fd closed (`flock -o`) and kill
+  them on exit. Check with `ino=$(stat -c %i /tmp/quadrille-live.lock); grep ":$ino " /proc/locks`.
+- `rescanPlugins` does not reload an edited plugin; only a shell restart does.
+- The Bluetooth radio was switched off at 21:48 on 2026-10-05 and later on again; no
+  agent claims it (all tests stub the commands).
+- Test notifications were deleted from the history, but rotation had already dropped
+  two older entries. Several agents photographed the live workspace while testing and
+  deleted those files; none are in the repo.
 
 ## Rules every agent worked under (keep them)
 
@@ -101,8 +118,9 @@ next steps (`plugins/NOTES.md`: agents B, O, P; `layershell/NOTES.md`).
   autostart the host is gone after a logout.
 - Laptop scale stays 1.666667 (1.5 is invalid there; the per-screen unit makes the
   grid exact at 3 physical px). Nothing to change.
-- Terminal font size is not tuned (ghostty/alacritty at size 9; Departure Mono
-  native cell is 7 x 14 at 11 px). Needs a decision, and the edit is the user's.
+- Terminal: done for foot (see above); alacritty/ghostty are not the default and
+  keep their point sizes. `QUADRILLE_FOOT_MULTIPLE=2|3` makes the terminal's pixels
+  the shell's size (chunkier text): the user's call.
 - Visibility of the GitHub repo (private now). Making it public needs the
   `quadrille` repo public first (the host depends on it by git), and a review.
 
