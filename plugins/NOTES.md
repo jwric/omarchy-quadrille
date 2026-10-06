@@ -672,7 +672,7 @@ ShaderEffect.
 * The offscreen harness's output must stay outside the Quickshell config directory
   it runs from, or the change reloads the shell under test.
 
-## Status at pause (agent P)
+## Status at the pause (agent P; superseded by the final state below)
 
 **Done and verified**
 - Theme tokens (`tools/gen_themes.py`, themes regenerated, committed, applied with
@@ -896,3 +896,94 @@ is allowed), not the live one.
   dropbox skins (not in this layout), hover/pressed/focus states forced and measured
   for every skin, a polish of the sysmon gauges, the 9 x 7 weather sprites redrawn
   (cloud with sun or moon are still lumpy).
+
+## Popup panels: the final state (agent P)
+
+Nine clones of the host's panels, each the stock plugin's logic verbatim with the view
+redrawn by the popup kit: `quadrille.audio`, `.power`, `.clock`, `.weather`,
+`.bluetooth`, `.network`, `.monitor`, `.agents`, `.tailscale`. `install.sh` links all of
+them and enables each only where its stock widget is in the bar (enabling a clone of a
+widget that is not there would add one: tailscale is therefore linked and left off, and
+`omarchy plugin enable quadrille.tailscale` puts it at the start of the right section;
+disabling it puts `omarchy.tailscale` in its place, so also run `omarchy plugin disable
+omarchy.tailscale`). `stock.sh` disables them all.
+
+**The type and spacing tokens.** `[spacing] scale = 2.0`, `scale-with-font = false`, heading
+22, display and display-large 44, icon-large 33 (section "Why spacing, not only type").
+Re-checked with the final regenerated file live: every popup above on the laptop output
+with no overlap, clipping or truncation; the weather card that overlapped is fixed by the
+spacing, which the font pins alone could not do.
+
+**What was measured, and where.** HDMI-A-1 was unplugged for the whole second session, so
+the scale-1 numbers come from the nested harness (QB, 3440 x 1440 at scale 1) and the
+offscreen runs of the clone authors, not from the real ultrawide; eDP-2 (1.666667) is live.
+`layershell/tools/crisp.py` on every card: 4 to 11 colours, every transition on the grid
+(mod 3 on eDP-2, mod 2 at scale 1). Re-run `plugins/tools/popup-shots.sh` on HDMI-A-1 when it is back.
+
+**One size from the first frame** (the user's flicker bug; the kit part is agent B's:
+`Px`, `Settle`, `SizeGate`, `SurfaceProbe`). What the clones add, measured with
+`plugins/tools/surfaces/popups.sh QA|QB "cases"` (one popup at a time, and `switch/A/B`:
+popup A then B 300 ms later; read with `analyse.py`):
+
+* Never size a card from what arrives after it opens. Power's stats and profile row are
+  always there (a dash until the data arrives); weather's forecast row holds its height;
+  audio asks which outputs are plugged in at start. Before these: power 120, 142, then 196
+  px; weather 106 then 160; audio 367 then 281, each after the card was drawn. After:
+  one height in every row of the log, on both outputs, and none changes while shown.
+* A `Column` lays out nothing while its window is still being shown, so a card sized from
+  one reports the hero alone for the first frames and the rows a few polls after the
+  window is up. `QPopup.settleCount` (default 3 polls of 16 ms) is how long the size must
+  hold before the card is drawn; audio and weather, whose rows come from models, use 7.
+* A card handed over to another popup stays on screen until the newcomer is drawn, so it
+  must not change while it waits: audio clears its lists 600 ms after closing, not at once.
+* Hot reload: **`rescanPlugins` does not reload an edited clone** (`Qt.clearComponentCache`
+  is undefined in Quickshell; the compiled component stays cached by URL). To see a file
+  on disk, `omarchy-restart-shell` inside the lock hold (Hyprland spawns the new shell, so
+  it does not inherit the lock fd), `shell ping`, then about 7 s. Linking the plugin under a
+  new name loads it fresh without a restart.
+* Lock hygiene: a child started inside `flock ... bash -c` (a scratch shell and its plugin
+  watcher) inherits the lock fd and keeps it after the run; the queue is then wedged until
+  it is killed. Start such things with `flock -o`; check `grep ":$(stat -c %i
+  /tmp/quadrille-live.lock) " /proc/locks` and `fuser` for non-`flock` holders.
+
+**No mixels.** Heroes are native sprites (see "One pixel size to a surface" above); the
+hero numbers are `BigText`, which is now drawn at the surface's own pixel too:
+`GlyphsBig.js` expands each 6 x 12 glyph with Scale2x or Scale3x (stems kept, every
+diagonal and corner given pixels of its own) and draws it one pixel to one pixel, a 12 x 24
+or 18 x 36 cell. It is derived from the small face, not redrawn by hand; a hand-drawn
+display face would be the next step if the Scale2x diagonals are not enough.
+
+**Per clone** (what is not obvious from the code):
+
+* *audio*: the master switch mutes everything audible; streams wrap names to two lines;
+  the unplugged outputs are filtered as stock.
+* *power*: a charge bar of 2-wide cells, the profile in use inverse; the percentage is
+  one BigText.
+* *clock*: the calendar is 20 x 14 vpx days on a pitch of 22 x 16, today inverse, the
+  year a stepped bar, double-tap for BORN / LIVE TO (two QFields). The layout carries
+  `quadrille.clock` while the config's `centerAnchor` still says `omarchy.clock`: the bar
+  resolves it through `anchorIn` (host does not rewrite it when a clock is cloned).
+* *weather*: a 21 x 21 condition (own sprites, the stock glyph mapping), the temperature
+  in BigText, the forecast as whole-cell columns (three-letter day names when a column is
+  too narrow), the location search as a QField with suggestion rows.
+* *agents*: stock logic and `Main.qml` verbatim; the provider marks are native 15 x 15
+  sprites instead of the svg logos (the host's `claude-light.svg` is missing, which
+  logged an error); QScroll widened into the padding; the alias keeps the stock reset
+  code. Guarded: `PixelParagraph` with 0 columns hung the shell (now floored at 1).
+* *monitor*: brightness stays as a disabled line when the output has none (stock hides
+  it: the card would change height with the focused output); rows reserve their detail
+  space; state is re-read when a display is plugged or unplugged. The text size and scale
+  controls change the real display: they were only ever rendered.
+* *bluetooth*: a native rune head, SCANNING with a stepped lamp, a device-kind sprite from
+  the `icon` name BlueZ reports; actions appear on the cursor row.
+* *tailscale*: not installed here: the not-installed card says so and where to install
+  it (Omarchy menu, Install, Service, Tailscale); the states with peers were checked with
+  fake data in a throwaway copy.
+* *network*: see its own commit message and the line below.
+
+**Known limits.** The popups of the stock panels not cloned (speedtest, wifi QR, dropbox,
+disk speedtest) still use the host's `KeyboardPanel`/`PopupCard` and its text, fades and
+sizes; they can only be cloned. QRow's trailing items were centred on a half pixel at
+1.666667 (fixed: `y: g.centre`). A long self-name in the tailscale hero ends in an
+ellipsis, and a machine's DNS name is dropped when it does not fit beside its IP:
+the "drop, never cut" rule applied to a secondary field.
