@@ -35,3 +35,13 @@ fc-list | grep -i "departure" | sed 's/^/font: /'
 mkdir -p "$HOME/.config/fontconfig/conf.d"
 cp "$root"/fontconfig/*.conf "$HOME/.config/fontconfig/conf.d/"
 fc-cache -f
+
+# foot, with Departure Mono's size chosen per monitor (see tools/quadrille-foot). A
+# user-level foot.desktop shadows the package's, so the terminal binding picks it up
+# without any config edit; delete the two links to undo.
+if command -v foot >/dev/null; then
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
+  ln -sfn "$root/tools/quadrille-foot" "$HOME/.local/bin/quadrille-foot"
+  ln -sfn "$root/terminal/foot.desktop" "$HOME/.local/share/applications/foot.desktop"
+  echo "terminal: foot -> quadrille-foot"
+fi

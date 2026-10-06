@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Foot
+GenericName=Terminal
+Comment=foot with Departure Mono on whole pixels for the focused monitor (omarchy-quadrille)
+Exec=quadrille-foot
+Icon=foot
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;
+X-TerminalArgExec=-e
+X-TerminalArgAppId=--app-id=
+X-TerminalArgTitle=--title=
+X-TerminalArgDir=--working-directory=
+X-TerminalArgHold=--hold

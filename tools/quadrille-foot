@@ -1,0 +1,30 @@
+#!/bin/bash
+# foot with Departure Mono on whole pixels for the focused monitor.
+#
+# A terminal font is exact when its physical size is a whole multiple of the
+# font's native 11 px (Departure Mono's cell is then 7 x 14 per 11 px). foot
+# multiplies the pixel size by the output's scale, so the size that lands on a
+# multiple differs per monitor: 11 at scale 1 (1x), 13.2 at 1.666667 (2x = 22 px).
+# This picks the multiple nearest to the density of a 12 px font and sets the
+# size to match, then runs foot with whatever it was given.
+#
+# QUADRILLE_FOOT_MULTIPLE=N forces the multiple (2 or 3 make the terminal's pixels
+# the same size as the shell's on a scale-1 / 1.666667 monitor: chunkier text).
+#
+# Needs hyprctl for the focused monitor's scale; without it, scale 1.
+# A window moved to another monitor afterwards keeps its size.
+scale=$(hyprctl monitors -j 2>/dev/null | python3 -c '
+import json, sys
+try:
+    print([m for m in json.load(sys.stdin) if m.get("focused")][0]["scale"])
+except Exception:
+    print(1)
+' 2>/dev/null)
+size=$(python3 -c '
+import sys
+scale = float(sys.argv[1] or 1)
+import os
+multiple = int(os.environ.get("QUADRILLE_FOOT_MULTIPLE") or max(1, round(12 * scale / 11)))
+print("%.4f" % (11 * multiple / scale))
+' "${scale:-1}" 2>/dev/null)
+exec foot -o "main.font=Departure Mono:pixelsize=${size:-11}" "$@"

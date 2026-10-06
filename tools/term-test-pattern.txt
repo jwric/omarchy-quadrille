@@ -1,0 +1,5 @@
+Departure Mono  HEgxy 0123456789 {}[]()<>
+The quick brown fox jumps over the lazy dog.
+fn main() { println!("hello, pixel"); }  // 7x14
+┌── NAME ──┐  │ ├─ tree  └── end   ░▒▓█ ▀▄
+iiiiiiiiii llllllllll mmmmmmmmmm WWWWWWWWWW

@@ -36,6 +36,15 @@ layershell/tools/install.sh                # builds quadrille-bar into ~/.local/
                                            # the autostart and binding lines to add
 ```
 
+`tools/install.sh` also sets up **foot**: a user-level `foot.desktop` runs
+`tools/quadrille-foot`, which picks Departure Mono's pixel size from the focused
+monitor's scale so every glyph edge is on the pixel grid (11 px at scale 1, 13.2 px at
+1.666667, both exact multiples of the font's native 11 px; a plain point size such as 9
+is off the grid on both). Your `foot.ini` is not touched. `QUADRILLE_FOOT_MULTIPLE=2` or
+`3` makes the terminal's pixels the same size as the shell's, with chunkier text. To undo,
+delete `~/.local/bin/quadrille-foot` and `~/.local/share/applications/foot.desktop`.
+`tools/term-test.sh` renders candidates in a nested compositor at both scales.
+
 Nothing here edits your Hyprland config; the scripts print what to add. Crisper
 shell text wants one line in it: `hl.env("QML_DISABLE_DISTANCEFIELD", "1")`
 (Qt's distance-field text renderer smears a pixel font; this turns it off for
