@@ -32,8 +32,10 @@ Item {
         + " sprite is drawn at " + (unit / g.unit).toFixed(2) + "x the surface's pixel (a mixel); "
         + "draw it as a native " + Math.round(Sprites.width(rows) * unit / g.unit) + "-pixel sprite instead")
   }
-  onScaledChanged: reportScaled()
-  Component.onCompleted: reportScaled()
+  // Looked at once the bindings have settled, not on the way (a unit and a grid that
+  // are resolved a moment apart are not a mixel).
+  onScaledChanged: Qt.callLater(reportScaled)
+  Component.onCompleted: Qt.callLater(reportScaled)
 
   implicitWidth: Sprites.width(rows) * unit
   implicitHeight: Sprites.height(rows) * unit
