@@ -141,6 +141,8 @@ impl Overrides {
 }
 
 #[derive(Debug, Clone, Copy)]
+// Keep all derived quantities in sync with Physical.js and the shared vectors.
+#[allow(dead_code)]
 pub struct PhysicalSize {
     pub width_mm: f64,
     pub height_mm: f64,
@@ -240,7 +242,8 @@ fn diagonal(inches: f64) -> f64 {
     }
 }
 
-pub fn snap_mm(mm: f64, px_per_mm: f64, pixels_per_vpx: u32) -> i32 {
+#[cfg(test)]
+fn snap_mm(mm: f64, px_per_mm: f64, pixels_per_vpx: u32) -> i32 {
     (mm * px_per_mm / f64::from(pixels_per_vpx)).round() as i32 * pixels_per_vpx as i32
 }
 
