@@ -16,7 +16,9 @@ Item {
   property int columns: 30
   property int maxLines: 3
 
-  readonly property var lines: Glyphs.wrap(text, columns, maxLines)
+  // (A width of no cells would loop in Glyphs.wrap, taking the shell with it: one
+  // cell is the least a paragraph is wrapped to.)
+  readonly property var lines: Glyphs.wrap(text, Math.max(1, columns), Math.max(1, maxLines))
 
   width: columns * g.cellW
   height: lines.length * g.line
