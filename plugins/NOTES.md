@@ -400,7 +400,7 @@ processes, keyboard model, `Model.js` untouched) and replace the view with these
 | `QReading` | name muted left, value ink right; the name is dropped, not cut, when both do not fit |
 | `QScroll` | whole-pixel scroll (a wheel notch is 14 vpx), a one-pixel mark at the right edge, `ensureItemVisible(item)`, a fixed gutter so wrapped text does not reflow when the mark appears |
 | `QField` | a hairline box over a hidden `TextInput`: steady block cursor, the stretch around the cursor when long, `password`, `keyPressed(event)` |
-| `QTip` `QEmpty` `BigText` | a raised hairline tooltip; an icon and a muted line for an empty list; PixelText at 2x or 3x |
+| `QTip` `QEmpty` `BigText` | a raised hairline tooltip; an icon and a muted line for an empty list; the large hero face at 2x or 3x of the cell (own drawings, not scaled) |
 | `PanelSprites` | 7 x 7 icons the bar and overlays do not have. Each clone keeps its own in an `Icons.qml` beside it rather than editing a shared singleton (also: a singleton is cached by the engine and needs a shell restart, an `Icons.qml` reloads with the plugin) |
 
 All geometry is whole virtual pixels counted from the card; widths are in text cells
@@ -749,10 +749,9 @@ and an accent tone, which is what the hero sprites use (`QHero` passes `iconDim`
 judged on a sheet, not scaled from anything.
 
 What is still bigger than one pixel: the hero number of a popup (the battery
-percentage, the temperature, the date) is `BigText`, quadrille's DISPLAY and HERO
-faces (Departure Mono at 22 and 33, a font pixel of 2 or 3 vpx). It is one per popup
-and it is text, not an icon; if the user wants it gone too, the hero reading becomes
-body text in an inverse block.
+percentage, the temperature, the date) is `BigText`. It is drawn at the surface's own
+pixel from a large face designed for these sizes (`tools/hero_face.py`, "The large
+face" below), not the small face scaled.
 
 ## Agent B, resumed: the size flicker, the mixel rule, the tray hang
 
@@ -851,8 +850,8 @@ still draws it, so an old caller does not vanish. `Sprites.qml` states the sizes
 tone (`o`, the sprite's `mid`) and an always-dim one (`,`) for the shading a bigger
 icon is allowed. Audit of what was there: nothing of the bar, the kit or the
 overlays passes a `unit` any more (`QHero` default is 1, the popup heroes are native
-15 and 21 sprites, the OSD's are 13); what is still scaled is `BigText`, the hero
-number of the clock, power and weather popups (P's note above). BigText is the one thing left that is scaled: not mine, P's note above names it.
+15 and 21 sprites, the OSD's are 13); `BigText` (the hero number) was the last scaled drawing and has its own face now ("The large
+face" below).
 
 ### The tray hang: not reproduced, so the pixel tray is switched on, with a switch
 
@@ -947,11 +946,9 @@ popup A then B 300 ms later; read with `analyse.py`):
   /tmp/quadrille-live.lock) " /proc/locks` and `fuser` for non-`flock` holders.
 
 **No mixels.** Heroes are native sprites (see "One pixel size to a surface" above); the
-hero numbers are `BigText`, which is now drawn at the surface's own pixel too:
-`GlyphsBig.js` expands each 6 x 12 glyph with Scale2x or Scale3x (stems kept, every
-diagonal and corner given pixels of its own) and draws it one pixel to one pixel, a 12 x 24
-or 18 x 36 cell. It is derived from the small face, not redrawn by hand; a hand-drawn
-display face would be the next step if the Scale2x diagonals are not enough.
+hero numbers are `BigText`, drawn from a face of its own at the surface's pixel (agent B,
+"The large face" below; the Scale2x/Scale3x expansion that was here rounded every corner
+and is gone).
 
 **Per clone** (what is not obvious from the code):
 
@@ -993,3 +990,46 @@ sizes; they can only be cloned. QRow's trailing items were centred on a half pix
 1.666667 (fixed: `y: g.centre`). A long self-name in the tailscale hero ends in an
 ellipsis, and a machine's DNS name is dropped when it does not fit beside its IP:
 the "drop, never cut" rule applied to a secondary field.
+
+### The large face (agent B): hero text drawn, not scaled
+
+"Too rounded" was right. `BigText` (the temperature, the battery percentage, the
+date in the weather, power and clock popups) had been made by expanding the small
+glyphs with Scale2x / Scale3x, which turns every diagonal step into a smooth 45
+degree run and so every one-pixel chamfer of Departure Mono into a curve. That
+expansion is deleted (nothing in the repo smooths a pixel font now; the only
+filtering left is `PixelIcon`'s box filter, which reduces an application's real
+icon to a few pixels and never enlarges anything). The step in between, the
+small glyphs with every pixel repeated n x n (`screenshots/hero-replicated.png`),
+was square but a mixel; it stays only as the fallback for a character that has no
+large drawing.
+
+The large face is `plugins/tools/hero_face.py` (a table of glyph definitions)
+baked into `Q/GlyphsBig.js` by `hero_face.py --bake`, 2x and 3x of the cell: 12 x 24
+and 18 x 36, caps 16 and 24 high, stems 2 and 3 pixels, a native pixel of the
+surface (a vpx) one to one. The shapes are Departure Mono's; what the extra pixels
+buy:
+
+* **square corners**: the small face turns a corner with a diagonal step; the
+  large one keeps the corner square and takes a single pixel off its outer edge (a
+  nibble that is 1 px at both sizes, so it is half a stem at 2x and a third at 3x);
+* **true diagonals**: the slash of the 0, the 2, 4, 7, %, v, y, A, M, N are 45 degree
+  lines one pixel to a step, as thick as a stem across a row (1.41 n pixels), not 2 x 2
+  or 3 x 3 stairs; the % slash is thin (n) and keeps a pixel of air round the rings;
+* **waists and rings**: the 8 pinches by one pixel at the middle, the degree sign
+  and the percent's circles are small square rings, not blobs;
+* **nothing interpolated**: pixels are on or off.
+
+Drawn: `0-9 : . , - + % ° C F —`, space, and the letters of the twelve month names
+(`a b c d e g h i l m n o p r s t u v y`, `A D F J M N O S`), so the clock's "October 6"
+is native too. Any other character (an accent, a month name in another language)
+falls back to the small glyph repeated, hard-edged. To draw one: add a `g_x`
+function (cells of the small grid: `h`, `v`, `box`, `diag`, `nib`, `cut`), look at it
+with `plugins/tools/hero_preview.py OUT.png --mode native "your string"`, run `--bake`.
+`screenshots/hero-face.png` shows the heroes at both sizes beside the small face
+(6°C, -12°C, 95%, 62%, 23:10, October 6, September 28).
+
+Checked: the baked JS reproduces the Python rendering pixel for pixel (a node run over
+the hero strings), and live on eDP-2 (1.666667) the clock, weather and power popups
+draw it with two colours and every colour change on a multiple of 3 device pixels from
+the region's origin (`crisp.py`), as the rest of the popup does.

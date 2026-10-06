@@ -4,11 +4,12 @@ import "Glyphs.js" as Glyphs
 import "GlyphsBig.js" as Big
 
 // The body face at twice or three times its size (quadrille's DISPLAY and HERO
-// readouts: a hero number). GlyphsBig.js has the bitmaps: for now the small face's
-// with every pixel repeated n x n, hard corners and no smoothing of any kind;
-// a face drawn natively for these sizes replaces it. Cells are `6 * scale` wide
-// and the line `12 * scale` tall, so layout is still arithmetic, and every edge
-// is a whole device pixel for the same reason PixelText's are.
+// readouts: a hero number). GlyphsBig.js has the large face, drawn at its own size
+// (tools/hero_face.py): 12 x 24 and 18 x 36 cells, square corners, true diagonals,
+// drawn one pixel to one pixel of the surface; a character it does not have is the
+// small face repeated n x n (hard, never smoothed). Cells are `6 * scale` wide and the
+// line `12 * scale` tall, so layout is still arithmetic, and every edge is a whole
+// device pixel for the same reason PixelText's are.
 Item {
   id: root
 
