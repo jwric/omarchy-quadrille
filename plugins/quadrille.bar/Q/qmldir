@@ -40,3 +40,4 @@ SizeGate 1.0 SizeGate.qml
 Pane 1.0 Pane.qml
 Prompt 1.0 Prompt.qml
 PixelEmoji 1.0 PixelEmoji.qml
+StallProbe 1.0 StallProbe.qml

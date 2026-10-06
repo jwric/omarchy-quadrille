@@ -334,6 +334,8 @@ Panel {
       // the 100ms window reuses the running timer and re-enables the scanner
       // almost immediately, undoing the deferral #6605 restored.
       scanRestart.stop()
+      scanFallback.stop()
+      scanPending = false
       // Reset throughput tracking so the next open doesn't compute a fake
       // rate from a sample taken minutes ago.
       prevSampleTime = 0
@@ -390,7 +392,15 @@ Panel {
     syncWifiNetworks()
   }
 
-  onWifiNetworkObjectsChanged: syncWifiNetworks()
+  // Access points arrive one signal at a time, a dozen in a burst while scanning. A sync
+  // for each was a pass over the whole list for each; one in a short while takes them all.
+  Timer {
+    id: syncSoon
+    interval: 60
+    repeat: false
+    onTriggered: root.syncWifiNetworks()
+  }
+  onWifiNetworkObjectsChanged: if (!syncSoon.running) syncSoon.start()
 
   function selectByDelta(delta) {
     if (wifiNetworks.length === 0) { selectedIndex = -1; return }
@@ -489,7 +499,7 @@ Panel {
       if (scanWifi) {
         scanning = true
         setScannerEnabled(false)
-        scanRestart.start()
+        armScan()
       } else {
         setScannerEnabled(true)
       }
@@ -821,11 +831,36 @@ Panel {
     }
   }
 
+  // The scan waits for the card to be drawn. Its answers (a dozen access points, each
+  // a D-Bus signal handled on the GUI thread) used to land in front of the first frame
+  // and hold it back for most of a second; now the card is up with its list empty and
+  // the rows come in under it (the list has a fixed height, so nothing moves).
+  property bool scanPending: false
+  function armScan() {
+    scanPending = true
+    if (panel.shown) { scanFallback.stop(); scanRestart.restart() }
+    else scanFallback.restart()
+  }
+  Connections {
+    target: panel
+    function onShownChanged() {
+      if (panel.shown && root.scanPending && root.opened) { scanFallback.stop(); scanRestart.restart() }
+    }
+  }
+  // The card is not drawn after all (a handover that never lands): scan anyway.
+  Timer {
+    id: scanFallback
+    interval: 700
+    repeat: false
+    onTriggered: if (root.scanPending && root.opened) scanRestart.restart()
+  }
+
   Timer {
     id: scanRestart
     interval: 100
     repeat: false
     onTriggered: {
+      root.scanPending = false
       if (root.opened && root.wifiDevice) {
         root.setScannerEnabled(true)
         scanDone.start()
@@ -1054,7 +1089,7 @@ Panel {
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
     // The rows come from Repeaters, which a Column lays out only once the
     // window is up: hold the card until its size has stopped moving.
-    settleCount: 7
+    settleCount: 4
 
     // Catches all unhandled keys for keyboard navigation. AfterItem priority
     // lets the passphrase field (a child via focus chain) get its keys
@@ -1477,19 +1512,23 @@ Panel {
             width: parent.width
             spacing: panel.g.px(6)
 
+            // Counts, not lists, are the models: a Repeater over an array that is a new
+            // array each time rebuilds every row (and every glyph of every row) when
+            // one access point comes or goes, which was most of the time a scan took.
+            // A row, and its text, are made once and updated where they stand.
             Repeater {
-              model: root.wifiGroups
+              model: root.wifiGroups.length
 
               delegate: Item {
                 id: section
-                required property var modelData
                 required property int index
+                readonly property var group: root.wifiGroups[index] || ({ title: "", start: 0, count: 0 })
                 width: wifiColumn.width
                 height: sectionGroup.height
 
                 Group {
                   id: sectionGroup
-                  name: section.modelData.title
+                  name: section.group.title
                   width: parent.width
                   height: implicitHeight
 
@@ -1498,12 +1537,12 @@ Panel {
                     spacing: panel.g.px(2)
 
                     Repeater {
-                      model: section.modelData.count
+                      model: section.group.count
                       NetRow {
                         required property int index
                         width: parent.width
-                        rowIndex: section.modelData.start + index
-                        net: root.wifiNetworks[section.modelData.start + index]
+                        rowIndex: section.group.start + index
+                        net: root.wifiNetworks[section.group.start + index]
                       }
                     }
                   }

@@ -1033,3 +1033,67 @@ Checked: the baked JS reproduces the Python rendering pixel for pixel (a node ru
 the hero strings), and live on eDP-2 (1.666667) the clock, weather and power popups
 draw it with two colours and every colour change on a multiple of 3 device pixels from
 the region's origin (`crisp.py`), as the rest of the popup does.
+
+## Why the Wi-Fi popup took a second to appear, and the time to card of every popup (agent P)
+
+**Measured**, not guessed: the nested harness (`plugins/tools/surfaces/popups.sh QA "network"`
+with `FRAMES=45`, read with `frames.py`, `analyse.py` and the new `timeline.py`), real
+NetworkManager. The card first showed at +1027 ms, at its final size. The SURF log had the
+window visible at +50 ms and the card's size settled at +60, so neither gate (Settle
+120 ms, SizeGate 260 ms) was the wait. `StallProbe` (a 4 ms timer that logs when it is
+late; silent unless `QUADRILLE_DEBUG_SURFACES=1`, in every `QPopup`) found it:
+**the GUI thread did not run for 781 ms** (`gap=781`) starting 150 ms after the open command.
+Marks in `syncWifiNetworks` showed what it was doing: the scan (enabled 100 ms after
+open, as the stock panel does) delivers a dozen access points as one burst of D-Bus
+signals, and each one ran a full `syncWifiNetworks`, whose assignment of
+`wifiNetworks` took 27, 42, 64, 70, 83, 110, 109, 123, 147 ms for 2 to 10 rows
+(the model work was 0 ms): the Repeaters took **arrays that are new arrays each time**
+(`root.wifiGroups`), so every row, and every rectangle of every glyph of every row, was
+destroyed and made again for each access point. About 100 microseconds a character
+(a bench of 300 lines of 35 characters: 1.1 s to make, `plugins/tools/surfaces/textbench.sh`),
+so nine passes over a growing list made the stall, and the first frame waited for it.
+
+Three changes in `quadrille.network` (the kit's only change is `QPopup.shown`):
+
+1. **The models are counts, not lists** (`model: root.wifiGroups.length`,
+   `model: section.group.count`): a row and its text are made once and updated where
+   they stand (a text that has not changed makes nothing). Rebuild per access
+   point: 27 to 147 ms; now the first appearance of the rows is one pass, about 90 ms for 7.
+2. **The syncs are throttled** (`syncSoon`, 60 ms): a burst is one pass, not a dozen.
+3. **The scan waits for the card** (`armScan`, `QPopup.shown`; 700 ms fallback if the
+   card is never drawn): the card is up with its list empty and the rows come in under it,
+   in a list of fixed height, so nothing moves.
+
+Also `settleCount` 7 to 4 (the card's height is fixed, so little has to settle).
+
+**Time from the open command to the card** (first frame in which the card is on screen;
+frames are about 33 ms apart, so each figure is good to about 35 ms; machine quiet):
+
+| popup | before, QA | after, QA | after, QB (scale 1) |
+|---|---|---|---|
+| network | 1027 ms | 164 to 251 | 184 |
+| audio | 218 | 201 to 232 | 233 |
+| power | 149 | 146 to 197 | 189 |
+| bluetooth | 152 | 159 to 235 | 151 |
+| display | 182 | 205 to 237 | 215 |
+| weather | 177 | 164 | 220 |
+| clock | 149 | 158 to 213 | 146 |
+| agents | 167 (its figures arrive at +330: data, not drawing) | 160 to 277 | 150 |
+
+The floor of about 150 ms is the window's: visible at +50, its own scale after the compositor
+answers (+100, `Settle`), then three polls of 16 ms of `SizeGate`. The live laptop showed
+about 2.4 s for the network card before, the same stall on slower silicon with the real
+access-point list. (The laptop was not re-timed live after the change: the user is at
+the machine, and the popup harness moves workspaces. The nested run uses the same
+NetworkManager, the same panel and the same kit.)
+
+**What a "pixel text is slow" bench says** (300 lines of 35 characters, make / then the next event):
+the current `PixelText` (a Rectangle for each run) 1080 / 100 ms; the same pixels
+with runs repeated down the rows merged and cached per glyph 620 / 250; the same pixels as one
+`Shape` per line (a relative SVG path per glyph, cached) 330 / 235. Both are pixel-identical to
+the current one (0 pixels differ over 60 lines in the nested compositor) and neither was
+adopted: the whole text of the shell would change renderer for a gain of about a third to a half,
+when the cause here was making the same rows again. The lesson for a popup is not "draw text
+differently", it is **never give a Repeater a model that is a new array each time something
+changes**: give it a count, or a model that is edited in place. If a popup is ever slow to open again:
+`FRAMES=45 flock -o ... popups.sh QA "<case>"`, `timeline.py QA <case>`, look for `gap=`.

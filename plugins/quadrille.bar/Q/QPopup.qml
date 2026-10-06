@@ -69,6 +69,10 @@ PanelWindow {
   // Where the content starts inside the card, and how wide it is.
   readonly property real inset: g.hair + padding
   readonly property real innerWidth: Math.max(0, contentWidth - 2 * inset)
+  // The card is on screen (its size has settled and its window has its own scale).
+  // A panel that has something heavy to start (a scan, a fetch) waits for this, so the
+  // work lands after the first frame instead of in front of it.
+  readonly property bool shown: card.visible
   readonly property int innerColumns: g.columns(innerWidth)
 
   function close() {
@@ -103,6 +107,8 @@ PanelWindow {
     stable: root.settleCount
     signature: root.contentWidth.toFixed(2) + "," + root.contentHeight.toFixed(2) + "," + root.cardOrigin.x.toFixed(2) + "," + root.cardOrigin.y.toFixed(2)
   }
+
+  StallProbe { id: stall; tag: "popup." + (root.owner && root.owner.moduleName ? root.owner.moduleName : "?"); active: root.open }
 
   SurfaceProbe {
     window: root
