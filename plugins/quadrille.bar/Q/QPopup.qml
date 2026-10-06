@@ -51,6 +51,11 @@ PanelWindow {
   // Closed for another popup that is not on screen yet: stays up until it is.
   property bool handingOff: false
   property bool focusPrimed: false
+  // Polls of 16 ms the card's size must stay the same before it is drawn. A panel
+  // whose rows come from Repeaters raises it: a Column lays nothing out while its
+  // window is still being shown, so the height it reports at first is the hero's
+  // alone, and the rows arrive tens of milliseconds after the window is up.
+  property int settleCount: 3
 
   // Item that should take keyboard focus once the panel maps (see KeyboardPanel).
   property Item focusTarget: null
@@ -95,6 +100,7 @@ PanelWindow {
   SizeGate {
     id: gate
     active: root.open
+    stable: root.settleCount
     signature: root.contentWidth.toFixed(2) + "," + root.contentHeight.toFixed(2) + "," + root.cardOrigin.x.toFixed(2) + "," + root.cardOrigin.y.toFixed(2)
   }
 

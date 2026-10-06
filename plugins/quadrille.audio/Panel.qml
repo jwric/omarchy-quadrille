@@ -667,6 +667,8 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
+    // its rows are laid out a few frames after the window is up: wait for them
+    settleCount: 7
     contentWidth: panel.fittedContentWidth(panel.cardWidth(40))
     contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, panel.g.px(300))
 
