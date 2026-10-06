@@ -21,6 +21,7 @@ Item {
   property var manifest: null
 
   property bool opened: false
+  property var screenObj: null
   property string step: "minutes"
   property string minutes: ""
   property string filterText: ""
@@ -36,6 +37,7 @@ Item {
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
     if (payload.fontFamily) root.fontFamily = payload.fontFamily
 
+    if (!root.opened) root.screenObj = Where.focusedScreen()
     root.opened = true
     root.step = "minutes"
     root.minutes = ""
@@ -93,8 +95,16 @@ Item {
     }
   }
 
+  Settle { id: settle; window: panel }
+  // the card was hidden for a frame or two: take the keyboard again once it shows
+  Connections {
+    target: settle
+    function onReadyChanged() { if (settle.ready) Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
+  }
+
   PanelWindow {
     id: panel
+    screen: root.screenObj
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
@@ -104,6 +114,7 @@ Item {
     exclusionMode: ExclusionMode.Ignore
 
     Scrim {
+      visible: settle.ready
       tone: Qt.rgba(Color.menu.scrim.r, Color.menu.scrim.g, Color.menu.scrim.b, 1)
       density: Color.menu.scrim.a
     }
@@ -115,6 +126,7 @@ Item {
 
     Pane {
       id: card
+      visible: settle.ready
       width: root.g.px(150)
       height: root.g.px(2 + 2 * pad + 12)
       x: root.g.centre(parent.width, width)

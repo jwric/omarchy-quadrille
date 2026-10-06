@@ -12,6 +12,7 @@ Item {
 
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
   property bool opened: false
+  property var screenObj: null
   property string filterText: ""
   property int selectedIndex: 0
   property bool cursorActive: false
@@ -36,6 +37,7 @@ Item {
   property int historyLimit: 300
 
   function open(payloadJson) {
+    if (!root.opened) root.screenObj = Where.focusedScreen()
     root.opened = true
     root.filterText = ""
     root.selectedIndex = 0
@@ -327,8 +329,16 @@ Item {
     resultList.contentY = Math.max(top, Math.min(bottom, resultList.contentY + rows * resultList.rowHeight))
   }
 
+  Settle { id: settle; window: panel }
+  // the card was hidden for a frame or two: take the keyboard again once it shows
+  Connections {
+    target: settle
+    function onReadyChanged() { if (settle.ready) Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
+  }
+
   PanelWindow {
     id: panel
+    screen: root.screenObj
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
@@ -338,6 +348,7 @@ Item {
     exclusionMode: ExclusionMode.Ignore
 
     Scrim {
+      visible: settle.ready
       tone: Qt.rgba(root.scrim.r, root.scrim.g, root.scrim.b, 1)
       density: root.scrim.a
     }
@@ -349,6 +360,7 @@ Item {
 
     Pane {
       id: card
+      visible: settle.ready
       pad: root.pad
       width: root.g.px(root.innerVpx + 2 * (root.pad + 1))
       // prompt, rule, body, footer

@@ -80,6 +80,9 @@ Item {
   // menu is asked for): it opens at its final size, and never grows a frame
   // later. A timer shows it anyway after 300 ms.
   property bool settled: true
+  // The output the menu opens on (the focused one), known before the window is
+  // shown so its grid is the right one from the first frame.
+  property var screenObj: null
   property string mode: "menu"
   readonly property bool dmenuActive: mode === "select" || mode === "input"
   property string dmenuPrompt: ""
@@ -870,6 +873,7 @@ Item {
   }
 
   function openExistingMenu(initialMenu) {
+    if (!root.opened) root.screenObj = Where.focusedScreen()
     root.settled = false
     settleTimer.restart()
     requestSerial += 1
@@ -897,6 +901,7 @@ Item {
   }
 
   function openDmenu(payload) {
+    if (!root.opened) root.screenObj = Where.focusedScreen()
     root.settled = true
     requestSerial += 1
     mode = payload.mode === "input" ? "input" : "select"
@@ -1098,8 +1103,17 @@ Item {
       else root.trySettle()
     }
   }
+  // content waits for the window to have the device ratio of its output (see Settle)
+  Settle { id: settle; window: panel }
+  // the card was hidden for a frame or two: take the keyboard again once it shows
+  Connections {
+    target: settle
+    function onReadyChanged() { if (settle.ready) Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
+  }
+
   PanelWindow {
     id: panel
+    screen: root.screenObj
     visible: root.opened && root.rowsLoaded && root.settled
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
@@ -1129,6 +1143,7 @@ Item {
     // the dim layer: the theme's scrim colour on a Bayer dither of its alpha,
     // one cell per virtual pixel (a translucent wash where shaders are absent)
     Scrim {
+      visible: settle.ready
       tone: Qt.rgba(root.scrim.r, root.scrim.g, root.scrim.b, 1)
       density: root.scrim.a
     }
@@ -1140,6 +1155,7 @@ Item {
 
     BorderSurface {
       id: card
+      visible: settle.ready
       width: root.cardWidth
       height: Math.min(root.cardHeight, panel.height - Style.gapsOut - panel.effectiveCardTop)
       radius: root.cornerRadius

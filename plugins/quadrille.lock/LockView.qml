@@ -23,7 +23,7 @@ Item {
   id: root
 
   // the pixel grid of the window this is in (a lock surface is a window of its own)
-  readonly property var g: Px.forWindow(root.Window.window)
+  readonly property var g: Px.of(root)
 
   property string backgroundPath: ""
   property int backgroundVersion: 0

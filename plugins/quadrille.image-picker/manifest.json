@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.image-picker",
+  "name": "Quadrille image picker",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "The image picker (wallpapers, themes) as a grid of thumbnails on the pixel grid: corner brackets on the selection, the name above it, labels under each thumbnail only when they fit, a dither behind.",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": { "overlay": "ImagePicker.qml" },
+  "omarchy": { "clonedFrom": "omarchy.image-picker" }
+}

@@ -4,6 +4,7 @@ singleton Role 1.0 Role.qml
 singleton Sprites 1.0 Sprites.qml
 singleton Pictograms 1.0 Pictograms.qml
 singleton Pictograms13 1.0 Pictograms13.qml
+singleton Where 1.0 Where.qml
 PixelText 1.0 PixelText.qml
 PixelParagraph 1.0 PixelParagraph.qml
 PixelIcon 1.0 PixelIcon.qml

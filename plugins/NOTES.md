@@ -503,29 +503,160 @@ reads as an invader.
 * Agent P's popup clones (`quadrille.audio`, `quadrille.power`, ...) replace the
   layout ids; `Bar.qml`'s `popupClones` map makes them wear the original's skin.
 
-## Status at pause (agent O: menu, OSD, notifications, overlays, app icons, wallpaper)
+## Menu, OSD, notifications, overlays, app icons (agent O)
 
-Done and checked (offscreen render at both scales, see the harness below):
+### The pixel rule these follow: one pixel size per surface, no mixels
 
-* **Menu** (`quadrille.menu`): empty state no longer overflows its card (magnifier sprite and one line on the row's own height); the sub-text of the row under the cursor is on_accent (was muted on amber, unreadable); Nerd Font icon characters in labels are left out (they drew as boxes); the `✓` marker is a tick sprite on the right (the face has no `✓`; provider rows such as the font list now show the current one); an ellipsis no longer follows a space; the delete confirmation is the pixel `Confirm` (kit); icons are `AppIcon`. `LocalApps.iconSource` returns "" for a missing icon, and absolute-path icons are offered to an Image only once a one-shot `test -f` says the file exists, so the "Cannot open" warnings are gone and the entry shows the placeholder (a hairline box and the app's initial).
-* **OSD** (`quadrille.osd`): touchpad, touch screen, download and `media` icons (were a bell); a message wraps over two lines instead of being cut at 36 characters; a message OSD with a volume icon is no longer drawn muted.
-* **Notifications** (`quadrille.notifications`): the stack starts 4 vpx under the bar's real height (`Px.barVpx`, not `bar.barSize`, which says 32 px on a 29 px bar); an icon the sender named but that cannot be read is drawn as the placeholder instead of leaving a gap; glyph toasts lead with a pixel sprite (tick, cross, clipboard, plug, ...) instead of a vector glyph; blank lines in a body are collapsed.
-* **Kit additions** (new files in `Q/`, one line each in `qmldir`): `Pictograms` (touchpad touchscreen download search clipboard smile image folder file text app key shield trash sun), `AppIcon` (wraps agent B's `PixelIcon`: placeholder on a missing file, plain picture if the pixel pass delivers nothing in 1.5 s), `Confirm` (pixel `Ui.ConfirmDialog`), `Scrim` + `shaders/dither.frag(.qsb)` (the dim layer as a 4 x 4 Bayer dither, one cell per vpx; plain translucent wash when the shader does not build). `Scrim` is written but NOT yet used by any overlay.
-* **Wallpaper** (forked, finished): `plugins/quadrille.background` and `tools/gen_wallpapers.py`, commit b48117e. Its install.sh / stock.sh lines are NOT yet added (see next steps).
+Every surface draws in one virtual pixel (the window's `Px.unit`). An icon bigger
+than the 7 x 7 text-height size is **not** a 7 x 7 sprite scaled by 2 or 3 (that
+would put 2 x 2 blocks beside 1 x 1 text: a mixed pixel size, a "mixel"). It is a
+separate sprite drawn at its own size with the detail those rows allow. So: the
+OSD's icons are `Q/Pictograms13.qml` (13 x 13: the speaker's cone and three waves,
+the sun's eight rays, the power ring broken at the top, a keyboard with its space
+bar...), drawn at one vpx a pixel next to the 1 x readout and the 1 x gauge; the
+toast icon is a 16 x 16 `AppIcon`; the menu's is 11 x 11; the emoji are 14 x 14;
+the app placeholder is a native 11 x 11 box with the initial. `Pictograms.qml`
+(7 x 7) is for a place one text row tall. A new size gets its own file
+(`Pictograms21.qml`...), never a `unit: 2 * ...`. (Not mine, and still mixed:
+`BigText`, PixelText at 2x or 3x, in the popup panels.)
 
-In progress / not started:
+### What is done (checked offscreen at both scales, and live on the laptop's output)
 
-* Nothing half-done is enabled. No lock or polkit clone exists. Not started: reminders, emojis, clipboard, image picker clones; lock `LockView` and polkit restyles.
-* `AppIcon` -> `PixelIcon` is agent B's GPU shader and has not been seen on screen by me; the offscreen harness stubs it (the software renderer draws ShaderEffect black). First thing to do after a shell restart: open `omarchy-menu summon apps` over an empty workspace and look at the icons at both scales; if they are wrong, `AppIcon` still falls back to the plain picture after 1.5 s.
+* `quadrille.menu`: empty state on a row's own height (it overflowed the card);
+  the sub-text of the row under the cursor in on_accent; icon characters in labels
+  left out (they drew as boxes); the `✓` marker and the provider's current-choice
+  mark drawn as a tick sprite (the face has no `✓`); an ellipsis never follows a
+  space; scrolling by whole rows only (no flick, the wheel moves three rows); the
+  delete confirmation is the pixel `Confirm`; the dim layer is `Scrim`; the card
+  is not shown until the guards and the provider's list have arrived
+  (`settled`, 300 ms at most) so it opens at its final height and never grows a
+  frame later. `LocalApps.iconSource` gives "" for a missing icon and an absolute
+  path is offered to an Image only after one `test -f` batch says the file exists:
+  no "Cannot open" warnings, and the entry gets the placeholder.
+* `quadrille.osd`: native 13 x 13 icons; touchpad, touch screen, download, media
+  keys have their own (were a bell); a message wraps over two lines.
+* `quadrille.notifications`: the stack starts 4 vpx under the bar's real height
+  (`Px.barVpx`; `bar.barSize` says 32 px on a 29 px bar); an icon the sender named
+  but that cannot be read is drawn as the placeholder; glyph toasts lead with a
+  pixel sprite; blank lines in a body are collapsed.
+* Overlays, each a clone with the stock plugin's contract (open / close / IPC /
+  what it runs) and the dim layer `Scrim`:
+  * `quadrille.reminders`: a hairline card, the prompt in muted, what is typed in
+    ink with a steady block caret, `1/2` or `2/2`.
+  * `quadrille.emojis`: a 10 x 8 grid of 18 vpx cells; every emoji redrawn on a
+    14 x 14 grid by `PixelEmoji` (the glyph is drawn into a texture 4x as big and
+    `shaders/pixelpicture.frag` averages 4 x 4 texels per cell and cuts the colours
+    to 6 levels a channel), so it is nearest-neighbour at an integer scale on any
+    screen; corner brackets on the selection; the keywords of the selected one
+    under the grid; whole-row scrolling.
+  * `quadrille.clipboard`: list of one-line rows (inverse block under the cursor,
+    a 7 x 7 icon for text / image / file), the selected entry in full beside it,
+    the keys listed in the longest form that fits (dropped, not cut). History,
+    capture and the `wl-paste --watch` processes are the stock plugin's, verbatim.
+    Never open it on the live session to take a screenshot: it shows the real
+    history. Test with `historyPath` pointed at a mock file (the offscreen
+    harness redirects it by itself).
+  * `quadrille.image-picker`: a grid of 112 x 48 thumbnails, brackets on the
+    selection, the name above, labels under each thumbnail only when they fit.
+* Kit (new files in `Q/`): `Pictograms`, `Pictograms13`, `AppIcon`, `PixelEmoji`,
+  `Confirm`, `Scrim`, `Pane`, `Prompt`, `shaders/dither.frag`,
+  `shaders/pixelpicture.frag`.
+* `AppIcon` wraps B's shader `PixelIcon`: seen on screen, the icons are 11 x 11
+  with a few colours. Thin line art (Avahi's icons) falls under half coverage in the
+  4 x 4 average and nearly vanishes; if the shader cannot be built, the plain
+  picture is drawn after `shaderFailed`.
+* Wallpaper: `quadrille.background`, see its section.
 
-Next steps, in order:
+### Tools
 
-1. Verify live (restart the shell inside the flock): menu Apps icons, an OSD (`omarchy-osd -i volume-high -p 60 -d 4000`), two toasts (`notify-send`, then delete the new files in `~/.local/state/omarchy/notifications/history/`). Fix what the GPU path shows.
-2. Add `quadrille.background` to the `ids` arrays (lab and `*` cases) of `plugins/install.sh` and to both `for id in` lists of `plugins/stock.sh`; paste the wallpaper section (below) into NOTES.md.
-3. Overlays as clones (`kinds: ["overlay"]`, `keepLoaded: true`, `omarchy.clonedFrom: omarchy.reminders|emojis|clipboard|image-picker`, `Q -> ../quadrille.bar/Q`): reminders (a prompt line with a block caret), emojis (grid, each emoji through a `PixelIcon`-style pipeline fed by a `Text` so it is nearest-neighbour at an integer scale; the host emoji are colour bitmaps), clipboard (keep the `wl-paste --watch` Processes and the `pkill` init; list + preview; never open it live, it shows the real history: test with `historyPath` pointed at a mock file), image picker (a grid with `Brackets` on the selection, labels dropped not cut; keep `open`, `preloadRows`, `closeSelector`). Use `Scrim` for the dim layer.
-4. Lock (`LockView.qml` only, the service stays verbatim) and polkit: only if tested in the nested compositor (`layershell/tools/nested.sh`); `lock preview` shows LockView without taking the session lock and is the safe live test. Neutralise `omarchy-brightness-*` and `omarchy-system-wake` in any test copy. Ship disabled otherwise.
+* `plugins/tools/offscreen/run.sh PLUGIN ENTRY.qml SCALE STEPS OUTDIR`: renders a
+  plugin's component offscreen at a chosen output scale (1 or 1.666667), swapping
+  `PanelWindow` for a window whose content can be grabbed; nothing of the live
+  session is touched. `sheet.py` tiles the grabs, `zoom.py` enlarges one. The
+  software renderer draws `ShaderEffect` black, so `PixelIcon` and `PixelEmoji` are
+  stubbed there (a plain picture): their look is checked live.
+* `plugins/tools/overlay-shots.sh PREFIX 'MON|LABEL|OPEN|CLOSE' ...`: live
+  screenshots of anything a command opens, over empty workspaces, discarded unless
+  both outputs showed an empty workspace (popup-shots.sh's way).
+* `plugins/tools/lock-nested-test.sh`: the lock clone against a nested Hyprland.
 
-The offscreen harness (kept in the agent's scratch dir, not the repo): a `PanelWindow` is swapped for a `FloatingWindow` in a throwaway copy of the plugin, the kit's `PixelIcon` is stubbed, and `QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1.666667` gives the laptop's fractional scale; `grabToImage` of an inner item gives device-resolution PNGs. Pitfalls found: a QML `id` shadows a same-named property of the root (`readout` in Osd.qml); an asynchronous `Image` on an `image://icon/` URL aborts the process; keep the harness's output outside the watched config directory or it hot-reloads; `QT_SCALE_FACTOR` works but `ShaderEffect`/`layer.textureSize` do not render in the software scene graph (the live shell must check them).
+### Lock screen and polkit
+
+* **Lock** (`quadrille.lock`, enabled): `Service.qml` is the stock file byte for byte
+  (it owns `WlSessionLock` and PAM); only `LockView.qml` is replaced, with the stock
+  view's properties and signals. It is a void and one hairline card: LOCKED and the
+  time, then `> ENTER PASSWORD` / `CHECKING` / the failure in the alarm colour, a
+  block per typed character (the input is still a real, invisible `TextInput`), the
+  fingerprint hint only when a reader is enrolled and it fits.
+  What was proved, by `plugins/tools/lock-nested-test.sh`: the clone's service runs in
+  a Quickshell of its own inside a nested Hyprland (a window of the live session,
+  with a session lock of its own: the live session is never locked), at the laptop's
+  scale and the ultrawide's. PAM is replaced by a service of the script's own
+  (`PamContext.configDirectory`): pam_deny, then pam_permit; so the real password is
+  never asked for, no failure is counted against the account (pam_faillock), and the
+  fingerprint reader is never touched. Checked, with keys sent by `wtype` to the
+  nested compositor only: it locks and the compositor is `secure`; typing masks;
+  Enter with a wrong password keeps the lock and shows `AUTHENTICATION FAILED (1)`;
+  an accepted password unlocks; screenshots of each state at both scales. On the live
+  shell `omarchy-shell lock preview` (the same view in an overlay, nothing locked)
+  shows the card. `plugins/install.sh lock` links and enables it; `stock.sh` puts the
+  stock one back. If it ever goes wrong while locked: a TTY, `loginctl unlock-session`.
+  It found that `Px.of(item)` knew nothing of a session-lock surface (not a
+  QsWindow): the kit then drew at a device ratio of 1 while the card was laid out at
+  1.667. `Px.of` now falls back to the item's QtQuick `Window.window`.
+* **Polkit**: not cloned. An agent registers with polkit for the whole session, once;
+  a test instance cannot register beside the live one without contending with it,
+  and an authentication request is routed to the registered agent, so a clone cannot
+  be driven from a nested compositor either. Left stock.
+
+### Opening at one size (the flicker)
+
+Overlays set their `screen` to the focused output before they are shown
+(`Q/Where.qml`; a window without one is on the first output until it has been
+shown, so its grid was resolved for the wrong output), and their content waits for
+`Settle` (the window has its output's device ratio). The menu's card also waits for
+the `when:` guards and a provider's list (`settled`, 300 ms at most) so it does not
+grow a frame after it opens. Nothing here has a Behavior or an animation on size.
+
+### Wallpaper (quadrille.background)
+
+Stock `omarchy.background` scales one 3440 x 1440 PNG to every output with
+PreserveAspectCrop and smoothing. That is 1:1 on HDMI-A-1 but about 1.11x on a
+2560 x 1600 output at scale 1.666667, so the dither lands uneven (124 colours in a
+wallpaper-only crop, transitions on every residue mod 3).
+
+`plugins/quadrille.background` clones the background service. When the wallpaper
+matches `backgrounds/*graticule*.png`, each output draws it with `graticule.frag`, a
+port of `gen_themes.graticule()`, at that output's own block size
+(`Px.forWindow(panel).phys`). It uses the live `Role` colours, so a theme change
+recolours it in the same frame, with no reveal. Other wallpapers use the stock path.
+If the shader does not build, the PNG is shown. Rebuild the shader with
+`build-shader.sh` (qt6-shadertools); the `.qsb` is committed.
+
+`tools/gen_wallpapers.py` writes the same picture as a PNG (`--size WxH --block N`)
+for single-output setups, and `--compare capture.png` checks a grim capture against
+it.
+
+Verified with grim on an empty workspace: eDP-2 has 5 colours and its transitions on
+multiples of 3, and against the generator 0 differing pixels for all five themes;
+HDMI-A-1 is identical to the shipped PNG apart from the pointer. Limits: the grid is
+anchored top-left and the last partial virtual pixel is cropped (2560 / 3 is not
+whole); the lock screen and the image picker still use the PNG; a shader uniform must
+be a `real` (an `int` arrives as 0); the offscreen Qt platform cannot test
+ShaderEffect.
+
+### Pitfalls found
+
+* A QML `id` shadows a same-named property of the root (`readout` in Osd.qml).
+* An asynchronous `Image` on an `image://icon/` URL aborts the process (kit probes
+  are synchronous).
+* Qt multiplies an Image's `sourceSize` by the window's device pixel ratio, so
+  `sourceSize: 11` is 18 pixels on the laptop: the exact reduction to N cells has
+  to happen in a texture (`PixelIcon`), never in `sourceSize`.
+* `layer.textureSize` / `ShaderEffectSource` need the real compositor; the offscreen
+  platform uses the software scene graph.
+* The offscreen harness's output must stay outside the Quickshell config directory
+  it runs from, or the change reloads the shell under test.
 
 ## Status at pause (agent P)
 

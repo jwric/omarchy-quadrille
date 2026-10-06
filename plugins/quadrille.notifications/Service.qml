@@ -991,8 +991,12 @@ Item {
       // rest of the (invisible) full-screen overlay never eats input.
       mask: Region { item: popupColumn }
 
+      // the stack waits for the window to have its output's device ratio (see Settle)
+      Settle { id: settle; window: popupWindow }
+
       ColumnLayout {
         id: popupColumn
+        visible: settle.ready
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.topMargin: popupWindow.edgeTop

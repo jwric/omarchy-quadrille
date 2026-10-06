@@ -26,7 +26,7 @@ LOCK=/tmp/quadrille-live.lock
 if [ "${1:-}" != "--inner" ]; then
   OUT=${1:-${TMPDIR:-/tmp}/quadrille-lock-test}
   mkdir -p "$OUT"
-  exec flock -w 900 "$LOCK" timeout -k 5 150 "$0" --inner "$OUT"
+  exec flock -o -w 900 "$LOCK" timeout -k 5 150 "$0" --inner "$OUT"
 fi
 OUT=$2
 ROOT=$(mktemp -d /tmp/qlock-root.XXXXXX)
@@ -39,7 +39,7 @@ cleanup() {
   "$N" down >/dev/null 2>&1
   rm -rf "$ROOT" "$PAM"
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 shell=${OMARCHY_PATH:-/usr/share/omarchy}/shell
 for d in Commons Ui services; do ln -s "$shell/$d" "$ROOT/$d"; done
@@ -69,7 +69,7 @@ import "svc"
 ShellRoot { Service { omarchyPath: "/usr/share/omarchy" } }
 QML
 # the clone's own Service imports qs.Commons; Q is the kit
-ipc() { quickshell ipc -p "$ROOT" call lock "$@" 2>&1; }
+ipc() { "$N" run quickshell ipc -p "$ROOT" call lock "$@" 2>&1; }
 
 echo "== nested compositor"
 "$N" up >"$OUT/nested.log" 2>&1 || { fail "nested compositor did not start"; cat "$OUT/nested.log"; exit 1; }

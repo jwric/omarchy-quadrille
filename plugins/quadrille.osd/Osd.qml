@@ -18,6 +18,7 @@ Item {
   id: root
 
   property bool opened: false
+  property var screenObj: null
   property string icon: ""
   property string message: ""
   property string iconKey: ""
@@ -81,6 +82,7 @@ Item {
     message = next.message
     icon = next.icon
     duration = next.duration
+    if (!opened) screenObj = Where.focusedScreen()
     opened = true
     if (duration > 0) hideTimer.restart()
     else hideTimer.stop()
@@ -112,11 +114,14 @@ Item {
     function ping(): string { return "ok" }
   }
 
+  Settle { id: settle; window: panel }
+
   PanelWindow {
     id: panel
 
     // The grid of the screen this card is on.
     readonly property var g: Px.forWindow(panel)
+    screen: root.screenObj
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
@@ -130,6 +135,7 @@ Item {
 
     Rectangle {
       id: card
+      visible: settle.ready
       readonly property real content: panel.g.px(Math.max(root.slot, root.hasProgress ? root.slot : root.messageLines * 12))
       width: panel.g.px(root.pad * 2 + root.iconSize + root.gap)
         + (root.hasProgress ? panel.g.px(root.gaugeCells * 4 - 1 + root.gap) + readoutBox.width
