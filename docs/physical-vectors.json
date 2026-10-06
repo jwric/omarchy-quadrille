@@ -1,0 +1,621 @@
+{
+  "description": "Native mode/EDID axes; odd transforms swap axes. Float tolerance 1e-9. Shared by Physical.js and physical.rs.",
+  "cases": [
+    {
+      "id": "laptop",
+      "input": {
+        "name": "eDP-2",
+        "make": "Panel",
+        "model": "Laptop",
+        "width": 2560,
+        "height": 1600,
+        "physicalWidth": 340,
+        "physicalHeight": 220,
+        "transform": 0,
+        "scale": 1.666667
+      },
+      "overrides": {},
+      "expected": {
+        "widthMm": 344.62651074766774,
+        "heightMm": 215.39156921729233,
+        "diagonalMm": 406.4,
+        "widthPx": 2560,
+        "heightPx": 1600,
+        "estimated": false,
+        "source": "edid",
+        "pixelsPerVpx": 3,
+        "mmPerPixelX": 0.13461973076080772,
+        "mmPerPixelY": 0.13461973076080772,
+        "pxPerMmX": 7.42833160004457,
+        "pxPerMmY": 7.42833160004457,
+        "mmPerVpxX": 0.4038591922824232,
+        "mmPerVpxY": 0.4038591922824232,
+        "mmPerLogicalPixelX": 0.2243662628079231,
+        "mmPerLogicalPixelY": 0.2243662628079231
+      }
+    },
+    {
+      "id": "ultrawide",
+      "input": {
+        "name": "HDMI-A-1",
+        "make": "Dell Inc.",
+        "model": "U3417W",
+        "width": 3440,
+        "height": 1440,
+        "physicalWidth": 800,
+        "physicalHeight": 330,
+        "transform": 0,
+        "scale": 1
+      },
+      "overrides": {},
+      "expected": {
+        "widthMm": 798.9630376072965,
+        "heightMm": 334.44964364956604,
+        "diagonalMm": 866.14,
+        "widthPx": 3440,
+        "heightPx": 1440,
+        "estimated": false,
+        "source": "edid",
+        "pixelsPerVpx": 2,
+        "mmPerPixelX": 0.23225669697886528,
+        "mmPerPixelY": 0.2322566969788653,
+        "pxPerMmX": 4.30558090684893,
+        "pxPerMmY": 4.30558090684893,
+        "mmPerVpxX": 0.46451339395773056,
+        "mmPerVpxY": 0.4645133939577306,
+        "mmPerLogicalPixelX": 0.23225669697886528,
+        "mmPerLogicalPixelY": 0.2322566969788653
+      }
+    },
+    {
+      "id": "rotated-laptop",
+      "input": {
+        "name": "eDP-2",
+        "make": "Panel",
+        "model": "Laptop",
+        "width": 2560,
+        "height": 1600,
+        "physicalWidth": 340,
+        "physicalHeight": 220,
+        "transform": 1,
+        "scale": 1.666667
+      },
+      "overrides": {},
+      "expected": {
+        "widthMm": 215.39156921729233,
+        "heightMm": 344.62651074766774,
+        "diagonalMm": 406.4,
+        "widthPx": 1600,
+        "heightPx": 2560,
+        "estimated": false,
+        "source": "edid",
+        "pixelsPerVpx": 3,
+        "mmPerPixelX": 0.13461973076080772,
+        "mmPerPixelY": 0.13461973076080772,
+        "pxPerMmX": 7.42833160004457,
+        "pxPerMmY": 7.42833160004457,
+        "mmPerVpxX": 0.4038591922824232,
+        "mmPerVpxY": 0.4038591922824232,
+        "mmPerLogicalPixelX": 0.2243662628079231,
+        "mmPerLogicalPixelY": 0.2243662628079231
+      }
+    },
+    {
+      "id": "mirrored-rotated-ultrawide",
+      "input": {
+        "name": "HDMI-A-1",
+        "make": "Dell Inc.",
+        "model": "U3417W",
+        "width": 3440,
+        "height": 1440,
+        "physicalWidth": 800,
+        "physicalHeight": 330,
+        "transform": 5,
+        "scale": 1
+      },
+      "overrides": {},
+      "expected": {
+        "widthMm": 334.44964364956604,
+        "heightMm": 798.9630376072965,
+        "diagonalMm": 866.14,
+        "widthPx": 1440,
+        "heightPx": 3440,
+        "estimated": false,
+        "source": "edid",
+        "pixelsPerVpx": 2,
+        "mmPerPixelX": 0.2322566969788653,
+        "mmPerPixelY": 0.23225669697886528,
+        "pxPerMmX": 4.30558090684893,
+        "pxPerMmY": 4.30558090684893,
+        "mmPerVpxX": 0.4645133939577306,
+        "mmPerVpxY": 0.46451339395773056,
+        "mmPerLogicalPixelX": 0.2322566969788653,
+        "mmPerLogicalPixelY": 0.23225669697886528
+      }
+    },
+    {
+      "id": "estimated",
+      "input": {
+        "name": "Virtual-1",
+        "make": "Panel",
+        "model": "Laptop",
+        "width": 1920,
+        "height": 1080,
+        "physicalWidth": 0,
+        "physicalHeight": 0,
+        "transform": 0,
+        "scale": 1
+      },
+      "overrides": {},
+      "expected": {
+        "widthMm": 507.99999999999994,
+        "heightMm": 285.75,
+        "diagonalMm": 582.8525220842747,
+        "widthPx": 1920,
+        "heightPx": 1080,
+        "estimated": true,
+        "source": "estimated",
+        "pixelsPerVpx": 2,
+        "mmPerPixelX": 0.2645833333333333,
+        "mmPerPixelY": 0.26458333333333334,
+        "pxPerMmX": 3.779527559055119,
+        "pxPerMmY": 3.779527559055118,
+        "mmPerVpxX": 0.5291666666666666,
+        "mmPerVpxY": 0.5291666666666667,
+        "mmPerLogicalPixelX": 0.2645833333333333,
+        "mmPerLogicalPixelY": 0.26458333333333334
+      }
+    },
+    {
+      "id": "estimated-rotated",
+      "input": {
+        "name": "Virtual-2",
+        "make": "Panel",
+        "model": "Laptop",
+        "width": 1920,
+        "height": 1080,
+        "physicalWidth": 0,
+        "physicalHeight": 0,
+        "transform": 3,
+        "scale": 1.666667
+      },
+      "overrides": {},
+      "expected": {
+        "widthMm": 285.75,
+        "heightMm": 507.99999999999994,
+        "diagonalMm": 582.8525220842747,
+        "widthPx": 1080,
+        "heightPx": 1920,
+        "estimated": true,
+        "source": "estimated",
+        "pixelsPerVpx": 3,
+        "mmPerPixelX": 0.26458333333333334,
+        "mmPerPixelY": 0.2645833333333333,
+        "pxPerMmX": 3.779527559055118,
+        "pxPerMmY": 3.779527559055119,
+        "mmPerVpxX": 0.79375,
+        "mmPerVpxY": 0.7937499999999998,
+        "mmPerLogicalPixelX": 0.4409723104166666,
+        "mmPerLogicalPixelY": 0.44097231041666657
+      }
+    },
+    {
+      "id": "diagonal-override",
+      "input": {
+        "name": "eDP-2",
+        "make": "Panel",
+        "model": "Laptop",
+        "width": 2560,
+        "height": 1600,
+        "physicalWidth": 340,
+        "physicalHeight": 220,
+        "transform": 0,
+        "scale": 1.666667
+      },
+      "overrides": {
+        "eDP-2": {
+          "diagonal_inches": 15.6
+        }
+      },
+      "expected": {
+        "widthMm": 336.010847978976,
+        "heightMm": 210.00677998685998,
+        "diagonalMm": 396.23999999999995,
+        "widthPx": 2560,
+        "heightPx": 1600,
+        "estimated": false,
+        "source": "override",
+        "pixelsPerVpx": 3,
+        "mmPerPixelX": 0.1312542374917875,
+        "mmPerPixelY": 0.1312542374917875,
+        "pxPerMmX": 7.6188016410713555,
+        "pxPerMmY": 7.6188016410713555,
+        "mmPerVpxX": 0.3937627124753625,
+        "mmPerVpxY": 0.3937627124753625,
+        "mmPerLogicalPixelX": 0.21875710623772499,
+        "mmPerLogicalPixelY": 0.21875710623772499
+      }
+    },
+    {
+      "id": "measured-override",
+      "input": {
+        "name": "eDP-2",
+        "make": "Panel",
+        "model": "Laptop",
+        "width": 2560,
+        "height": 1600,
+        "physicalWidth": 340,
+        "physicalHeight": 220,
+        "transform": 1,
+        "scale": 1.666667
+      },
+      "overrides": {
+        "eDP-2": {
+          "width_mm": 344.6,
+          "height_mm": 215.4
+        }
+      },
+      "expected": {
+        "widthMm": 215.4,
+        "heightMm": 344.6,
+        "diagonalMm": 406.38198778981337,
+        "widthPx": 1600,
+        "heightPx": 2560,
+        "estimated": false,
+        "source": "override",
+        "pixelsPerVpx": 3,
+        "mmPerPixelX": 0.134625,
+        "mmPerPixelY": 0.134609375,
+        "pxPerMmX": 7.428040854224698,
+        "pxPerMmY": 7.4289030760301795,
+        "mmPerVpxX": 0.403875,
+        "mmPerVpxY": 0.403828125,
+        "mmPerLogicalPixelX": 0.22437504487499998,
+        "mmPerLogicalPixelY": 0.22434900320312498
+      }
+    },
+    {
+      "id": "make-model-override",
+      "input": {
+        "name": "HDMI-A-1",
+        "make": "Dell Inc.",
+        "model": "U3417W",
+        "width": 3440,
+        "height": 1440,
+        "physicalWidth": 800,
+        "physicalHeight": 330,
+        "transform": 0,
+        "scale": 1
+      },
+      "overrides": {
+        "Dell Inc. U3417W": {
+          "diagonal_inches": 34.1
+        }
+      },
+      "expected": {
+        "widthMm": 798.9630376072965,
+        "heightMm": 334.44964364956604,
+        "diagonalMm": 866.14,
+        "widthPx": 3440,
+        "heightPx": 1440,
+        "estimated": false,
+        "source": "override",
+        "pixelsPerVpx": 2,
+        "mmPerPixelX": 0.23225669697886528,
+        "mmPerPixelY": 0.2322566969788653,
+        "pxPerMmX": 4.30558090684893,
+        "pxPerMmY": 4.30558090684893,
+        "mmPerVpxX": 0.46451339395773056,
+        "mmPerVpxY": 0.4645133939577306,
+        "mmPerLogicalPixelX": 0.23225669697886528,
+        "mmPerLogicalPixelY": 0.2322566969788653
+      }
+    },
+    {
+      "id": "name-takes-precedence",
+      "input": {
+        "name": "HDMI-A-1",
+        "make": "Dell Inc.",
+        "model": "U3417W",
+        "width": 3440,
+        "height": 1440,
+        "physicalWidth": 800,
+        "physicalHeight": 330,
+        "transform": 0,
+        "scale": 1
+      },
+      "overrides": {
+        "Dell Inc. U3417W": {
+          "diagonal_inches": 34.1
+        },
+        "HDMI-A-1": {
+          "diagonal_inches": 34
+        }
+      },
+      "expected": {
+        "widthMm": 796.6200374970111,
+        "heightMm": 333.46885290572556,
+        "diagonalMm": 863.5999999999999,
+        "widthPx": 3440,
+        "heightPx": 1440,
+        "estimated": false,
+        "source": "override",
+        "pixelsPerVpx": 2,
+        "mmPerPixelX": 0.23157559229564278,
+        "mmPerPixelY": 0.23157559229564276,
+        "pxPerMmX": 4.318244380104368,
+        "pxPerMmY": 4.318244380104369,
+        "mmPerVpxX": 0.46315118459128557,
+        "mmPerVpxY": 0.4631511845912855,
+        "mmPerLogicalPixelX": 0.23157559229564278,
+        "mmPerLogicalPixelY": 0.23157559229564276
+      }
+    },
+    {
+      "id": "override-estimated",
+      "input": {
+        "name": "HDMI-A-1",
+        "make": "Dell Inc.",
+        "model": "U3417W",
+        "width": 3440,
+        "height": 1440,
+        "physicalWidth": 0,
+        "physicalHeight": 0,
+        "transform": 0,
+        "scale": 1
+      },
+      "overrides": {
+        "HDMI-A-1": {
+          "width_mm": 797.8,
+          "height_mm": 333.9
+        }
+      },
+      "expected": {
+        "widthMm": 797.8,
+        "heightMm": 333.9,
+        "diagonalMm": 864.8549300316209,
+        "widthPx": 3440,
+        "heightPx": 1440,
+        "estimated": false,
+        "source": "override",
+        "pixelsPerVpx": 2,
+        "mmPerPixelX": 0.2319186046511628,
+        "mmPerPixelY": 0.231875,
+        "pxPerMmX": 4.311857608423164,
+        "pxPerMmY": 4.3126684636118595,
+        "mmPerVpxX": 0.4638372093023256,
+        "mmPerVpxY": 0.46375,
+        "mmPerLogicalPixelX": 0.2319186046511628,
+        "mmPerLogicalPixelY": 0.231875
+      }
+    },
+    {
+      "id": "unsnapped-small-panel",
+      "input": {
+        "name": "eDP-2",
+        "make": "Panel",
+        "model": "Laptop",
+        "width": 1000,
+        "height": 1000,
+        "physicalWidth": 100,
+        "physicalHeight": 100,
+        "transform": 0,
+        "scale": 2
+      },
+      "overrides": {},
+      "expected": {
+        "widthMm": 100.5788685559745,
+        "heightMm": 100.5788685559745,
+        "diagonalMm": 142.23999999999998,
+        "widthPx": 1000,
+        "heightPx": 1000,
+        "estimated": false,
+        "source": "edid",
+        "pixelsPerVpx": 4,
+        "mmPerPixelX": 0.10057886855597449,
+        "mmPerPixelY": 0.10057886855597449,
+        "pxPerMmX": 9.942446304647747,
+        "pxPerMmY": 9.942446304647747,
+        "mmPerVpxX": 0.40231547422389796,
+        "mmPerVpxY": 0.40231547422389796,
+        "mmPerLogicalPixelX": 0.20115773711194898,
+        "mmPerLogicalPixelY": 0.20115773711194898
+      }
+    },
+    {
+      "id": "invalid-edid-axis",
+      "input": {
+        "name": "eDP-2",
+        "make": "Panel",
+        "model": "Laptop",
+        "width": 2560,
+        "height": 1600,
+        "physicalWidth": 0,
+        "physicalHeight": 220,
+        "transform": 0,
+        "scale": 0
+      },
+      "overrides": {},
+      "expected": {
+        "widthMm": 677.3333333333333,
+        "heightMm": 423.3333333333333,
+        "diagonalMm": 798.7437358474591,
+        "widthPx": 2560,
+        "heightPx": 1600,
+        "estimated": true,
+        "source": "estimated",
+        "pixelsPerVpx": 2,
+        "mmPerPixelX": 0.2645833333333333,
+        "mmPerPixelY": 0.26458333333333334,
+        "pxPerMmX": 3.779527559055119,
+        "pxPerMmY": 3.779527559055118,
+        "mmPerVpxX": 0.5291666666666666,
+        "mmPerVpxY": 0.5291666666666667,
+        "mmPerLogicalPixelX": 0.2645833333333333,
+        "mmPerLogicalPixelY": 0.26458333333333334
+      }
+    },
+    {
+      "id": "invalid-override-falls-back",
+      "input": {
+        "name": "eDP-2",
+        "make": "Panel",
+        "model": "Laptop",
+        "width": 2560,
+        "height": 1600,
+        "physicalWidth": 340,
+        "physicalHeight": 220,
+        "transform": 0,
+        "scale": 1.666667
+      },
+      "overrides": {
+        "eDP-2": {
+          "diagonal_inches": -1
+        }
+      },
+      "expected": {
+        "widthMm": 344.62651074766774,
+        "heightMm": 215.39156921729233,
+        "diagonalMm": 406.4,
+        "widthPx": 2560,
+        "heightPx": 1600,
+        "estimated": false,
+        "source": "edid",
+        "pixelsPerVpx": 3,
+        "mmPerPixelX": 0.13461973076080772,
+        "mmPerPixelY": 0.13461973076080772,
+        "pxPerMmX": 7.42833160004457,
+        "pxPerMmY": 7.42833160004457,
+        "mmPerVpxX": 0.4038591922824232,
+        "mmPerVpxY": 0.4038591922824232,
+        "mmPerLogicalPixelX": 0.2243662628079231,
+        "mmPerLogicalPixelY": 0.2243662628079231
+      }
+    },
+    {
+      "id": "ultrawide-34-inch-override",
+      "input": {
+        "name": "HDMI-A-1",
+        "make": "Dell Inc.",
+        "model": "U3417W",
+        "width": 3440,
+        "height": 1440,
+        "physicalWidth": 800,
+        "physicalHeight": 330,
+        "transform": 0,
+        "scale": 1
+      },
+      "overrides": {
+        "HDMI-A-1": {
+          "diagonal_inches": 34.0
+        }
+      },
+      "expected": {
+        "widthMm": 796.6200374970111,
+        "heightMm": 333.46885290572556,
+        "diagonalMm": 863.5999999999999,
+        "widthPx": 3440,
+        "heightPx": 1440,
+        "estimated": false,
+        "source": "override",
+        "pixelsPerVpx": 2,
+        "mmPerPixelX": 0.23157559229564278,
+        "mmPerPixelY": 0.23157559229564276,
+        "pxPerMmX": 4.318244380104368,
+        "pxPerMmY": 4.318244380104369,
+        "mmPerVpxX": 0.46315118459128557,
+        "mmPerVpxY": 0.4631511845912855,
+        "mmPerLogicalPixelX": 0.23157559229564278,
+        "mmPerLogicalPixelY": 0.23157559229564276
+      }
+    }
+  ],
+  "marks": [
+    {
+      "id": "positive-half",
+      "mm": 1,
+      "pxPerMm": 3,
+      "pixelsPerVpx": 2,
+      "expected": 4
+    },
+    {
+      "id": "negative-half",
+      "mm": -1,
+      "pxPerMm": 3,
+      "pixelsPerVpx": 2,
+      "expected": -4
+    },
+    {
+      "id": "laptop-centimetre",
+      "mm": 10,
+      "pxPerMm": 7.42833160004457,
+      "pixelsPerVpx": 3,
+      "expected": 75
+    },
+    {
+      "id": "ultrawide-centimetre",
+      "mm": 10,
+      "pxPerMm": 4.30558090684893,
+      "pixelsPerVpx": 2,
+      "expected": 44
+    }
+  ],
+  "overrideParsers": [
+    {
+      "id": "simple",
+      "text": "[\"eDP-2\"]\ndiagonal_inches = 16.0\n",
+      "expected": {
+        "eDP-2": {
+          "diagonal_inches": 16
+        }
+      }
+    },
+    {
+      "id": "model-and-output",
+      "text": "[displays.\"Dell Inc. U3417W\"] # panel\ndiagonal_inches = +3.4e1\n\n[eDP-2]\nwidth_mm = 3_44.6\nheight_mm = 215.4 # measured\n",
+      "expected": {
+        "Dell Inc. U3417W": {
+          "diagonal_inches": 34
+        },
+        "eDP-2": {
+          "width_mm": 344.6,
+          "height_mm": 215.4
+        }
+      }
+    },
+    {
+      "id": "quoted-names",
+      "text": "[\"Display # \\\"A\\\"\"] # outside\ndiagonal_inches = 24\n['Literal # name']\nwidth_mm = 500\nheight_mm = 300\n",
+      "expected": {
+        "Display # \"A\"": {
+          "diagonal_inches": 24
+        },
+        "Literal # name": {
+          "width_mm": 500,
+          "height_mm": 300
+        }
+      }
+    },
+    {
+      "id": "empty",
+      "text": "# no calibration\n",
+      "expected": {}
+    }
+  ],
+  "invalidOverrides": [
+    "diagonal_inches=16",
+    "[\"eDP-2\"]\nwidth_mm=340",
+    "[\"eDP-2\"]\ndiagonal_inches=0",
+    "[\"eDP-2\"]\ndiagonal_inches=-1",
+    "[\"eDP-2\"]\ndiagonal_inches=nan",
+    "[\"eDP-2\"]\ndiagonal_inches=16\ndiagonal_inches=16",
+    "[\"eDP-2\"]\ndiagonal_inches=16\n[\"eDP-2\"]\ndiagonal_inches=16",
+    "[\"eDP-2\"]\nscale=2",
+    "[\"eDP-2\"]\ndiagonal_inches=16\nwidth_mm=340\nheight_mm=220",
+    "[\"eDP-2\"]\ndiagonal_inches=1__6",
+    "[\"eDP-2\"]\ndiagonal_inches=.5",
+    "[\"eDP-2\"]\ndiagonal_inches=1e999",
+    "[\"eDP-2\"]\n",
+    "[bad name]\ndiagonal_inches=16"
+  ]
+}
