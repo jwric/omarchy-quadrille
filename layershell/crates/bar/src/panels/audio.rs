@@ -905,7 +905,7 @@ mod tests {
         let (recorder, shared) = recorder();
         let mut state = State::default();
 
-        state.update(Message::Loaded(read(&*shared)), &shared);
+        let _ = state.update(Message::Loaded(read(&*shared)), &shared);
         recorder.clear();
 
         (recorder, shared, state)

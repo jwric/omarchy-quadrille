@@ -272,15 +272,23 @@ mod tests {
 
         let stubs = Stubs::new(&dir);
 
+        // A script that has only just been written can be "busy" for a moment
+        // if another test's fork caught its file descriptor open: that is the
+        // test's race, not the runner's, so it is run again.
+        let run = |program: &str, args: &[&str]| loop {
+            let answer = stubs.run(program, args, TIMEOUT);
+
+            match &answer {
+                Err(error) if error.contains("Text file busy") => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => break answer,
+            }
+        };
+
         // By name, or by the path it would have had: the same script.
-        assert_eq!(
-            stubs.run("hello", &["a", "b"], TIMEOUT).as_deref(),
-            Ok("stub: a b\n")
-        );
-        assert_eq!(
-            stubs.run("/usr/bin/hello", &["c"], TIMEOUT).as_deref(),
-            Ok("stub: c\n")
-        );
+        assert_eq!(run("hello", &["a", "b"]).as_deref(), Ok("stub: a b\n"));
+        assert_eq!(run("/usr/bin/hello", &["c"]).as_deref(), Ok("stub: c\n"));
 
         // `echo` exists on the system; a stub directory without one does not run it.
         let error = stubs.run("echo", &["real"], TIMEOUT).unwrap_err();

@@ -15,7 +15,10 @@ use host::{Host, Options};
 use iced_core::Backend;
 use iced_core::time::Duration;
 
-const USAGE: &str = "\
+/// The usage text, which says which panels there are because the host does.
+fn usage() -> String {
+    format!(
+        "\
 usage: quadrille-bar [OPTIONS]
        quadrille-bar ctl COMMAND
 
@@ -30,16 +33,20 @@ options:
   --keyboard-exclusive   a panel takes the keyboard instead of a focus grab
   --passive              panels take no keyboard and no focus grab (screenshots)
   --theme-dir DIR        where the Omarchy theme is (~/.local/state/omarchy/current)
-  --open PANEL           show a panel at the start
+  --open PANEL           show a panel at the start (PANEL: {panels})
   --exit-after SECS      quit after a while (for tests)
 
 commands (quadrille-bar ctl ...):
-  summon PANEL [JSON]    show a panel; JSON may say {\"output\":\"eDP-2\"}
+  summon PANEL [JSON]    show a panel; JSON may say {{\"output\":\"eDP-2\"}}
   toggle PANEL [JSON]    show it, or hide it if it is shown
   hide [PANEL|all]       hide the panel that is shown
   list                   the panels, the outputs and the theme
+  find TEXT              where a text is in the panel shown: x y w h, in its pixels
   reload-theme           read the Omarchy theme again
-  quit";
+  quit",
+        panels = host::ids()
+    )
+}
 
 fn parse() -> Result<Options, String> {
     let mut options = Options::default();
@@ -66,7 +73,15 @@ fn parse() -> Result<Options, String> {
             "--keyboard-exclusive" => options.exclusive_keyboard = true,
             "--passive" => options.passive = true,
             "--theme-dir" => options.theme_dir = value("--theme-dir")?.into(),
-            "--open" => options.open = Some(value("--open")?),
+            "--open" => {
+                let id = value("--open")?;
+
+                if !host::exists(&id) {
+                    return Err(format!("no panel {id:?} to open (have: {})", host::ids()));
+                }
+
+                options.open = Some(id);
+            }
             "--exit-after" => {
                 options.exit_after = Some(Duration::from_secs_f64(
                     value("--exit-after")?
@@ -132,7 +147,7 @@ fn main() {
                 eprintln!("quadrille-bar: {error}");
             }
 
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage());
             std::process::exit(if error.is_empty() { 0 } else { 2 });
         }
     };

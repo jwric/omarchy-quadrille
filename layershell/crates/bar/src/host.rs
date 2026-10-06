@@ -81,6 +81,20 @@ fn panel(id: &str) -> Option<&'static PanelDef> {
     PANELS.iter().find(|panel| panel.id == id)
 }
 
+/// Every panel the host knows, by id, for the messages that say which there are.
+pub fn ids() -> String {
+    PANELS
+        .iter()
+        .map(|panel| panel.id)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Whether the host has a panel by this id.
+pub fn exists(id: &str) -> bool {
+    panel(id).is_some()
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     /// The bars read the machine.
@@ -321,6 +335,8 @@ impl Host {
     fn key(&mut self, key: Key) -> Task<Message> {
         let runner = self.runner.clone();
 
+        log::debug!("key {key:?} for {:?}", self.open_panel());
+
         match self.open_panel() {
             Some("audio") => self.audio.key(key, &runner).map(Message::Audio),
             Some("network") => self.network.key(key, &runner).map(Message::Network),
@@ -478,13 +494,7 @@ impl Host {
         let id = words.next().unwrap_or_default().trim();
         let arguments = words.next().unwrap_or_default().trim();
 
-        let known = || {
-            PANELS
-                .iter()
-                .map(|panel| panel.id)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
+        let known = ids;
 
         let output = |arguments: &str| -> Result<Option<String>, String> {
             if arguments.is_empty() {
@@ -562,7 +572,7 @@ impl Host {
             "" => Err("error: empty command\n".to_owned()),
             other => Err(format!(
                 "error: unknown command {other:?} \
-                 (summon, toggle, hide, list, reload-theme, quit)\n"
+                 (summon, toggle, hide, list, find, reload-theme, quit)\n"
             )),
         };
 
@@ -571,6 +581,8 @@ impl Host {
 
     fn list(&self) -> String {
         let mut text = String::new();
+
+        let width = PANELS.iter().map(|def| def.id.len()).max().unwrap_or(0);
 
         for def in PANELS {
             let state = match &self.open {
@@ -581,7 +593,7 @@ impl Host {
             };
 
             text.push_str(&format!(
-                "panel  {:<8} {:<20} {}x{} vpx\n",
+                "panel  {:<width$} {:<20} {}x{} vpx\n",
                 def.id, state, def.size.0, def.size.1
             ));
         }
@@ -960,14 +972,72 @@ fn sysmon_ticks() -> impl iced_futures::futures::Stream<Item = ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::recorder::Recorder;
+    use crate::panels::power;
     use iced_layer::OutputInfo;
+    use std::sync::Arc;
+
+    /// A host whose commands are written down and answered from a table, so
+    /// that nothing a test does can reach the machine.
+    fn recording(options: Options) -> (Host, Arc<Recorder>) {
+        let (recorder, shared) = Recorder::shared();
+
+        let (host, _) = Host::with_runner(
+            Options {
+                theme_dir: std::env::temp_dir().join("quadrille-bar-no-theme"),
+                ..options
+            },
+            shared,
+        );
+
+        (host, recorder)
+    }
 
     fn host(options: Options) -> Host {
-        Host::new(Options {
-            theme_dir: std::env::temp_dir().join("quadrille-bar-no-theme"),
-            ..options
+        recording(options).0
+    }
+
+    /// Runs a task to its end, the way the shell would, and gives back what
+    /// it said.
+    fn drain(task: Task<Message>) -> Vec<Message> {
+        use iced_runtime::Action;
+
+        let Some(mut stream) = iced_runtime::task::into_stream(task) else {
+            return Vec::new();
+        };
+
+        smol::block_on(async move {
+            let mut said = Vec::new();
+
+            while let Some(action) = stream.next().await {
+                if let Action::Output(message) = action {
+                    said.push(message);
+                }
+            }
+
+            said
         })
-        .0
+    }
+
+    /// Runs a task and what it says, and what that says, until nothing more.
+    fn settle(host: &mut Host, task: Task<Message>) {
+        let mut tasks = vec![task];
+
+        for _ in 0..8 {
+            let Some(task) = tasks.pop() else { break };
+
+            for message in drain(task) {
+                tasks.push(host.update(message));
+            }
+        }
+    }
+
+    /// Shows a panel and lets it read what the recorder says.
+    fn shown(host: &mut Host, id: &str) {
+        let _ = host.command(&format!("summon {id}"));
+        let task = host.kicked();
+
+        settle(host, task);
     }
 
     fn env(focus_grab: bool) -> Env {
@@ -1320,5 +1390,362 @@ mod tests {
         let _ = host.update(Message::CloseRequested(id));
 
         assert!(host.surfaces(&env(true)).is_empty());
+    }
+
+    #[test]
+    fn every_panel_is_known_to_the_registry_the_list_and_the_errors() {
+        let mut host = host(Options::default());
+        host.surfaces(&env(true));
+
+        let list = host.command("list").0;
+        let error = host.command("summon nope").0;
+        let hide = host.command("hide nope").0;
+
+        // Panels that exist for the tests are panels too.
+        for id in ["sysmon", "audio", "network", "bluetooth", "power", "demo"] {
+            assert!(exists(id), "{id} is not in the registry");
+            assert!(list.contains(&format!("panel  {id}")), "{id}: {list}");
+            assert!(error.contains(id), "{id}: {error}");
+            assert!(hide.contains(id), "{id}: {hide}");
+            assert!(ids().contains(id), "{id}: {}", ids());
+        }
+
+        assert_eq!(
+            list.lines()
+                .filter(|line| line.starts_with("panel "))
+                .count(),
+            PANELS.len()
+        );
+        assert!(!exists("nope"));
+    }
+
+    #[test]
+    fn the_list_lines_up_whatever_the_ids_are() {
+        let host = host(Options::default());
+        let list = host.list();
+
+        let columns: Vec<usize> = list
+            .lines()
+            .filter(|line| line.starts_with("panel "))
+            .map(|line| line.find("hidden").expect("every panel is hidden"))
+            .collect();
+
+        assert!(columns.windows(2).all(|pair| pair[0] == pair[1]), "{list}");
+    }
+
+    #[test]
+    fn every_panel_is_a_surface_of_its_namespace_and_its_exact_size() {
+        for def in PANELS {
+            for scale in [5.0_f64 / 3.0, 1.0] {
+                // A size in virtual pixels that is a multiple of 5 is a whole
+                // number of logical pixels at 1.6667 (3 to the pixel): the
+                // compositor never has to round it.
+                let pixel = (2.0 * scale).round();
+                let logical = (
+                    f64::from(def.size.0) * pixel / scale,
+                    f64::from(def.size.1) * pixel / scale,
+                );
+
+                assert!(
+                    (logical.0 - logical.0.round()).abs() < 1e-6
+                        && (logical.1 - logical.1.round()).abs() < 1e-6,
+                    "{} is {logical:?} logical at {scale}",
+                    def.id
+                );
+            }
+
+            let mut host = host(Options::default());
+            host.surfaces(&env(true));
+            let _ = host.command(&format!("summon {}", def.id));
+
+            let panels = panels(&host, &env(true));
+
+            assert_eq!(panels.len(), 1, "{}", def.id);
+            assert_eq!(panels[0].namespace, format!("quadrille-{}", def.id));
+        }
+    }
+
+    #[test]
+    fn toggling_any_panel_shows_it_and_hides_it() {
+        for def in PANELS {
+            let mut host = host(Options::default());
+            host.surfaces(&env(true));
+
+            assert_eq!(
+                host.command(&format!("toggle {}", def.id)).0,
+                format!("{} shown\n", def.id)
+            );
+            assert_eq!(host.open_panel(), Some(def.id));
+            assert_eq!(
+                host.command(&format!("toggle {}", def.id)).0,
+                format!("{} hidden\n", def.id)
+            );
+            assert_eq!(host.open_panel(), None);
+        }
+    }
+
+    #[test]
+    fn a_panel_reads_the_machine_when_shown_and_never_while_hidden() {
+        let (mut host, recorder) = recording(Options::default());
+        host.surfaces(&env(true));
+
+        // Hidden: a beat that was already on its way, a key, a kick: nothing.
+        assert_eq!(host.kicked().units(), 0);
+        assert_eq!(host.update(Message::Refresh("audio")).units(), 0);
+        assert_eq!(host.update(Message::Key(Key::Enter)).units(), 0);
+
+        // The commands that ask for a reading of a panel; the others are
+        // the bar's and the system monitor's own reading of /proc and /sys.
+        assert!(recorder.calls().is_empty(), "{:?}", recorder.calls());
+
+        let _ = host.command("summon audio");
+        let task = host.kicked();
+
+        assert!(task.units() > 0, "showing a panel reads it at once");
+        settle(&mut host, task);
+
+        let first = recorder.calls();
+
+        assert!(
+            first.iter().any(|call| call == "pactl -f json list sinks"),
+            "{first:?}"
+        );
+        assert!(
+            first
+                .iter()
+                .all(|call| call.starts_with("pactl ") && !call.contains(" set-")),
+            "reading changes nothing: {first:?}"
+        );
+
+        // On the beat it reads again; once hidden, a beat that arrives late
+        // does not.
+        let task = host.update(Message::Refresh("audio"));
+        assert!(task.units() > 0);
+        settle(&mut host, task);
+        assert!(recorder.calls().len() > first.len());
+
+        let _ = host.command("hide");
+        recorder.clear();
+
+        assert_eq!(host.update(Message::Refresh("audio")).units(), 0);
+        assert_eq!(host.kicked().units(), 0);
+        assert!(recorder.calls().is_empty());
+
+        // A beat for a panel that is not the one shown is nothing either.
+        let _ = host.command("summon power");
+        let _ = host.kicked();
+
+        assert_eq!(host.update(Message::Refresh("audio")).units(), 0);
+        assert_eq!(host.update(Message::Refresh("network")).units(), 0);
+    }
+
+    #[test]
+    fn showing_a_panel_again_reads_it_again() {
+        let (mut host, recorder) = recording(Options::default());
+        host.surfaces(&env(true));
+
+        shown(&mut host, "bluetooth");
+        let _ = host.command("hide");
+        recorder.clear();
+
+        shown(&mut host, "bluetooth");
+
+        assert!(
+            recorder
+                .calls()
+                .iter()
+                .any(|call| call.starts_with("bluetoothctl show")),
+            "{:?}",
+            recorder.calls()
+        );
+    }
+
+    #[test]
+    fn keys_go_to_the_panel_that_is_shown_and_choose_what_the_panel_says() {
+        let (mut host, recorder) = recording(Options::default());
+        host.surfaces(&env(true));
+
+        recorder.answer(
+            "pactl -f json list sinks",
+            Ok(include_str!("../fixtures/pactl-sinks.json")),
+        );
+        recorder.answer(
+            "pactl -f json list sources",
+            Ok(include_str!("../fixtures/pactl-sources.json")),
+        );
+        recorder.answer(
+            "pactl -f json list sink-inputs",
+            Ok(include_str!("../fixtures/pactl-sink-inputs.json")),
+        );
+        recorder.answer("pactl get-default-sink", Ok("sink.speakers\n"));
+        recorder.answer("pactl get-default-source", Ok("source.mic\n"));
+
+        shown(&mut host, "audio");
+        recorder.clear();
+
+        // Down to the second output, Enter: it becomes the default, and the
+        // streams that were playing follow it.
+        let _ = host.update(Message::Key(Key::Down));
+        let task = host.update(Message::Key(Key::Enter));
+
+        assert!(task.units() > 0);
+        settle(&mut host, task);
+
+        let calls = recorder.calls();
+
+        assert!(
+            calls
+                .iter()
+                .any(|call| call == "pactl set-default-sink sink.headset"),
+            "{calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|call| call == "pactl move-sink-input 41 sink.headset"),
+            "{calls:?}"
+        );
+        assert!(
+            calls.iter().all(|call| call.starts_with("pactl ")),
+            "audio runs pactl and nothing else: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn a_session_action_waits_for_yes_and_escape_backs_out_before_closing() {
+        let (mut host, recorder) = recording(Options::default());
+        host.surfaces(&env(true));
+
+        recorder.answer(
+            "powerprofilesctl list",
+            Ok("* balanced:\n    CpuDriver:\tx\n\n  power-saver:\n    CpuDriver:\tx\n"),
+        );
+        recorder.answer("powerprofilesctl get", Ok("balanced\n"));
+
+        shown(&mut host, "power");
+        recorder.clear();
+
+        // The last row is POWER OFF: Enter asks.
+        let _ = host.update(Message::Key(Key::End));
+        let _ = host.update(Message::Key(Key::Enter));
+
+        // Escape backs out of the question and the panel stays; Escape again
+        // hides it. Nothing was sent.
+        let _ = host.update(Message::Escape);
+        assert_eq!(host.open_panel(), Some("power"));
+
+        let _ = host.update(Message::Escape);
+        assert_eq!(host.open_panel(), None);
+        assert!(recorder.calls().is_empty(), "{:?}", recorder.calls());
+
+        // Ask again: Enter alone is NO, because the keyboard starts there.
+        shown(&mut host, "power");
+        recorder.clear();
+
+        let _ = host.update(Message::Key(Key::End));
+        let _ = host.update(Message::Key(Key::Enter));
+        let task = host.update(Message::Key(Key::Enter));
+        settle(&mut host, task);
+
+        assert_eq!(host.open_panel(), Some("power"), "NO leaves the panel up");
+        assert!(
+            !recorder
+                .calls()
+                .iter()
+                .any(|call| call.contains("shutdown")),
+            "{:?}",
+            recorder.calls()
+        );
+
+        // y answers YES: the command of Omarchy's menu goes out, once, and
+        // the panel has nothing more to show.
+        let _ = host.update(Message::Key(Key::End));
+        let _ = host.update(Message::Key(Key::Enter));
+
+        assert!(
+            !recorder
+                .calls()
+                .iter()
+                .any(|call| call.contains("shutdown")),
+            "nothing goes out until YES"
+        );
+
+        let task = host.update(Message::Key(Key::Char('y')));
+        settle(&mut host, task);
+
+        assert_eq!(
+            recorder
+                .calls()
+                .iter()
+                .filter(|call| call.as_str() == "omarchy-system-shutdown")
+                .count(),
+            1,
+            "{:?}",
+            recorder.calls()
+        );
+        assert_eq!(host.open_panel(), None, "the panel closes after it");
+    }
+
+    #[test]
+    fn the_session_commands_are_stubbed_in_every_test_here() {
+        // The recorder never runs anything: a host made for a test answers
+        // from the table, so the commands above are only ever written down.
+        let (recorder, shared) = Recorder::shared();
+
+        let _ = shared.run("omarchy-system-shutdown", &[], commands::TIMEOUT);
+
+        assert_eq!(recorder.calls(), ["omarchy-system-shutdown"]);
+        let _ = power::Session::ALL;
+    }
+
+    /// What the panels make of this machine's own programs: reads only
+    /// (`pactl list`, `nmcli device status` and `wifi list --rescan no`,
+    /// `bluetoothctl show` and `devices`, `powerprofilesctl list` and `get`),
+    /// never a change. Run it by hand, `cargo test -- --ignored --nocapture
+    /// this_machines`: it is the one place the parsers meet real output.
+    #[test]
+    #[ignore = "reads this machine's own audio, network, Bluetooth and power"]
+    fn this_machines_readings_are_understood() {
+        let system = commands::System;
+
+        match crate::panels::audio::read(&system) {
+            Ok(audio) => println!(
+                "audio: {} outputs, {} inputs, {} applications; default {:?} / {:?}",
+                audio.sinks.len(),
+                audio.sources.len(),
+                audio.streams.len(),
+                audio.default_sink,
+                audio.default_source
+            ),
+            Err(error) => println!("audio: {error}"),
+        }
+
+        match crate::panels::network::read(&system) {
+            Ok(network) => println!(
+                "network: wifi {:?} {}, {} networks, {} wired, {} vpns",
+                network.wifi_device,
+                network.wifi_enabled,
+                network.networks.len(),
+                network.wired.len(),
+                network.vpns.len()
+            ),
+            Err(error) => println!("network: {error}"),
+        }
+
+        match crate::panels::bluetooth::read(&system) {
+            Ok(bluetooth) => println!(
+                "bluetooth: {} devices, powered {}",
+                bluetooth.devices.len(),
+                bluetooth.powered
+            ),
+            Err(error) => println!("bluetooth: {error}"),
+        }
+
+        let power = crate::panels::power::read(&system);
+
+        println!(
+            "power: profiles {:?}, active {:?}, battery {:?}",
+            power.profiles, power.active, power.battery
+        );
     }
 }
