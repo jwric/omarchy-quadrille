@@ -308,15 +308,25 @@ Panel {
     }
   }
 
+  // The lists are cleared when the popup closes, but not at once: closing for
+  // another popup leaves this card on screen until the newcomer is drawn, and a
+  // card whose lists vanish under it shrinks in front of the user.
+  Timer {
+    id: clearModelsTimer
+    interval: 600
+    onTriggered: if (!root.opened) root.clearDisplayAudioModels()
+  }
+
   onOpenedChanged: {
     if (opened) {
+      clearModelsTimer.stop()
       refreshDisplayAudioModels()
       focusSection = "output"
       selectedIndex = -1  // first keyboard cursor reveal starts on the output slider
       cursorActive = false
       Qt.callLater(resetScroll)
     } else {
-      clearDisplayAudioModels()
+      clearModelsTimer.restart()
     }
   }
 
