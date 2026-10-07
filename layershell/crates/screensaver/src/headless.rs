@@ -477,10 +477,12 @@ mod lettering {
     use iced_widget::canvas::{Frame, Geometry};
     use quadrille::draw::{Anchor, Pen};
 
-    /// Lines of lettering, set by the renderer's text or as the font's pixels.
+    /// Lines of lettering, set by the renderer's text or as the font's
+    /// pixels, or as a sheet's lettering inside a clip.
     struct Specimen {
         pixels: bool,
         lines: Vec<String>,
+        clip: Option<iced_core::Rectangle<i32>>,
     }
 
     impl canvas::Program<(), Theme, iced_renderer::Renderer> for Specimen {
@@ -501,7 +503,16 @@ mod lettering {
                 // Odd and even columns and rows.
                 let at = iced_core::Point::new(3 + i as i32 % 3, 2 + i as i32 * 13 + i as i32 % 2);
 
-                if self.pixels {
+                if let Some(clip) = self.clip {
+                    let piece = crate::draft::raster::Piece::Text {
+                        at,
+                        text: line.clone(),
+                    };
+                    let theme = Theme::TERMINAL;
+                    let palette = theme.palette();
+
+                    let _ = piece.draw(&mut pen, palette.ink, palette.void, usize::MAX, clip);
+                } else if self.pixels {
                     letters::write(&mut pen, line, at, Theme::TERMINAL.palette().ink);
                 } else {
                     pen.text(
@@ -577,6 +588,7 @@ mod lettering {
             Specimen {
                 pixels: false,
                 lines: lines.clone(),
+                clip: None,
             },
             size,
         );
@@ -584,6 +596,7 @@ mod lettering {
             Specimen {
                 pixels: true,
                 lines,
+                clip: None,
             },
             size,
         );
@@ -606,6 +619,52 @@ mod lettering {
             "{} pixels differ, first at {:?}",
             differing.len(),
             &differing[..differing.len().min(8)]
+        );
+    }
+
+    /// Lettering a clip would cut is left out whole: a value cut short reads
+    /// as a different value.
+    #[test]
+    fn lettering_is_drawn_whole_or_not_at_all() {
+        load_fonts();
+
+        let inked = |clip| {
+            let background = Theme::TERMINAL.palette().void;
+            let void = [
+                (background.r * 255.0).round() as u8,
+                (background.g * 255.0).round() as u8,
+                (background.b * 255.0).round() as u8,
+            ];
+
+            render(
+                Specimen {
+                    pixels: true,
+                    lines: vec!["1:5×10⁸".to_owned()],
+                    clip: Some(clip),
+                },
+                (60, 20),
+            )
+            .chunks_exact(4)
+            .filter(|pixel| pixel[..3] != void)
+            .count()
+        };
+
+        assert!(
+            inked(iced_core::Rectangle {
+                x: 0,
+                y: 0,
+                width: 60,
+                height: 20
+            }) > 0
+        );
+        assert_eq!(
+            inked(iced_core::Rectangle {
+                x: 0,
+                y: 0,
+                width: 30,
+                height: 20
+            }),
+            0
         );
     }
 }

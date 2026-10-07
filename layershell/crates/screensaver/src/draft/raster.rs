@@ -333,26 +333,18 @@ impl Piece {
                 let cap_top = at.y + i32::from(face.cap_top());
                 let baseline = at.y + i32::from(face.baseline());
 
-                // Whole characters, only where their capitals are inside.
-                if cap_top >= clip.y && baseline <= clip.y + clip.height {
-                    let visible: Vec<usize> = (0..typed)
-                        .filter(|i| {
-                            let x = at.x + *i as i32 * advance;
-                            x >= clip.x && x + advance <= clip.x + clip.width
-                        })
-                        .collect();
+                // All of it, or none if it is not all inside: a value cut
+                // short reads as a different value.
+                let right = at.x + text.chars().count() as i32 * advance;
 
-                    if let (Some(&first), Some(&last)) = (visible.first(), visible.last()) {
-                        let shown: String =
-                            text.chars().skip(first).take(last - first + 1).collect();
+                if cap_top >= clip.y
+                    && baseline <= clip.y + clip.height
+                    && at.x >= clip.x
+                    && right <= clip.x + clip.width
+                {
+                    let shown: String = text.chars().take(typed).collect();
 
-                        super::letters::write(
-                            pen,
-                            &shown,
-                            Point::new(at.x + first as i32 * advance, at.y),
-                            color,
-                        );
-                    }
+                    super::letters::write(pen, &shown, *at, color);
                 }
 
                 partial.then(|| Head(Point::new(at.x + advance * typed as i32, baseline - 1)))
