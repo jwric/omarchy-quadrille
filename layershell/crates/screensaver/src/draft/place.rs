@@ -192,18 +192,39 @@ impl Plan {
 
     /// Places the automatic annotations among `marks`, drawn through
     /// `projection`; one the plan left out stays unplaced, and undrawn.
+    ///
+    /// A moving one that would cover other lettering at this moment, or
+    /// run its leader through it, is left out for the moment instead.
     pub fn apply(&self, marks: &mut [Mark], projection: &Projection) {
-        for mark in marks {
+        let mut moving = Vec::new();
+
+        for (index, mark) in marks.iter_mut().enumerate() {
             let Some(spot) = Id::of(mark).and_then(|id| self.spots.get(&id)) else {
                 continue;
             };
 
-            let (x, y) = spot.offset(projection.px(target(mark)));
+            let offset = spot.offset(projection.px(target(mark)));
+            place(mark, Placement::Offset(offset.0, offset.1));
 
-            match &mut mark.ink {
-                Ink::Balloon { offset, .. } => *offset = Placement::Offset(x, y),
-                Ink::Note { elbow, .. } => *elbow = Placement::Offset(x, y),
-                _ => {}
+            if mark.moving {
+                moving.push(index);
+            }
+        }
+
+        for index in moving {
+            let footprint = Footprint::of(&marks[index], projection);
+            let covers = marks.iter().enumerate().any(|(other, mark)| {
+                other != index
+                    && mark.shown_in(true)
+                    && mark.pass() >= Pass::Annotation
+                    && Footprint::of(mark, projection)
+                        .boxes
+                        .iter()
+                        .any(|area| footprint.meets(*area))
+            });
+
+            if covers {
+                place(&mut marks[index], Placement::Auto);
             }
         }
     }
@@ -778,6 +799,14 @@ impl Placed {
     }
 }
 
+fn place(mark: &mut Mark, placement: Placement) {
+    match &mut mark.ink {
+        Ink::Balloon { offset, .. } => *offset = placement,
+        Ink::Note { elbow, .. } => *elbow = placement,
+        _ => {}
+    }
+}
+
 fn target(mark: &Mark) -> super::V2 {
     match &mark.ink {
         Ink::Balloon { target, .. } | Ink::Note { target, .. } => *target,
@@ -1069,6 +1098,17 @@ impl Footprint {
             .map(|pixel| rect(pixel.x, pixel.y, 1, 1));
 
         self.boxes.iter().copied().chain(points).reduce(union)
+    }
+
+    /// Whether it covers any of `area`, or its leader crosses it.
+    fn meets(&self, area: Rectangle<i32>) -> bool {
+        self.boxes
+            .iter()
+            .any(|own| raster::intersection(*own, area).is_some())
+            || self
+                .lines
+                .iter()
+                .any(|pixel| raster::contains(area, *pixel))
     }
 
     /// Whether all of it is inside `clip`.
