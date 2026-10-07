@@ -1101,46 +1101,53 @@ changes**: give it a count, or a model that is edited in place. If a popup is ev
 
 ## Design
 
-Aperture is the per-output test card: a central 32-pair Siemens star, labelled
-stripes, the theme's roles as swatches, a slanted edge, corner marks, a 2% frame and
-a 1:1 ruler, laid out inside the frame with a 24 vpx gutter. Corners balance: the
-callsign (top left), DETAIL A (top right), the ruler (bottom left), the title block
-and the native large screen number (bottom right); the palette runs above them.
+APERTURE is a technical portrait of one display, drawn on that display's own grid.
+Reading order: the star (the main drawing) -> the few labels on it and its two views
+-> the technical details. Hierarchy comes only from native sizes (the 3x numeral, 2x
+callout letters, the body face), colour role (`ink` names features, `muted` carries
+numbers, `line` is construction, quieter than what it explains) and one inverse label,
+APERTURE. Each part is a module drawing whole virtual pixels through `Pen.js`; the star,
+DETAIL A and B all sample one function (`Star.js`), so they are views of one thing.
 
-**Star tone.** Full-contrast ink on void was the loudest thing on the desktop. The
-wedges are now `faint` on `ground` (a quiet disc), chosen from three role pairs
-rendered for TERMINAL and PAPER (`wallpaper.py --explore`): `edge` on ground was
-calmest but fades to 1.6-1.9:1 (WCAG) in four themes; `muted` on ground (4.1-6.5:1)
-is still loud. Faint on ground (1.9-2.5:1 in all five) keeps the 32 pairs and the
-centre's noise plainly visible in every theme. Full contrast stays where contrast is the point: the
-stripes and the slanted edge. The detail view uses the star's own tones, so it reads
-as the same object.
+**Layout** (the critique's map, chosen from three rendered arrangements: "corners",
+"subjects" (the display left, the grid right: an overloaded right column on the
+laptop) and "chain" (the star off centre with its views beside it: on the laptop the
+star fell to 50 mm); renders under `/tmp/quadrille-portrait-20261007/arrangements/`).
+Top left the monitor's number with the locator (every output in the compositor's
+configured layout, this one in accent) and one metadata line (the model is dropped
+before anything is cut); B under it; DETAIL A top right with the samples under it; the
+elevation bottom left; the materials and one note along the bottom. Parts are placed
+first, then the star is the largest whole 10 mm that clears them by 16 vpx (100 mm on
+the laptop, 180 on the Dell); a part that leaves no 60 mm star makes way whole. Tall
+sheets put B and DETAIL A side by side above the star and drop the materials.
 
-**Words.** Every label is a plain, true sentence: PAIR = ONE LIGHT + ONE DARK STRIPE,
-TOO FINE: SHOWS AS 0.83, SHOULD LOOK ROUND, SIZE INFERRED FROM THE SCREEN'S 34 x 22
-cm. "Virtual pixel" is defined once, beside the slanted edge whose steps show it.
+**The star** is faint on ground with a muted rim; its accent grid-limit ring (32/pi vpx)
+is the detail circle A. Its diameter is dimensioned from its widest points and the
+dimension line is the millimetre scale: ROUNDNESS and the 100 mm REFERENCE are one
+drawing. **DETAIL A** is exactly the disc inside that ring at 6:1 on the panel's own
+pixels, so its accent rim is the same ring: GRID LIMIT on the rim, PANEL LIMIT on the
+caution ring (32/pi panel pixels), and the pixel pitch. **B** takes an 8 x 8 (6 x 6 on
+the laptop) window of the star's own pixels at a wedge edge, marked on the star and led
+to the view, and shows it on the drawing grid (each step x3 on the laptop, x2 on the
+Dell) and on the panel's pixels, with one grid pixel lifted off its ps x ps panel pixels
+in 2:1 isometric. It depicts the renderer's grid, never the panel's construction.
+**PATTERN -> RESULT**: gratings of 2, 4/3 and 1 vpx period at 6:1, their results drawn
+by the sheet's own raster (a point sample at each virtual pixel; the grid's sample
+points are ticked under the pattern): RESOLVED, FALSE DETAIL (ALIASED: a 4 vpx period),
+DETAIL LOST (a flat patch); pairs per mm defined once. **The elevation** is the active
+area at its true aspect at a stated 1:N that holds on screen (1:8 on both outputs):
+whole millimetres and ESTIMATED when inferred from EDID, `~` when assumed, one decimal
+when measured; the star's circle is drawn in it at the same scale. **The materials**:
+SURFACES flat over a stepped Bayer ramp to the next surface, INKS flat over the ink as
+grid, hatch, dots and Bayer, SIGNALS as small chips. One footer note carries the
+physical-scale qualification with the mark tolerance.
 
-**Limits.** Ring A (accent) is where the wedges turn to noise on the virtual grid
-(32/pi vpx from the centre). The right-hand stripes are that limit and what lies past
-it: 2 vpx (the finest the grid draws), 1.5 vpx (aliases to half its frequency), 1 vpx
-(comes out solid). The old "panel limit" stripe was a 1.24 lp/mm alias labelled 3.71;
-the panel's limit is now shown only where it is true: DETAIL A redraws the star's
-centre on the panel's own pixels, each one a block of whole virtual pixels (6:1 on
-both outputs: 2 vpx a pixel on the laptop, 3 on the Dell), with ring A and the
-panel's own limit ring (caution, 32/pi pixels) drawn in it, a pixel scale, the pitch
-(0.135 / 0.232 mm, 7.4 / 4.3 pixels per mm) and the pixels across. A 45-degree
-leader leaves ring A along a wedge boundary to the inset; where a shoulder does not
-fit (portrait), a short leader ends at the letter A.
+`Role.onAccent` did not follow a theme change inside the wallpaper (it stayed at its
+default while every other role updated); Graticule.qml reads it through `Role.stated`.
 
-Rings are drawn the way a pixel artist draws them (pixels within half a pixel of the
-radius), so the outline is 8-fold symmetric with no nubs at the compass points.
-
-`python3 plugins/tools/wallpaper.py OUT` renders every case (the real layout from each
-output, side by side, stacked, three outputs, portrait, single, estimated, 1920x1080 at
-1, 2560x1440 at 1.5) in all five themes and checks rulers, wedges against independent
-angles, ring pair counts and frequencies, bursts, the inset pixel by pixel, swatch
-outlines, outline roundness and crisp.py; `node plugins/tools/wallpaper-test.js`
-asserts the geometry (nothing dropped, nothing touching). `--nested` (QA/QB, GPU)
-passed too. The physical model, the live overlay, event-driven redraw and the Settle
-first-frame gate are unchanged. Not yet seen live: the session was locked when the
-refinement was finished, and a locked shell is never restarted.
+Checks: `node plugins/tools/wallpaper-test.js` (the geometry of every case),
+`python3 plugins/tools/wallpaper.py OUT` (QML renders of every case in five themes,
+crisp.py, and each module's PNG check from `plugins/tools/aperture/`), and per module
+`node plugins/tools/aperture/<module>-test.js`; `plugins/tools/aperture/element.py`
+renders one module alone. The physical model, the live overlay, event-driven redraw and
+the Settle first-frame gate are unchanged.

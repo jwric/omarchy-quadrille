@@ -6,9 +6,11 @@ Omarchy themes, Departure Mono drawn without antialiasing in every toolkit, a
 whole-pixel QML bar, menu, OSD and notifications for the Omarchy shell, and
 panels drawn by quadrille itself as Wayland layer-shell surfaces.
 
-The desktop is a calibrated drawing set: active monitor elevations, a true-size
-100 mm ruler and a sparse sheet frame. Its click-through cursor draws live CAD
+Each monitor's wallpaper, APERTURE, is a calibrated technical portrait of that
+display, drawn on its own pixel grid. Its click-through cursor draws live CAD
 measurements that update as the pointer moves whenever the overlay is enabled.
+
+![APERTURE on the laptop (eDP-2, 3 physical pixels per virtual pixel)](plugins/screenshots/testcard-terminal-laptop.png)
 
 ![The five themes, as the bar draws them](plugins/screenshots/themes.png)
 
@@ -83,15 +85,18 @@ and 796.6 × 333.5 mm; these are inferred sizes. A mark rounds to the nearest vp
 half a vpx, conservatively rounded upward; it is not a calibration guarantee.
 Missing EDID uses an explicitly estimated density and `~` labels.
 
-Each output draws its own static test card: a calibrated Siemens star in quiet
-theme tones, labelled stripes, the theme's role colours as outlined swatches, a
-slanted edge, corner marks, a 2% frame and a true-size ruler. The card says what
-it shows in plain words, and what this grid cannot show: ring A marks where the
-star turns to noise on the virtual-pixel grid, and DETAIL A redraws the centre on
-the panel's own pixels at 6:1 with their pitch. Inferred sizes say so; unknown
-ones carry `~`. Binary patterns are precomputed into an exact texture on
-display/theme events; the wallpaper does no work between changes. The live cursor
-overlay is separate.
+Each output draws its own static sheet, APERTURE: the monitor's number beside a
+miniature of the configured desktop layout; a calibrated Siemens star (100 mm on the
+laptop, 180 on the Dell) whose diameter dimension is a true-size millimetre scale;
+DETAIL A, the disc inside the star's grid-limit ring redrawn 6:1 on the panel's own
+pixels; B, one virtual pixel taken apart into its 3 x 3 (laptop) or 2 x 2 (Dell) panel
+pixels beside an edge of the star at both resolutions; fine stripes beside what the
+grid really draws from them (resolved, false detail, detail lost); a dimensioned
+elevation of the active area at a true 1:N; the theme's roles as surfaces, inks and
+signals. Inferred sizes are marked ESTIMATED; unknown ones carry `~`. Binary patterns
+are precomputed into an exact texture on display/theme events; the wallpaper does no
+work between changes. The live cursor overlay is separate. Design notes:
+`plugins/NOTES.md`, "Design".
 
 An optional `~/.config/quadrille/displays.toml` supplies measured dimensions.
 Nothing creates it by default. Replace these example sizes with measurements;

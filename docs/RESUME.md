@@ -14,6 +14,9 @@ The current overlay is live by default (`--overlay-rest-ms`), per layershell/NOT
 Refined the same day: calmer star (faint on ground), plain wording, outlined swatches,
 balanced corners and DETAIL A (the centre on panel pixels, 6:1); renders under
 `/tmp/quadrille-testcard-20261006/refine/`.
+2026-10-07: redesigned as a per-monitor technical portrait (locator, elevation, B
+construction, pattern/result samples, materials; modules beside Drafting.js); arrangements
+and final renders under `/tmp/quadrille-portrait-20261007/`, rationale in NOTES "Design".
 
 Written at a pause (2026-10-05, evening). Read this, then `plugins/NOTES.md` and
 `layershell/NOTES.md` (each has a "Status at pause" section from the agent that
