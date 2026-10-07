@@ -25,9 +25,11 @@ Item {
   readonly property var physical: Physical.resolve(monitor, overrides)
   readonly property var measured: monitors.map(function(m) { return { input: m, physical: Physical.resolve(m, root.overrides) } })
   readonly property var drawing: Drafting.plan(monitor, physical, measured, Glyphs, Px.barVpx, Big, composition, starTone)
+  // on_accent is read through stated(): Role.onAccent did not follow a theme
+  // change here (it stayed at its default while every other role updated).
   readonly property var colors: ({ "void": Role.void_, ground: Role.ground,
     raised: Role.raised, hover: Role.hover, edge: Role.edge, line: Role.line,
-    faint: Role.faint, accent: Role.accent, ink: Role.ink, muted: Role.muted,
+    faint: Role.faint, accent: Role.accent, on_accent: Role.stated("on_accent", Role.void_), ink: Role.ink, muted: Role.muted,
     live: Role.live, caution: Role.caution, alarm: Role.alarm })
 
   ShaderEffect {

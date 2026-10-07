@@ -36,7 +36,7 @@ import hero_preview as hp
 NOTCH = 1          # pixels cut from the outer corner of a bowl, at every size
 SIZES = (2, 3)
 # Characters the popups' heroes can show: digits, the signs, the units, the month names.
-HERO = "0123456789 :.,-+%°CF—" + "abcdeghilmnoprstuvy" + "ADFJMNOS"
+HERO = "0123456789 :.,-+%°CF—" + "abcdeghilmnoprstuvy" + "ABDFJMNOS"
 
 
 class Glyph:
@@ -176,6 +176,9 @@ def l_y(g):
     g.v(1, 4, 6); g.v(5, 4, 6); g.diag(1, 7, 3, 9); g.diag(5, 7, 3, 9); g.v(3, 9, 10); g.h(11, 1, 3)
 def l_A(g):
     g.diag(3, 2, 1, 4); g.diag(3, 2, 5, 4); g.v(1, 4, 9); g.v(5, 4, 9); g.h(6, 1, 5)
+def l_B(g):
+    # D's square left corners and nibbled right ones, the 8's waist: two bowls on one stem
+    g.box(1, 2, 5, 5, "tr"); g.box(1, 5, 5, 9, "br"); g.cut(5, 5, "r")
 def l_D(g):
     g.box(1, 2, 5, 9, "tr br")
 def l_F(g):
@@ -198,7 +201,7 @@ DEFS = {"0": g_0, "1": g_1, "2": g_2, "3": g_3, "4": g_4, "5": g_5, "6": g_6, "7
         "%": g_percent, "C": g_C, "F": g_F,
         "a": l_a, "b": l_b, "c": l_c, "d": l_d, "e": l_e, "g": l_g, "h": l_h, "i": l_i, "l": l_l, "m": l_m,
         "n": l_n, "o": l_o, "p": l_p, "r": l_r, "s": l_s, "t": l_t, "u": l_u, "v": l_v, "y": l_y,
-        "A": l_A, "D": l_D, "J": l_J, "M": l_M, "N": l_N, "O": l_O, "S": l_S}
+        "A": l_A, "B": l_B, "D": l_D, "J": l_J, "M": l_M, "N": l_N, "O": l_O, "S": l_S}
 DEFS["F"] = l_F
 
 
