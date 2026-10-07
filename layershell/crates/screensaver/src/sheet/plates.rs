@@ -9,6 +9,7 @@ use quadrille::Palette;
 use quadrille::draw::{Anchor, Pen};
 
 use super::layout::{CAPTION, FIELD, LINE, Layout};
+use crate::draft::letters;
 use crate::draft::raster::{LETTERING, rect};
 use crate::subjects::Card;
 
@@ -45,7 +46,7 @@ impl Typist {
         let corner = crate::draft::raster::place(LETTERING, text, at, anchor);
         let typed: String = text.chars().take(shown).collect();
 
-        pen.text(LETTERING, typed, corner, Anchor::TOP_LEFT, color);
+        letters::write(pen, &typed, corner, color);
     }
 }
 
@@ -97,9 +98,9 @@ pub fn border<Renderer: geometry::Renderer>(
             let bottom = (border.y + border.height - 1 + trim.y + trim.height - 1) / 2;
 
             for y in [top, bottom] {
-                pen.text(
-                    LETTERING,
-                    label.clone(),
+                letters::set(
+                    pen,
+                    &label,
                     Point::new(middle, y + 1),
                     Anchor::CENTRE,
                     palette.faint,
@@ -128,9 +129,9 @@ pub fn border<Renderer: geometry::Renderer>(
             let right = (border.x + border.width - 1 + trim.x + trim.width - 1) / 2;
 
             for x in [left, right] {
-                pen.text(
-                    LETTERING,
-                    label.clone(),
+                letters::set(
+                    pen,
+                    &label,
                     Point::new(x + 1, middle + 1),
                     Anchor::CENTRE,
                     palette.faint,

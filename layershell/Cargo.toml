@@ -16,6 +16,7 @@ quadrille = { git = "https://github.com/jwric/quadrille" }
 iced_core = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale" }
 iced_futures = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale", features = ["smol"] }
 iced_graphics = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale" }
+iced_tiny_skia = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale" }
 iced_runtime = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale", features = ["selector"] }
 iced_program = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale" }
 iced_widget = { git = "https://github.com/jwric/iced", branch = "0.15-pixel-scale", features = ["wgpu"] }

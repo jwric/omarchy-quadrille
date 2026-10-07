@@ -109,60 +109,15 @@ impl Moment {
             _ => None,
         }
     }
-
-    /// Whether nothing is being drawn in or lettered: what does not move can
-    /// then be kept from one frame to the next.
-    pub fn settled(self) -> bool {
-        match self.phase {
-            Phase::Plot(_) | Phase::Wipe(_) => false,
-            Phase::Run(focus) => self.typed() >= 1.0 && focus.is_none_or(Focus::settled),
-        }
-    }
-}
-
-/// The sheets one output shows, in turn.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Programme {
-    /// The subject shown first.
-    pub first: usize,
-    /// How many parts each subject documents, by subject.
-    pub parts: Vec<usize>,
 }
 
 /// The sheet on show and the moment it is at.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Showing {
     pub subject: usize,
-    /// How many sheets were shown before this one.
+    /// How many sheets the output showed before this one.
     pub serial: u64,
     pub moment: Moment,
-}
-
-impl Programme {
-    pub fn at(&self, elapsed: f32) -> Showing {
-        let count = self.parts.len().max(1);
-        let cycle: f32 = self.parts.iter().map(|parts| duration(*parts)).sum();
-        let laps = (elapsed / cycle).floor().max(0.0);
-        let mut left = elapsed - laps * cycle;
-        let mut serial = laps as u64 * count as u64;
-        let mut subject = self.first % count;
-
-        loop {
-            let length = duration(self.parts[subject]);
-
-            if left < length {
-                return Showing {
-                    subject,
-                    serial,
-                    moment: Moment::at(left, self.parts[subject]),
-                };
-            }
-
-            left -= length;
-            serial += 1;
-            subject = (subject + 1) % count;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -196,32 +151,5 @@ mod tests {
     fn the_subject_does_not_move_until_it_is_plotted() {
         assert_eq!(Moment::at(3.0, 4).run, 0.0);
         assert!((Moment::at(PLOT_START + PLOT + 2.0, 4).run - 2.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn an_output_shows_each_subject_in_turn_from_its_own() {
-        let programme = Programme {
-            first: 1,
-            parts: vec![2, 3, 4],
-        };
-
-        assert_eq!(programme.at(0.0).subject, 1);
-        assert_eq!(programme.at(duration(3) + 0.1).subject, 2);
-        assert_eq!(programme.at(duration(3) + duration(4) + 0.1).subject, 0);
-
-        let cycle = duration(2) + duration(3) + duration(4);
-        let later = programme.at(5.0 * cycle + 1.0);
-
-        assert_eq!((later.subject, later.serial), (1, 15));
-    }
-
-    #[test]
-    fn only_a_quiet_sheet_is_settled() {
-        let first = PLOT_START + PLOT + SETTLE;
-
-        assert!(!Moment::at(1.0, 2).settled());
-        assert!(Moment::at(first - 0.5, 2).settled());
-        assert!(!Moment::at(first + 0.2, 2).settled());
-        assert!(Moment::at(first + 3.0, 2).settled());
     }
 }

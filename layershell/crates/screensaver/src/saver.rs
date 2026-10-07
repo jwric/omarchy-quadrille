@@ -16,7 +16,7 @@ use iced_widget::{Widget as _, canvas};
 use quadrille::Theme;
 
 use crate::display;
-use crate::sheet::{Display, Sheet, timeline::Programme};
+use crate::sheet::{Display, Sheet, schedule::Schedule};
 use crate::subjects::{self, Subject};
 
 #[derive(Debug, Clone)]
@@ -26,6 +26,8 @@ pub struct Options {
     pub namespace: String,
     /// The subject the first output starts with.
     pub first: Option<usize>,
+    /// What the subjects' order is drawn from.
+    pub seed: u64,
     pub fps: u32,
     /// Input this soon after starting is not taken as the user's.
     pub grace: Duration,
@@ -43,6 +45,8 @@ pub struct Saver {
     surfaces: RefCell<Vec<(String, window::Id)>>,
     /// Where the pointer was first seen on each surface.
     pointer: HashMap<window::Id, Point>,
+    /// Which subject each output shows when.
+    schedule: RefCell<Schedule>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,9 +63,16 @@ const STILL: f32 = 3.0;
 impl Saver {
     pub fn new(options: Options) -> (Self, Task<Message>) {
         let now = Instant::now();
+        let subjects = subjects::all();
+        let schedule = Schedule::new(
+            subjects.iter().map(|s| s.card().parts.len()).collect(),
+            options.seed,
+            options.first,
+        );
         let saver = Self {
             options,
-            subjects: subjects::all(),
+            subjects,
+            schedule: RefCell::new(schedule),
             displays: display::hyprland(),
             started: now,
             now,
@@ -138,16 +149,8 @@ impl Saver {
             .unwrap_or_default();
 
         let count = self.subjects.len();
-        // Outputs start on subjects spread through the set, so two screens
-        // never show the same sheet.
-        let first =
-            self.options.first.unwrap_or(0) + index * (count / surfaces.len().max(1)).max(1);
-        let programme = Programme {
-            first,
-            parts: self.subjects.iter().map(|s| s.card().parts.len()).collect(),
-        };
         let elapsed = self.now.duration_since(self.started).as_secs_f32();
-        let showing = programme.at(elapsed);
+        let showing = self.schedule.borrow_mut().at(index, elapsed);
 
         let sheet = Sheet {
             subject: self.subjects[showing.subject].as_ref(),

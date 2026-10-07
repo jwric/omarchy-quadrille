@@ -160,6 +160,9 @@ pub enum Piece {
     Path {
         pixels: Vec<Point<i32>>,
         stipple: Stipple,
+        /// How far along its stroke the first pixel is, for the pattern: a
+        /// stroke cut in pieces keeps its dashes where they were.
+        phase: usize,
     },
     /// The rows of an area as `(y, first x, last x)`.
     Rows {
@@ -168,11 +171,7 @@ pub enum Piece {
         origin: Point<i32>,
     },
     /// One line of text, its line box's top-left corner at `at`.
-    Text {
-        at: Point<i32>,
-        text: String,
-        face: Face,
-    },
+    Text { at: Point<i32>, text: String },
     /// A solid rectangle.
     Block(Rectangle<i32>),
     /// The sheet's ground behind text, so it reads over line work.
@@ -194,6 +193,48 @@ const TEXT_COST: usize = 6;
 const ROW_COST: usize = 2;
 
 impl Piece {
+    /// A whole stroke's pixels.
+    pub fn path(pixels: Vec<Point<i32>>, stipple: Stipple) -> Self {
+        Self::Path {
+            pixels,
+            stipple,
+            phase: 0,
+        }
+    }
+
+    /// The piece in consecutive pieces of at most `cost` each, which plot
+    /// and draw as it does: a stroke in stretches, an area in bands of rows.
+    pub fn split(self, cost: usize) -> Vec<Self> {
+        match self {
+            Self::Path {
+                pixels,
+                stipple,
+                phase,
+            } if pixels.len() > cost => pixels
+                .chunks(cost.max(1))
+                .enumerate()
+                .map(|(k, chunk)| Self::Path {
+                    pixels: chunk.to_vec(),
+                    stipple,
+                    phase: phase + k * cost.max(1),
+                })
+                .collect(),
+            Self::Rows {
+                rows,
+                texture,
+                origin,
+            } if rows.len() * ROW_COST > cost => rows
+                .chunks((cost / ROW_COST).max(1))
+                .map(|band| Self::Rows {
+                    rows: band.to_vec(),
+                    texture,
+                    origin,
+                })
+                .collect(),
+            other => vec![other],
+        }
+    }
+
     /// How long the piece takes to plot, in pixels of pen travel.
     pub fn cost(&self) -> usize {
         match self {
@@ -221,12 +262,16 @@ impl Piece {
         let inside = |pixel: &Point<i32>| contains(clip, *pixel);
 
         let head = match self {
-            Self::Path { pixels, stipple } => {
+            Self::Path {
+                pixels,
+                stipple,
+                phase,
+            } => {
                 let drawn = &pixels[..budget.min(pixels.len())];
                 let lit: Vec<_> = drawn
                     .iter()
                     .enumerate()
-                    .filter(|(i, pixel)| stipple.lights(*i) && inside(pixel))
+                    .filter(|(i, pixel)| stipple.lights(phase + i) && inside(pixel))
                     .map(|(_, pixel)| *pixel)
                     .collect();
 
@@ -277,7 +322,8 @@ impl Piece {
                     })
                     .flatten()
             }
-            Self::Text { at, text, face } => {
+            Self::Text { at, text } => {
+                let face = &LETTERING;
                 let typed = if partial {
                     budget / TEXT_COST
                 } else {
@@ -300,11 +346,10 @@ impl Piece {
                         let shown: String =
                             text.chars().skip(first).take(last - first + 1).collect();
 
-                        pen.text(
-                            *face,
-                            shown,
+                        super::letters::write(
+                            pen,
+                            &shown,
                             Point::new(at.x + first as i32 * advance, at.y),
-                            Anchor::TOP_LEFT,
                             color,
                         );
                     }
@@ -428,7 +473,6 @@ fn lettering(text: &str, top_left: Point<i32>, tone: Tone, out: &mut Vec<Inked>)
         piece: Piece::Text {
             at: top_left,
             text: text.to_owned(),
-            face,
         },
         tone,
     });
@@ -440,20 +484,14 @@ pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
 
     match &mark.ink {
         Ink::Stroke { shape, line } => out.push(Inked {
-            piece: Piece::Path {
-                pixels: stroke(shape, projection),
-                stipple: Stipple::of(*line),
-            },
+            piece: Piece::path(stroke(shape, projection), Stipple::of(*line)),
             tone,
         }),
         Ink::Arrow { from, to, line } => {
             let tip = projection.px(*to);
 
             out.push(Inked {
-                piece: Piece::Path {
-                    pixels: shape::line(projection.px(*from), tip),
-                    stipple: Stipple::of(*line),
-                },
+                piece: Piece::path(shape::line(projection.px(*from), tip), Stipple::of(*line)),
                 tone,
             });
             arrowhead(
@@ -538,7 +576,7 @@ fn stroke(shape: &Shape, projection: &Projection) -> Vec<Point<i32>> {
             let centre = projection.px(*centre);
             let radius = projection.length(*radius);
 
-            around(shape::circle(centre, radius.max(0)), centre, 0.0, true)
+            ordered_circle(centre, radius)
         }
         Shape::Arc {
             centre,
@@ -553,46 +591,106 @@ fn stroke(shape: &Shape, projection: &Projection) -> Vec<Point<i32>> {
 
             if *sweep >= 0.0 {
                 // Counter-clockwise on the model is anticlockwise on the
-                // sheet too: from `to` round to `from` as a dial reads.
-                around(shape::arc(centre, radius, to, from), centre, from, false)
+                // sheet too: the dial's arc from `to` round to `from`,
+                // walked backwards.
+                let mut pixels = clockwise_arc(centre, radius, to, from);
+                pixels.reverse();
+                pixels
             } else {
-                around(shape::arc(centre, radius, from, to), centre, from, true)
+                clockwise_arc(centre, radius, from, to)
             }
         }
     }
 }
 
-/// The pixels of a circle of `radius` round `centre`, clockwise from the top.
+/// The pixels of a 1 px circle of `radius` round `centre`, each once, in
+/// order clockwise from the top.
+///
+/// They are the toolkit's circle (`shape::circle`): its first octant walked
+/// the same way, and its eight images laid end to end round the dial, so
+/// the order comes from the walk instead of a sort.
 pub fn ordered_circle(centre: Point<i32>, radius: i32) -> Vec<Point<i32>> {
-    around(shape::circle(centre, radius.max(0)), centre, 0.0, true)
+    if radius <= 0 {
+        return vec![centre];
+    }
+
+    // The first octant, from (r, 0) down to the diagonal, as `shape` walks it.
+    let mut octant = Vec::new();
+    let (mut x, mut y, mut error) = (radius, 0, 1 - radius);
+
+    while x >= y {
+        octant.push((x, y));
+        y += 1;
+
+        if error < 0 {
+            error += 2 * y + 1;
+        } else {
+            x -= 1;
+            error += 2 * (y - x) + 1;
+        }
+    }
+
+    // Each octant of the dial from 12 o'clock, its image of the walk and
+    // whether the walk runs forwards in it (sheet y grows downwards).
+    type Image = fn((i32, i32)) -> (i32, i32);
+    let images: [(Image, bool); 8] = [
+        (|(x, y)| (y, -x), true),
+        (|(x, y)| (x, -y), false),
+        (|(x, y)| (x, y), true),
+        (|(x, y)| (y, x), false),
+        (|(x, y)| (-y, x), true),
+        (|(x, y)| (-x, y), false),
+        (|(x, y)| (-x, -y), true),
+        (|(x, y)| (-y, -x), false),
+    ];
+    let steps = octant.len();
+    let mut pixels: Vec<Point<i32>> = Vec::with_capacity(steps * 8);
+
+    for (image, forwards) in images {
+        for k in 0..steps {
+            let (dx, dy) = image(octant[if forwards { k } else { steps - 1 - k }]);
+            let pixel = Point::new(centre.x + dx, centre.y + dy);
+
+            // Octants share their ends.
+            if pixels.last() != Some(&pixel) {
+                pixels.push(pixel);
+            }
+        }
+    }
+
+    if pixels.len() > 1 && pixels.last() == pixels.first() {
+        pixels.pop();
+    }
+
+    pixels
+}
+
+/// The pixels of the arc of a 1 px circle clockwise from bearing `from` to
+/// bearing `to`, in that order: the toolkit's arc (`shape::arc`), cut from
+/// the walked circle.
+fn clockwise_arc(centre: Point<i32>, radius: i32, from: f32, to: f32) -> Vec<Point<i32>> {
+    let circle = ordered_circle(centre, radius);
+    let bearing = |pixel: &Point<i32>| shape::bearing(pixel.x - centre.x, pixel.y - centre.y);
+    let sweep = match (to - from).rem_euclid(360.0) {
+        0.0 if to != from => 360.0,
+        sweep => sweep,
+    };
+
+    // The walk's bearings rise from 0 round to 360, so the arc is one run of
+    // it, starting where the bearing first reaches `from`.
+    let start = circle.partition_point(|pixel| bearing(pixel) < from);
+
+    circle[start..]
+        .iter()
+        .chain(&circle[..start])
+        .copied()
+        .take_while(|pixel| (bearing(pixel) - from).rem_euclid(360.0) <= sweep)
+        .collect()
 }
 
 /// The bearing (degrees clockwise from up, on the sheet) of a model angle.
 fn bearing(angle: f32) -> f32 {
     (90.0 - angle.to_degrees()).rem_euclid(360.0)
-}
-
-/// Pixels of a circle or arc sorted round `centre`, starting at bearing
-/// `from` and going clockwise or anticlockwise.
-fn around(
-    mut pixels: Vec<Point<i32>>,
-    centre: Point<i32>,
-    from: f32,
-    clockwise: bool,
-) -> Vec<Point<i32>> {
-    let key = |pixel: &Point<i32>| {
-        let bearing = shape::bearing(pixel.x - centre.x, pixel.y - centre.y);
-        let turned = if clockwise {
-            bearing - from
-        } else {
-            from - bearing
-        };
-
-        turned.rem_euclid(360.0)
-    };
-
-    pixels.sort_by(|a, b| key(a).total_cmp(&key(b)));
-    pixels
 }
 
 /// A solid arrowhead with its tip at `tip`, pointing along `towards`.
@@ -649,10 +747,7 @@ fn callout(target: Point<i32>, elbow: (i32, i32), text: &str, tone: Tone, out: &
     );
 
     out.push(Inked {
-        piece: Piece::Path {
-            pixels,
-            stipple: Stipple::Solid,
-        },
+        piece: Piece::path(pixels, Stipple::Solid),
         tone: Tone::Line,
     });
 
@@ -680,7 +775,6 @@ fn callout(target: Point<i32>, elbow: (i32, i32), text: &str, tone: Tone, out: &
         piece: Piece::Text {
             at,
             text: text.to_owned(),
-            face,
         },
         tone,
     });
@@ -699,10 +793,7 @@ fn balloon(item: usize, target: Point<i32>, offset: (i32, i32), tone: Tone, out:
     );
 
     out.push(Inked {
-        piece: Piece::Path {
-            pixels: shape::line(start, target),
-            stipple: Stipple::Solid,
-        },
+        piece: Piece::path(shape::line(start, target), Stipple::Solid),
         tone: Tone::Line,
     });
     out.push(dot(target, 3, Tone::Line));
@@ -716,10 +807,7 @@ fn balloon(item: usize, target: Point<i32>, offset: (i32, i32), tone: Tone, out:
         tone,
     });
     out.push(Inked {
-        piece: Piece::Path {
-            pixels: around(shape::circle(centre, RADIUS), centre, 0.0, true),
-            stipple: Stipple::Solid,
-        },
+        piece: Piece::path(ordered_circle(centre, RADIUS), Stipple::Solid),
         tone,
     });
 
@@ -729,7 +817,6 @@ fn balloon(item: usize, target: Point<i32>, offset: (i32, i32), tone: Tone, out:
         piece: Piece::Text {
             at: place(LETTERING, &text, centre, Anchor::CENTRE),
             text,
-            face: LETTERING,
         },
         tone,
     });
@@ -742,10 +829,7 @@ const OVERSHOOT: i32 = 3;
 
 fn path(pixels: Vec<Point<i32>>, tone: Tone) -> Inked {
     Inked {
-        piece: Piece::Path {
-            pixels,
-            stipple: Stipple::Solid,
-        },
+        piece: Piece::path(pixels, Stipple::Solid),
         tone,
     }
 }
@@ -871,12 +955,10 @@ fn dimension(measure: &Measure, text: &str, tone: Tone, p: &Projection, out: &mu
             radius,
         } => {
             let centre = p.px(vertex);
-            let pixels = shape::arc(centre, radius, bearing(to), bearing(from));
+            let mut pixels = clockwise_arc(centre, radius, bearing(to), bearing(from));
+            pixels.reverse();
 
-            out.push(path(
-                around(pixels, centre, bearing(from), false),
-                Tone::Line,
-            ));
+            out.push(path(pixels, Tone::Line));
 
             let middle = from + super::geom::wrap(to - from) / 2.0;
             let at = p.exact(vertex) + v(middle.cos(), -middle.sin()) * (radius as f32 + 8.0);
@@ -961,6 +1043,50 @@ mod tests {
         assert_eq!(*down.last().unwrap(), Point::new(50, 60));
     }
 
+    /// The walked circle and arc are the toolkit's, pixel for pixel, in
+    /// order round the dial.
+    #[test]
+    fn walked_circles_and_arcs_are_the_toolkits() {
+        let sorted = |mut pixels: Vec<Point<i32>>| {
+            pixels.sort_by_key(|p| (p.x, p.y));
+            pixels
+        };
+        let centre = Point::new(7, -3);
+
+        for radius in (0..400).chain([997, 1620, 5000, 20_604 / 5]) {
+            let walked = ordered_circle(centre, radius);
+
+            assert_eq!(
+                sorted(walked.clone()),
+                sorted(shape::circle(centre, radius)),
+                "radius {radius}"
+            );
+
+            let bearings: Vec<f32> = walked
+                .iter()
+                .map(|p| shape::bearing(p.x - centre.x, p.y - centre.y))
+                .collect();
+            assert!(
+                bearings.windows(2).all(|pair| pair[0] <= pair[1]),
+                "radius {radius} out of order"
+            );
+
+            for (from, to) in [
+                (0.0, 90.0),
+                (300.0, 20.0),
+                (45.0, 45.0),
+                (123.4, 321.0),
+                (10.0, 370.0),
+            ] {
+                assert_eq!(
+                    sorted(clockwise_arc(centre, radius, from, to)),
+                    sorted(shape::arc(centre, radius, from, to)),
+                    "radius {radius}, {from} to {to}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn line_types_are_their_patterns() {
         let pattern = |line| {
@@ -1004,11 +1130,40 @@ mod tests {
     }
 
     #[test]
-    fn plotting_part_of_a_path_stops_the_pen_inside_it() {
-        let piece = Piece::Path {
-            pixels: shape::line(Point::new(0, 0), Point::new(9, 0)),
-            stipple: Stipple::Solid,
+    fn a_stroke_cut_in_pieces_keeps_its_pattern() {
+        let pixels = shape::line(Point::new(0, 0), Point::new(99, 0));
+        let lit = |pieces: &[Piece]| -> Vec<Point<i32>> {
+            pieces
+                .iter()
+                .flat_map(|piece| match piece {
+                    Piece::Path {
+                        pixels,
+                        stipple,
+                        phase,
+                    } => pixels
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| stipple.lights(phase + i))
+                        .map(|(_, pixel)| *pixel)
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                })
+                .collect()
         };
+        let whole = Piece::path(pixels.clone(), Stipple::of(Line::Centre));
+        let cut = whole.clone().split(7);
+
+        assert_eq!(cut.len(), 15);
+        assert_eq!(lit(&cut), lit(&[whole]));
+        assert_eq!(cut.iter().map(Piece::cost).sum::<usize>(), 100);
+    }
+
+    #[test]
+    fn plotting_part_of_a_path_stops_the_pen_inside_it() {
+        let piece = Piece::path(
+            shape::line(Point::new(0, 0), Point::new(9, 0)),
+            Stipple::Solid,
+        );
 
         assert_eq!(piece.cost(), 10);
     }

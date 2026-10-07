@@ -15,7 +15,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use iced_core::Backend;
 use quadrille_desktop::theme;
 
-use headless::{Output, Studio};
+use headless::{Output, Stage, Studio};
 use saver::{Options, Saver};
 
 #[derive(Parser)]
@@ -59,6 +59,9 @@ struct Run {
     /// Frames a second.
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=240))]
     fps: u32,
+    /// What the order of the subjects is drawn from (default: the time).
+    #[arg(long)]
+    seed: Option<u64>,
     /// Input this many milliseconds after starting is ignored.
     #[arg(long, default_value_t = 1000)]
     grace: u64,
@@ -154,6 +157,11 @@ fn run(run: Run) {
     let options = Options {
         namespace: run.namespace,
         first: run.subject,
+        seed: run.seed.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_nanos() as u64)
+        }),
         fps: run.fps,
         grace: Duration::from_millis(run.grace),
         theme: theme::current(&run.theme_dir),
@@ -232,44 +240,52 @@ fn time(bench: Bench) -> Result<(), String> {
     let date = today();
 
     headless::load_fonts();
-    let mut studio = Studio::new(&subjects, output, &theme, &date)?;
-    let millis = |samples: Vec<Duration>| {
-        let mut samples = samples;
-        samples.sort();
-        let mean = samples.iter().sum::<Duration>() / samples.len().max(1) as u32;
-        let p95 = samples[samples.len() * 95 / 100];
-        format!(
-            "{:5.2} / {:5.2}",
-            mean.as_secs_f64() * 1e3,
-            p95.as_secs_f64() * 1e3
-        )
-    };
+    let ms = |duration: Duration| duration.as_secs_f64() * 1e3;
+    let stages = [Stage::Plot, Stage::DetailIn, Stage::Settled, Stage::Wipe];
 
-    println!("milliseconds a frame, mean / 95th percentile");
     println!(
-        "{:<10} {:<16} {:<16} {:<16} {:<16}",
-        "", "plot: draw", "plot: raster", "run: draw", "run: raster"
+        "a frame on the {}: milliseconds drawing the sheet, and the share of the output repainted live, 95th percentile / worst",
+        match bench.output {
+            Desk::Laptop => "laptop",
+            Desk::Ultrawide => "ultrawide",
+        }
     );
+    print!("{:<10}", "");
+    for stage in stages {
+        print!(" {:<25}", stage.name());
+    }
+    println!();
 
     for (index, subject) in subjects.iter().enumerate() {
-        let frames = (bench.fps * 3.0) as usize;
-        let (plot_draw, plot_raster): (Vec<_>, Vec<_>) = studio
-            .bench(index, 3.0, frames, bench.fps)
-            .into_iter()
-            .unzip();
-        let (run_draw, run_raster): (Vec<_>, Vec<_>) = studio
-            .bench(index, 16.0, frames, bench.fps)
-            .into_iter()
-            .unzip();
+        // From a fresh studio: the first frame repaints everything.
+        let mut studio = Studio::new(&subjects, output, &theme, &date)?;
+        let frames = studio.bench(index, bench.fps);
 
-        println!(
-            "{:<10} {:<16} {:<16} {:<16} {:<16}",
-            subject.name(),
-            millis(plot_draw),
-            millis(plot_raster),
-            millis(run_draw),
-            millis(run_raster)
-        );
+        print!("{:<10}", subject.name());
+
+        for stage in stages {
+            let of_stage = || frames.iter().skip(1).filter(|f| f.stage == stage);
+            let mut draw: Vec<f64> = of_stage().map(|f| ms(f.draw)).collect();
+            let mut repainted: Vec<f32> = of_stage().map(|f| f.repainted * 100.0).collect();
+
+            draw.sort_by(f64::total_cmp);
+            repainted.sort_by(f32::total_cmp);
+
+            let cell = match (draw.last(), repainted.last()) {
+                (Some(worst), Some(worst_share)) => format!(
+                    "{:4.1} {:4.1}  {:3.0}% {:3.0}%",
+                    draw[draw.len() * 95 / 100],
+                    worst,
+                    repainted[repainted.len() * 95 / 100],
+                    worst_share
+                ),
+                _ => "-".into(),
+            };
+
+            print!(" {cell:<25}");
+        }
+
+        println!();
     }
 
     Ok(())
