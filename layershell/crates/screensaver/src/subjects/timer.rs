@@ -2,6 +2,7 @@
 //! as the capacitor charges and discharges, and a scope sweeping both.
 use quadrille::draw::Anchor;
 
+use crate::draft::Placement::Auto;
 use crate::draft::geom::{along, length};
 use crate::draft::{Draft, Extent, Line, Tone, V2, number, v};
 
@@ -398,7 +399,7 @@ impl Subject for Timer {
         Self::scope(d, t);
 
         d.part(0, |d| {
-            d.balloon(0, v(30.0, 40.0), (26, -20));
+            d.balloon(0, v(30.0, 40.0), Auto);
         });
     }
 
