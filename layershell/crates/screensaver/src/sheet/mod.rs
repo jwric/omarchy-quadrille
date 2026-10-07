@@ -850,7 +850,9 @@ impl<'a> Scene<'a> {
 
         plates::fields(pen, &mut typist, layout.title, &title_block, palette);
 
-        if typist.caught_up() {
+        // A drawing to scale is a projection, and says which; a diagram is
+        // not.
+        if card.scaled && typist.caught_up() {
             plates::first_angle(
                 pen,
                 plates::projection_cell(layout.title, &title_block),
