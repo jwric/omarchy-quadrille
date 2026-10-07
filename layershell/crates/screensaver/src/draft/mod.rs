@@ -8,6 +8,7 @@
 //! for a detail, and plots them stroke by stroke.
 pub mod geom;
 pub mod letters;
+pub mod place;
 pub mod raster;
 pub mod scale;
 
@@ -109,6 +110,22 @@ pub enum Measure {
     },
 }
 
+/// Where an annotation goes, from what it points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// Wherever the sheet finds room for it in the main view, clear of the
+    /// drawing and of the other annotations; left out if there is none.
+    Auto,
+    /// This many pixels across and down from its target.
+    Offset(i32, i32),
+}
+
+impl From<(i32, i32)> for Placement {
+    fn from((x, y): (i32, i32)) -> Self {
+        Self::Offset(x, y)
+    }
+}
+
 /// A mark's content.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ink {
@@ -127,18 +144,17 @@ pub enum Ink {
     },
     /// A dimension and its value.
     Dimension { measure: Measure, text: String },
-    /// A leader from `target` to an elbow `elbow` pixels away, then a shelf
-    /// carrying `text`.
+    /// A leader from `target` to an elbow, then a shelf carrying `text`.
     Note {
         target: V2,
-        elbow: (i32, i32),
+        elbow: Placement,
         text: String,
     },
     /// A part's item number in a circle, with a leader to the part.
     Balloon {
         item: usize,
         target: V2,
-        offset: (i32, i32),
+        offset: Placement,
     },
     /// A square dot on the pixel grid, `size` pixels across.
     Dot { at: V2, size: i32 },
@@ -282,6 +298,10 @@ impl Draft {
         &self.marks
     }
 
+    pub fn marks_mut(&mut self) -> &mut [Mark] {
+        &mut self.marks
+    }
+
     /// Records what `draw` makes as the drawing of part `index`.
     pub fn part(&mut self, index: usize, draw: impl FnOnce(&mut Self)) {
         let outer = self.part.replace(index);
@@ -417,11 +437,16 @@ impl Draft {
         )
     }
 
-    pub fn note(&mut self, target: V2, elbow: (i32, i32), text: impl Into<String>) -> Made<'_> {
+    pub fn note(
+        &mut self,
+        target: V2,
+        elbow: impl Into<Placement>,
+        text: impl Into<String>,
+    ) -> Made<'_> {
         self.push(
             Ink::Note {
                 target,
-                elbow,
+                elbow: elbow.into(),
                 text: text.into(),
             },
             Tone::Muted,
@@ -429,12 +454,12 @@ impl Draft {
     }
 
     /// A balloon numbering part `index` (shown one-based).
-    pub fn balloon(&mut self, index: usize, target: V2, offset: (i32, i32)) -> Made<'_> {
+    pub fn balloon(&mut self, index: usize, target: V2, offset: impl Into<Placement>) -> Made<'_> {
         self.push(
             Ink::Balloon {
                 item: index + 1,
                 target,
-                offset,
+                offset: offset.into(),
             },
             Tone::Ink,
         )

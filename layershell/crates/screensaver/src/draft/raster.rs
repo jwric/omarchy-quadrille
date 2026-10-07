@@ -9,7 +9,7 @@ use iced_core::{Color, Point, Rectangle};
 use quadrille::draw::{Anchor, Horizontal, Pen, Polygon, Vertical, shape};
 use quadrille::{Face, Palette};
 
-use super::{Axis, Extent, Fill, Ink, Line, Mark, Measure, Shape, Tone, V2, polar, v};
+use super::{Axis, Extent, Fill, Ink, Line, Mark, Measure, Placement, Shape, Tone, V2, polar, v};
 
 /// Where a model lands on the sheet.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -528,21 +528,23 @@ pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
             lettering(text, place(LETTERING, text, at, *anchor), tone, out);
         }
         Ink::Dimension { measure, text } => dimension(measure, text, tone, projection, out),
+        // An annotation placed automatically is drawn once it is placed.
         Ink::Note {
             target,
-            elbow,
+            elbow: Placement::Offset(x, y),
             text,
         } => {
             let target = projection.px(*target);
 
             out.push(dot(target, 3, Tone::Line));
-            callout(target, *elbow, text, tone, out);
+            callout(target, (*x, *y), text, tone, out);
         }
         Ink::Balloon {
             item,
             target,
-            offset,
-        } => balloon(*item, projection.px(*target), *offset, tone, out),
+            offset: Placement::Offset(x, y),
+        } => balloon(*item, projection.px(*target), (*x, *y), tone, out),
+        Ink::Note { .. } | Ink::Balloon { .. } => {}
         Ink::Dot { at, size } => out.push(dot(projection.px(*at), *size, tone)),
     }
 }
@@ -780,9 +782,12 @@ fn callout(target: Point<i32>, elbow: (i32, i32), text: &str, tone: Tone, out: &
     });
 }
 
+/// The radius of a balloon's circle.
+pub const BALLOON: i32 = 7;
+
 /// A part's number in a circle, its leader ending in a dot on the part.
 fn balloon(item: usize, target: Point<i32>, offset: (i32, i32), tone: Tone, out: &mut Vec<Inked>) {
-    const RADIUS: i32 = 7;
+    const RADIUS: i32 = BALLOON;
 
     let centre = Point::new(target.x + offset.0, target.y + offset.1);
     let towards = v((target.x - centre.x) as f32, (target.y - centre.y) as f32);

@@ -14,6 +14,7 @@ pub mod schedule;
 pub mod timeline;
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use iced_core::{Point, Rectangle, Size, mouse};
 use iced_widget::canvas::{self, Frame, Geometry};
@@ -23,6 +24,7 @@ use quadrille::draw::{Anchor, Horizontal, Pen, Vertical};
 use quadrille::{Palette, Theme};
 
 use crate::draft::letters;
+use crate::draft::place::Plan;
 use crate::draft::raster::{self, Head, Inked, LETTERING, Projection, colour, rect};
 use crate::draft::scale::Ratio;
 use crate::draft::{Draft, Extent, Mark, Tone};
@@ -49,6 +51,10 @@ const WIPE_STRIPS: i32 = 32;
 
 /// How fast lettering types, in characters a second.
 const TYPING_RATE: f32 = 900.0;
+
+/// The moments across a subject's run its automatic annotations are placed
+/// against: where its moving parts go.
+const PLACING_SAMPLES: usize = 8;
 
 /// A sheet on one output, at one moment.
 pub struct Sheet<'a> {
@@ -88,6 +94,8 @@ pub struct Kept<Renderer: geometry::Renderer> {
     /// The detail view's still marks, its caption and the part's
     /// specification.
     detail: Memo<Key, Renderer>,
+    /// Where the automatic annotations of the subject showing go.
+    plan: Planned,
     /// The finished buckets of a plot, and the passed strips of a wipe.
     ///
     /// The renderer counts a kept drawing it has seen before as unchanged,
@@ -95,6 +103,32 @@ pub struct Kept<Renderer: geometry::Renderer> {
     /// frame's repaint to the piece the pen is in or the strip the wipe is
     /// crossing.
     pieces: RefCell<Vec<Memo<Piece, Renderer>>>,
+}
+
+/// The plan of a subject's automatic annotations at one size, worked out
+/// once and kept while the subject shows.
+#[derive(Default)]
+struct Planned(RefCell<Option<(PlanFor, Rc<Plan>)>>);
+
+/// A subject, by its index, at a size.
+type PlanFor = (usize, (i32, i32));
+
+impl Planned {
+    /// The plan for subject `index` at `size`, worked out by `plan` if it
+    /// is not kept.
+    fn get(&self, index: usize, size: (i32, i32), plan: impl FnOnce() -> Plan) -> Rc<Plan> {
+        let key = (index, size);
+        let mut kept = self.0.borrow_mut();
+
+        match kept.as_ref() {
+            Some((made, plan)) if *made == key => plan.clone(),
+            _ => {
+                let plan = Rc::new(plan());
+                *kept = Some((key, plan.clone()));
+                plan
+            }
+        }
+    }
 }
 
 /// What a kept piece of a plot or a wipe was made for.
@@ -113,6 +147,7 @@ impl<Renderer: geometry::Renderer> Default for Kept<Renderer> {
             furniture: Memo::new(),
             view: Memo::new(),
             detail: Memo::new(),
+            plan: Planned::default(),
             pieces: RefCell::new(Vec::new()),
         }
     }
@@ -170,7 +205,7 @@ where
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry<Renderer>> {
         let size = Size::new(bounds.width.floor(), bounds.height.floor());
-        let scene = Scene::new(self, size.width as i32, size.height as i32);
+        let scene = Scene::new(self, size.width as i32, size.height as i32, &kept.plan);
         let palette = theme.palette();
         let moment = self.showing.moment;
         let key = |marked| Key {
@@ -386,7 +421,7 @@ fn letter(index: usize) -> char {
 }
 
 impl<'a> Scene<'a> {
-    fn new(sheet: &'a Sheet<'a>, width: i32, height: i32) -> Self {
+    fn new(sheet: &'a Sheet<'a>, width: i32, height: i32, planned: &Planned) -> Self {
         let card = sheet.subject.card();
         let layout = Layout::new(width, height, card);
         let extent = sheet.subject.extent();
@@ -395,6 +430,25 @@ impl<'a> Scene<'a> {
 
         let mut draft = Draft::new();
         sheet.subject.draw(&mut draft, sheet.showing.moment.run);
+
+        // Where the automatic annotations go, from where the subject's
+        // parts go over its run: the same on every frame of the sheet.
+        let plan = planned.get(sheet.showing.subject, (width, height), || {
+            let running = timeline::running(card.parts.len());
+            let samples: Vec<Draft> = (0..PLACING_SAMPLES)
+                .map(|k| {
+                    let mut sample = Draft::new();
+                    let t = running * k as f32 / (PLACING_SAMPLES - 1) as f32;
+
+                    sheet.subject.draw(&mut sample, t);
+                    sample
+                })
+                .collect();
+
+            Plan::new(&samples, &main, layout.drawing())
+        });
+
+        plan.apply(draft.marks_mut(), &main);
 
         let detail = sheet.showing.moment.focus().and_then(|focus| {
             let detail = sheet.subject.detail(focus.part, sheet.showing.moment.run)?;
@@ -901,9 +955,148 @@ fn plot<'m, Renderer: geometry::Renderer>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::draft::{Ink, Pass, Placement};
     use crate::headless::Output;
     use crate::subjects;
     use schedule::Schedule;
+
+    /// A sheet of subject `index` on `output`, `local` seconds in.
+    fn sheet<'a>(
+        subjects: &'a [Box<dyn Subject>],
+        index: usize,
+        output: Output,
+        local: f32,
+    ) -> Sheet<'a> {
+        let mut schedule = Schedule::new(
+            subjects.iter().map(|s| s.card().parts.len()).collect(),
+            0,
+            Some(index),
+        );
+
+        Sheet {
+            subject: subjects[index].as_ref(),
+            number: index + 1,
+            of: subjects.len(),
+            showing: schedule.at(0, local),
+            display: output.display,
+            date: "2026-10-07",
+        }
+    }
+
+    /// The boxes an annotation's lettering and circle clear, and the
+    /// pixels of its leaders.
+    fn footprint(mark: &Mark, projection: &Projection) -> (Vec<Rectangle<i32>>, Vec<Point<i32>>) {
+        let mut pieces = Vec::new();
+        raster::rasterize(mark, projection, &mut pieces);
+
+        let boxes: Vec<Rectangle<i32>> = pieces
+            .iter()
+            .filter_map(|inked| match &inked.piece {
+                raster::Piece::Knockout(area) => Some(*area),
+                _ => None,
+            })
+            .collect();
+        let lines = pieces
+            .iter()
+            .flat_map(|inked| match &inked.piece {
+                raster::Piece::Path { pixels, .. } => pixels.clone(),
+                _ => Vec::new(),
+            })
+            .filter(|pixel| !boxes.iter().any(|area| raster::contains(*area, *pixel)))
+            .collect();
+
+        (boxes, lines)
+    }
+
+    /// Every annotation the sheet places itself is inside the view, and
+    /// neither it nor its leader covers another annotation's lettering, on
+    /// both displays, for every subject, while it runs.
+    #[test]
+    fn placed_annotations_are_in_the_view_and_clear_of_other_lettering() {
+        let subjects = subjects::all();
+
+        for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+            let (width, height) = output.virtual_size();
+
+            for index in 0..subjects.len() {
+                let planned = Planned::default();
+
+                for local in [12.0, 20.0, 30.0, 40.0] {
+                    let sheet = sheet(&subjects, index, output, local);
+                    let scene = Scene::new(&sheet, width as i32, height as i32, &planned);
+                    let mut recorded = Draft::new();
+                    sheet.subject.draw(&mut recorded, sheet.showing.moment.run);
+
+                    let annotations: Vec<(bool, &Mark)> = recorded
+                        .marks()
+                        .iter()
+                        .zip(scene.draft.marks())
+                        .filter(|(mark, _)| mark.shown_in(true) && mark.pass() >= Pass::Annotation)
+                        .map(|(mark, placed)| {
+                            let auto = matches!(
+                                mark.ink,
+                                Ink::Balloon {
+                                    offset: Placement::Auto,
+                                    ..
+                                } | Ink::Note {
+                                    elbow: Placement::Auto,
+                                    ..
+                                }
+                            );
+
+                            (auto, placed)
+                        })
+                        .collect();
+                    let footprints: Vec<_> = annotations
+                        .iter()
+                        .map(|(_, mark)| footprint(mark, &scene.main))
+                        .collect();
+                    let clip = scene.layout.drawing();
+                    let display = if output == Output::LAPTOP {
+                        "laptop"
+                    } else {
+                        "ultrawide"
+                    };
+                    let at = format!("{} on the {display} at {local} s", subjects[index].name());
+
+                    for (i, (auto, _)) in annotations.iter().enumerate() {
+                        let (boxes, lines) = &footprints[i];
+
+                        if !auto || boxes.is_empty() {
+                            continue;
+                        }
+
+                        assert!(
+                            boxes
+                                .iter()
+                                .all(|area| raster::intersection(*area, clip) == Some(*area))
+                                && lines.iter().all(|pixel| raster::contains(clip, *pixel)),
+                            "{at}: annotation {i} leaves the view"
+                        );
+
+                        for (j, (others, _)) in footprints.iter().enumerate() {
+                            if i == j {
+                                continue;
+                            }
+
+                            for other in others {
+                                assert!(
+                                    boxes
+                                        .iter()
+                                        .all(|area| raster::intersection(*area, *other).is_none()),
+                                    "{at}: annotation {i} covers annotation {j}"
+                                );
+                                assert!(
+                                    !lines.iter().any(|pixel| raster::contains(*other, *pixel)),
+                                    "{at}: annotation {i}'s leader crosses annotation {j}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// Every value in the title block fits its cell, on both of the desk's
     /// displays, for every subject: a cut value reads as a different value.
@@ -928,7 +1121,7 @@ mod tests {
                     display: output.display,
                     date: "2026-10-07",
                 };
-                let scene = Scene::new(&sheet, width as i32, height as i32);
+                let scene = Scene::new(&sheet, width as i32, height as i32, &Planned::default());
                 let scale = scene.scale_label(scene.main_ratio);
                 let number = format!("{} OF {}", sheet.number, sheet.of);
 

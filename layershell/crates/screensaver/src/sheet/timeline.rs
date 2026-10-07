@@ -34,6 +34,12 @@ pub fn duration(parts: usize) -> f32 {
     PLOT_START + PLOT + SETTLE + DETAIL * parts as f32 + CODA + WIPE
 }
 
+/// How long the subject runs on a sheet documenting `parts` parts: from
+/// the end of the plot to the end of the wipe.
+pub fn running(parts: usize) -> f32 {
+    duration(parts) - PLOT_START - PLOT
+}
+
 /// Where a sheet is in its life.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Phase {

@@ -1,6 +1,7 @@
 //! A pair of involute spur gears in mesh, keyed to their shafts.
 use std::f32::consts::{PI, TAU};
 
+use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, arc_points, number, polar, v};
 
 use super::{Card, Detail, Domain, Part, Reading, Subject, Unit};
@@ -399,14 +400,14 @@ impl Subject for Gears {
 
         d.part(0, |d| {
             d.dim_diameter(PINION, pinion.tip, 2.2, 18);
-            d.balloon(0, PINION + polar(pinion.tip - 1.0, 2.7), (-22, -20));
+            d.balloon(0, PINION + polar(pinion.tip - 1.0, 2.7), Auto);
         });
         d.part(1, |d| {
             d.dim_diameter(GEAR, gear.tip, 0.75, 16);
-            d.balloon(1, GEAR + polar(13.5, -0.6), (40, 34));
+            d.balloon(1, GEAR + polar(13.5, -0.6), Auto);
         });
         d.part(2, |d| {
-            d.balloon(2, PINION + v(-1.5, -2.0), (-36, 44));
+            d.balloon(2, PINION + v(-1.5, -2.0), Auto);
         });
 
         d.moving(|d| {
@@ -416,7 +417,7 @@ impl Subject for Gears {
                 let middle =
                     centre + polar(inner + (keyed.hub_depth - keyed.shaft_depth) / 2.0, angle);
 
-                d.balloon(3, middle, (30, 62));
+                d.balloon(3, middle, Auto);
             });
         });
 
