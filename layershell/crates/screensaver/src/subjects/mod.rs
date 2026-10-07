@@ -43,6 +43,14 @@ pub trait Subject {
     /// The part of the model the view frames, in the card's unit.
     fn extent(&self) -> Extent;
 
+    /// Its other views, to the same scale as the front view and lined up
+    /// with it. What the `i`th shows is drawn inside [`Draft::in_view`]
+    /// with `i`. On a display with no room for one at the front view's
+    /// scale, the view is left out.
+    fn views(&self) -> Vec<View> {
+        Vec::new()
+    }
+
     /// Draws the subject as it is `t` seconds into its motion.
     ///
     /// Marks that move are made inside [`Draft::moving`] and the drawing of a
@@ -60,6 +68,27 @@ pub trait Subject {
     fn readings(&self, _t: f32) -> Vec<Reading> {
         Vec::new()
     }
+}
+
+/// A view of a subject besides its front view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct View {
+    /// Its name, under it: `SECTION A–A`.
+    pub name: String,
+    pub place: Place,
+    /// What it frames, in its own coordinates (see [`Place`]).
+    pub extent: Extent,
+}
+
+/// Where a view goes, as first-angle projection puts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    /// Seen from the left, on the front view's right: across it is depth,
+    /// and up it the front view's `y`, on the same rows.
+    Beside,
+    /// Seen from above, under the front view: across it is the front view's
+    /// `x`, on the same columns, and up it depth.
+    Under,
 }
 
 /// The documentation of a subject.

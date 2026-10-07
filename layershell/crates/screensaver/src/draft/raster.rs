@@ -548,6 +548,20 @@ pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
         } => balloon(*item, projection.px(*target), (*x, *y), tone, out),
         Ink::Note { .. } | Ink::Balloon { .. } => {}
         Ink::Dot { at, size } => out.push(dot(projection.px(*at), *size, tone)),
+        Ink::Section {
+            from,
+            to,
+            toward,
+            letter,
+            ..
+        } => cutting_plane(
+            projection.exact(*from),
+            projection.exact(*to),
+            v(toward.x, -toward.y),
+            *letter,
+            tone,
+            out,
+        ),
     }
 }
 
@@ -822,6 +836,58 @@ fn callout(target: Point<i32>, elbow: (i32, i32), text: &str, tone: Tone, out: &
         },
         tone,
     });
+}
+
+/// A cutting plane on the sheet from `from` to `to`: a chain line, thick
+/// for a stretch at each end, where an arrow on the viewer's side points the
+/// way the section is seen, `toward`, its letter at its tail.
+fn cutting_plane(from: V2, to: V2, toward: V2, letter: char, tone: Tone, out: &mut Vec<Inked>) {
+    /// The thick stretch at each end...
+    const END: f32 = 8.0;
+    /// ...and the arrows' length.
+    const ARROW: f32 = 10.0;
+
+    let along = (to - from).normalize_or_zero();
+    let toward = toward.normalize_or_zero();
+
+    if along == V2::ZERO || toward == V2::ZERO {
+        return;
+    }
+
+    let snap = |point: V2| Point::new(point.x.round() as i32, point.y.round() as i32);
+
+    out.push(Inked {
+        piece: Piece::path(shape::line(snap(from), snap(to)), Stipple::of(Line::Centre)),
+        tone: Tone::Line,
+    });
+
+    for (end, inward) in [(from, along), (to, -along)] {
+        // Two pixels thick, the second on the viewer's side.
+        for side in [0.0, 1.0] {
+            let back = toward * -side;
+
+            out.push(path(
+                shape::line(snap(end + back), snap(end + back + inward * END)),
+                tone,
+            ));
+        }
+
+        let tip = end - toward * 2.0;
+        let tail = tip - toward * ARROW;
+
+        out.push(path(shape::line(snap(tail), snap(tip)), tone));
+        arrowhead(snap(tip), toward, tone, out);
+
+        let text = letter.to_string();
+        let at = snap(tail - toward * 7.0);
+
+        lettering(
+            &text,
+            place(LETTERING, &text, at, Anchor::CENTRE),
+            tone,
+            out,
+        );
+    }
 }
 
 /// The radius of a balloon's circle.

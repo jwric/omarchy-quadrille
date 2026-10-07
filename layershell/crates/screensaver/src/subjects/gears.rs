@@ -4,7 +4,7 @@ use std::f32::consts::{PI, TAU};
 use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, arc_points, number, polar, v};
 
-use super::{Card, Detail, Domain, Part, Reading, Subject, Unit};
+use super::{Card, Detail, Domain, Part, Place, Reading, Subject, Unit, View};
 
 const MODULE: f32 = 2.0;
 const PRESSURE_ANGLE: f32 = 20.0 * PI / 180.0;
@@ -38,6 +38,16 @@ const GEAR_SHAFT: Keyed = Keyed {
     shaft_depth: 2.5,
     hub_depth: 1.8,
 };
+
+/// The axial dimensions, which the section shows: each wheel's face, the
+/// gear's web and hub, and how far the shafts are drawn past their hubs.
+const PINION_FACE: f32 = 22.0;
+const GEAR_FACE: f32 = 20.0;
+const WEB: f32 = 8.0;
+const HUB_LENGTH: f32 = 26.0;
+const HUB_RADIUS: f32 = 10.0;
+const RIM_RADIUS: f32 = 24.0;
+const SHAFT_OVERHANG: f32 = 8.0;
 
 /// Lightening holes in the gear's web.
 const HOLES: u32 = 6;
@@ -136,6 +146,165 @@ fn keyed_circle(centre: V2, radius: f32, width: f32, depth: f32, angle: f32) -> 
     points.push(edge(inner + depth, width / 2.0));
 
     points
+}
+
+/// Section A–A, through both shafts: across it the front view's `x`, up it
+/// the depth along the shafts.
+///
+/// As a drawing sections an assembly: the wheels' bodies are lined, each
+/// its own way; their teeth, the shafts and the keys are not; where the
+/// teeth mesh the pinion's are seen and the gear's are hidden behind them.
+fn section(d: &mut Draft) {
+    let (pinion, gear) = (Wheel::new(PINION_TEETH), Wheel::new(GEAR_TEETH));
+    // A half-profile, as (radius, depth) points, on one side of an axis.
+    let side = |centre: f32, sign: f32, profile: &[(f32, f32)]| -> Vec<V2> {
+        profile
+            .iter()
+            .map(|&(radius, depth)| v(centre + sign * radius, depth))
+            .collect()
+    };
+    let rectangle =
+        |x0: f32, x1: f32, z0: f32, z1: f32| [v(x0, z0), v(x1, z0), v(x1, z1), v(x0, z1)];
+
+    // The pinion: solid to its root, its bore round the shaft.
+    let (bore, face) = (PINION_SHAFT.radius, PINION_FACE / 2.0);
+
+    d.part(0, |d| {
+        for sign in [-1.0, 1.0] {
+            let body = side(
+                PINION.x,
+                sign,
+                &[
+                    (bore, -face),
+                    (pinion.root, -face),
+                    (pinion.root, face),
+                    (bore, face),
+                ],
+            );
+
+            d.area(&body, Fill::Hatch);
+            d.polygon(&body, Line::Outline);
+
+            let teeth = rectangle(
+                PINION.x + sign * pinion.root,
+                PINION.x + sign * pinion.tip,
+                -face,
+                face,
+            );
+            d.polygon(&teeth, Line::Outline);
+
+            let pitch = PINION.x + sign * pinion.pitch;
+            d.line(v(pitch, -face - 2.0), v(pitch, face + 2.0), Line::Centre);
+        }
+    });
+
+    // The gear: a hub on its shaft, a web, and a rim under its teeth.
+    let (bore, face, web, hub) = (
+        GEAR_SHAFT.radius,
+        GEAR_FACE / 2.0,
+        WEB / 2.0,
+        HUB_LENGTH / 2.0,
+    );
+    let key_length = HUB_LENGTH - 4.0;
+
+    d.part(1, |d| {
+        for sign in [-1.0, 1.0] {
+            let mut profile = vec![
+                (bore, -hub),
+                (HUB_RADIUS, -hub),
+                (HUB_RADIUS, -web),
+                (RIM_RADIUS, -web),
+                (RIM_RADIUS, -face),
+                (gear.root, -face),
+                (gear.root, face),
+                (RIM_RADIUS, face),
+                (RIM_RADIUS, web),
+                (HUB_RADIUS, web),
+                (HUB_RADIUS, hub),
+                (bore, hub),
+            ];
+
+            // The keyway, on the side the key is drawn.
+            if sign > 0.0 {
+                let depth = bore + GEAR_SHAFT.hub_depth;
+                profile.extend([
+                    (bore, key_length / 2.0),
+                    (depth, key_length / 2.0),
+                    (depth, -key_length / 2.0),
+                    (bore, -key_length / 2.0),
+                ]);
+            }
+
+            let body = side(GEAR.x, sign, &profile);
+
+            d.area(&body, Fill::CrossHatch);
+            d.polygon(&body, Line::Outline);
+
+            let pitch = GEAR.x + sign * gear.pitch;
+            d.line(v(pitch, -face - 2.0), v(pitch, face + 2.0), Line::Centre);
+        }
+
+        // The teeth away from the mesh, and those in it, behind the
+        // pinion's.
+        d.polygon(
+            &rectangle(GEAR.x + gear.root, GEAR.x + gear.tip, -face, face),
+            Line::Outline,
+        );
+
+        let (tip, root) = (GEAR.x - gear.tip, GEAR.x - gear.root);
+        let pinion_tip = PINION.x + pinion.tip;
+
+        d.line(v(tip, -face), v(tip, face), Line::Hidden);
+        for depth in [-face, face] {
+            d.line(v(tip, depth), v(pinion_tip, depth), Line::Hidden);
+            d.line(v(pinion_tip, depth), v(root, depth), Line::Outline);
+        }
+    });
+
+    // The shafts and keys, which a section does not cut.
+    for (centre, keyed, length) in [
+        (PINION.x, &PINION_SHAFT, PINION_FACE / 2.0 + SHAFT_OVERHANG),
+        (GEAR.x, &GEAR_SHAFT, HUB_LENGTH / 2.0 + SHAFT_OVERHANG),
+    ] {
+        d.line(
+            v(centre, -length - 3.0),
+            v(centre, length + 3.0),
+            Line::Centre,
+        );
+        d.part(2, |d| {
+            d.polygon(
+                &rectangle(
+                    centre - keyed.radius,
+                    centre + keyed.radius,
+                    -length,
+                    length,
+                ),
+                Line::Outline,
+            );
+        });
+    }
+
+    d.part(3, |d| {
+        let inner = GEAR_SHAFT.radius - GEAR_SHAFT.shaft_depth;
+        let outer = GEAR_SHAFT.radius + GEAR_SHAFT.hub_depth;
+
+        d.polygon(
+            &rectangle(
+                GEAR.x + inner,
+                GEAR.x + outer,
+                -key_length / 2.0,
+                key_length / 2.0,
+            ),
+            Line::Outline,
+        );
+    });
+
+    d.dim_v(v(GEAR.x + gear.tip, -face), v(GEAR.x + gear.tip, face), 5.0);
+    d.dim_v(
+        v(PINION.x - pinion.tip, -PINION_FACE / 2.0),
+        v(PINION.x - pinion.tip, PINION_FACE / 2.0),
+        -5.0,
+    );
 }
 
 /// The key's section: a rectangle across the joint of shaft and hub.
@@ -291,6 +460,16 @@ impl Subject for Gears {
         Extent::new(v(-58.0, -38.0), v(58.0, 40.0))
     }
 
+    fn views(&self) -> Vec<View> {
+        let depth = HUB_LENGTH / 2.0 + SHAFT_OVERHANG + 4.0;
+
+        vec![View {
+            name: "SECTION A–A".into(),
+            place: Place::Under,
+            extent: Extent::new(v(-58.0, -depth), v(58.0, depth)),
+        }]
+    }
+
     fn draw(&self, d: &mut Draft, t: f32) {
         let (pinion, gear) = (Wheel::new(PINION_TEETH), Wheel::new(GEAR_TEETH));
         let (pinion_angle, gear_angle) = Self::angles(t);
@@ -397,6 +576,16 @@ impl Subject for Gears {
         d.dim_angle(pitch_point, PI / 2.0, PI / 2.0 + PRESSURE_ANGLE, 34)
             .text("20°");
         d.dim_h(PINION, GEAR, -36.0);
+
+        // Where section A–A is cut, and what it shows.
+        d.cutting_plane(
+            0,
+            v(PINION.x - pinion.tip - 6.0, 0.0),
+            v(GEAR.x + gear.tip + 6.0, 0.0),
+            v(0.0, -1.0),
+            'A',
+        );
+        d.in_view(0, section);
 
         d.part(0, |d| {
             d.dim_diameter(PINION, pinion.tip, 2.2, 18);

@@ -31,6 +31,9 @@ pub struct Layout {
     pub border: Rectangle<i32>,
     pub columns: u8,
     pub rows: u8,
+    /// Whether the output is wide: the detail beside the view, not in the
+    /// column.
+    pub wide: bool,
     /// The readings, one line over the view.
     pub readings: Rectangle<i32>,
     /// What the main view is fitted into.
@@ -152,6 +155,7 @@ impl Layout {
         Self {
             trim,
             border,
+            wide,
             columns: (border.width / 110).clamp(2, 16) as u8,
             rows: (border.height / 110).clamp(2, 10) as u8,
             readings,

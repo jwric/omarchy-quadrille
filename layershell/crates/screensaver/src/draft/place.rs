@@ -59,6 +59,8 @@ const LETTERED: u8 = 2;
 /// Where each automatically placed annotation of a main view goes.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Plan {
+    /// The view it places annotations in: `None` for the front view.
+    view: Option<usize>,
     spots: HashMap<Id, Spot>,
 }
 
@@ -148,11 +150,16 @@ impl Edge {
 const TRIALS: usize = 1024;
 
 impl Plan {
-    /// Places the main view's automatic annotations, from `samples` of the
-    /// subject drawn across its run, the view drawn through `projection`
-    /// inside `clip`.
-    pub fn new(samples: &[Draft], projection: &Projection, clip: Rectangle<i32>) -> Self {
-        let search = Search::new(samples, projection, clip);
+    /// Places the automatic annotations of `view` (`None`: the front view),
+    /// from `samples` of the subject drawn across its run, the view drawn
+    /// through `projection` inside `clip`.
+    pub fn new(
+        samples: &[Draft],
+        projection: &Projection,
+        clip: Rectangle<i32>,
+        view: Option<usize>,
+    ) -> Self {
+        let search = Search::new(samples, projection, clip, view);
         let options = search.options();
         let trials = options
             .iter()
@@ -187,7 +194,7 @@ impl Plan {
             .filter_map(|(spot, slot)| Some((slot.id.clone(), spot?)))
             .collect();
 
-        Self { spots }
+        Self { view, spots }
     }
 
     /// Places the automatic annotations among `marks`, drawn through
@@ -199,7 +206,10 @@ impl Plan {
         let mut moving = Vec::new();
 
         for (index, mark) in marks.iter_mut().enumerate() {
-            let Some(spot) = Id::of(mark).and_then(|id| self.spots.get(&id)) else {
+            let Some(spot) = Id::of(mark)
+                .filter(|_| mark.view == self.view)
+                .and_then(|id| self.spots.get(&id))
+            else {
                 continue;
             };
 
@@ -215,7 +225,7 @@ impl Plan {
             let footprint = Footprint::of(&marks[index], projection);
             let covers = marks.iter().enumerate().any(|(other, mark)| {
                 other != index
-                    && mark.shown_in(true)
+                    && mark.shown_in(self.view)
                     && mark.pass() >= Pass::Annotation
                     && Footprint::of(mark, projection)
                         .boxes
@@ -278,15 +288,20 @@ type Trial = (usize, (bool, i32, i32));
 type Costed = (Placed, f32);
 
 impl<'a> Search<'a> {
-    fn new(samples: &[Draft], projection: &'a Projection, clip: Rectangle<i32>) -> Self {
-        let slots = Slot::all(samples);
+    fn new(
+        samples: &[Draft],
+        projection: &'a Projection,
+        clip: Rectangle<i32>,
+        view: Option<usize>,
+    ) -> Self {
+        let slots = Slot::all(samples, view);
         let reach = slots
             .iter()
             .map(|slot| Edge::ALL.map(|edge| slot.reach(edge, projection)))
             .collect();
         let mut search = Self {
             slots,
-            ground: Ground::new(samples, projection, clip),
+            ground: Ground::new(samples, projection, clip, view),
             projection,
             near: Vec::new(),
             reach,
@@ -611,12 +626,12 @@ struct Reach {
 }
 
 impl Slot {
-    /// The main view's automatic annotations across `samples`.
-    fn all(samples: &[Draft]) -> Vec<Self> {
+    /// The automatic annotations of `view` across `samples`.
+    fn all(samples: &[Draft], view: Option<usize>) -> Vec<Self> {
         let mut slots: Vec<Self> = Vec::new();
 
         for (sample, draft) in samples.iter().enumerate() {
-            for mark in draft.marks().iter().filter(|mark| mark.shown_in(true)) {
+            for mark in draft.marks().iter().filter(|mark| mark.shown_in(view)) {
                 let Some(id) = Id::of(mark) else {
                     continue;
                 };
@@ -935,7 +950,12 @@ struct Ground {
 }
 
 impl Ground {
-    fn new(samples: &[Draft], projection: &Projection, clip: Rectangle<i32>) -> Self {
+    fn new(
+        samples: &[Draft],
+        projection: &Projection,
+        clip: Rectangle<i32>,
+        view: Option<usize>,
+    ) -> Self {
         let mut ground = Self {
             clip,
             still: Grid::new(clip),
@@ -945,7 +965,7 @@ impl Ground {
         };
 
         for (sample, draft) in samples.iter().enumerate() {
-            for mark in draft.marks().iter().filter(|mark| mark.shown_in(true)) {
+            for mark in draft.marks().iter().filter(|mark| mark.shown_in(view)) {
                 // What stays put is the same in every sample.
                 if sample > 0 && !mark.moving {
                     continue;
@@ -1293,7 +1313,7 @@ mod tests {
     #[test]
     fn still_annotations_go_beside_the_drawing_and_clear_of_each_other() {
         let mut draft = part();
-        let plan = Plan::new(std::slice::from_ref(&draft), &UNIT, VIEW);
+        let plan = Plan::new(std::slice::from_ref(&draft), &UNIT, VIEW, None);
 
         assert!(draft.marks()[1..].iter().all(|mark| plan.places(mark)));
         plan.apply(draft.marks_mut(), &UNIT);
@@ -1326,7 +1346,7 @@ mod tests {
         let mut draft = part();
         // A view no wider than the part.
         let narrow = rect(140, 0, 120, 300);
-        let plan = Plan::new(std::slice::from_ref(&draft), &UNIT, narrow);
+        let plan = Plan::new(std::slice::from_ref(&draft), &UNIT, narrow, None);
 
         plan.apply(draft.marks_mut(), &UNIT);
 
@@ -1352,7 +1372,7 @@ mod tests {
                 draft
             })
             .collect();
-        let plan = Plan::new(&samples, &UNIT, VIEW);
+        let plan = Plan::new(&samples, &UNIT, VIEW, None);
 
         assert!(plan.places(&samples[0].marks()[1]));
 

@@ -27,8 +27,9 @@ use crate::draft::letters;
 use crate::draft::place::Plan;
 use crate::draft::raster::{self, Head, Inked, LETTERING, Projection, colour, rect};
 use crate::draft::scale::Ratio;
-use crate::draft::{Draft, Extent, Line, Mark, Tone};
-use crate::subjects::{Card, Detail, Subject};
+use crate::draft::v;
+use crate::draft::{Draft, Extent, Ink, Line, Mark, Tone};
+use crate::subjects::{Card, Detail, Place, Subject};
 
 use layout::{CAPTION, LINE, Layout};
 use plates::Typist;
@@ -108,15 +109,20 @@ pub struct Kept<Renderer: geometry::Renderer> {
 /// The plan of a subject's automatic annotations at one size, worked out
 /// once and kept while the subject shows.
 #[derive(Default)]
-struct Planned(RefCell<Option<(PlanFor, Rc<Plan>)>>);
+struct Planned(RefCell<Option<(PlanFor, Rc<Vec<Plan>>)>>);
 
 /// A subject, by its index, at a size.
 type PlanFor = (usize, (i32, i32));
 
 impl Planned {
-    /// The plan for subject `index` at `size`, worked out by `plan` if it
-    /// is not kept.
-    fn get(&self, index: usize, size: (i32, i32), plan: impl FnOnce() -> Plan) -> Rc<Plan> {
+    /// The plans for subject `index` at `size`, a plan a view, worked out by
+    /// `plan` if they are not kept.
+    fn get(
+        &self,
+        index: usize,
+        size: (i32, i32),
+        plan: impl FnOnce() -> Vec<Plan>,
+    ) -> Rc<Vec<Plan>> {
         let key = (index, size);
         let mut kept = self.0.borrow_mut();
 
@@ -358,10 +364,29 @@ struct Scene<'a> {
     card: &'a Card,
     layout: Layout,
     draft: Draft,
+    /// The front view's projection...
     main: Projection,
     main_ratio: Option<Ratio>,
+    /// ...and every view the sheet shows, the front view first.
+    panes: Vec<Pane>,
     detail: Option<DetailView>,
 }
+
+/// One of the subject's views on the sheet.
+#[derive(Debug, Clone, PartialEq)]
+struct Pane {
+    /// Which: `None` for the front view.
+    view: Option<usize>,
+    projection: Projection,
+    /// The part of the main area it is drawn and annotated in.
+    cell: Rectangle<i32>,
+    /// Its name and the top middle of its caption, but for the front view's,
+    /// which is the sheet's.
+    caption: Option<(String, Point<i32>)>,
+}
+
+/// The room between views lined up on a sheet.
+const BETWEEN: i32 = 2 * LINE;
 
 struct DetailView {
     focus: Focus,
@@ -400,9 +425,27 @@ fn fit(
     area: Rectangle<i32>,
     display: Display,
 ) -> (f32, Option<Ratio>) {
+    fit_span(
+        card,
+        (extent.width(), extent.height()),
+        (0, 0),
+        area,
+        display,
+    )
+}
+
+/// The pixels per model unit that frame `span` model units across and down,
+/// with `gaps` pixels besides, in `area`, as [`fit`] does.
+fn fit_span(
+    card: &Card,
+    span: (f32, f32),
+    gaps: (i32, i32),
+    area: Rectangle<i32>,
+    display: Display,
+) -> (f32, Option<Ratio>) {
     let unit = card.unit.millimetres();
-    let filling = (f64::from(area.width) / f64::from(extent.width()))
-        .min(f64::from(area.height) / f64::from(extent.height()));
+    let filling = (f64::from(area.width - gaps.0) / f64::from(span.0))
+        .min(f64::from(area.height - gaps.1) / f64::from(span.1));
 
     if card.scaled {
         let limit = filling * display.mm_per_vpx / unit;
@@ -420,20 +463,174 @@ fn letter(index: usize) -> char {
     char::from(b'B' + (index % 24) as u8)
 }
 
+/// The subject's views laid out in the main area, lined up as first-angle
+/// projection puts them, all to one scale, and that scale.
+///
+/// A view beside the front view or under it goes in if there is room for
+/// it: on a wide display at whatever scale fits them all, on a narrow one
+/// only at the scale the front view has alone.
+fn arrange(sheet: &Sheet<'_>, layout: &Layout) -> (Vec<Pane>, Option<Ratio>) {
+    let card = sheet.subject.card();
+    let area = layout.view;
+    let front = sheet.subject.extent();
+    let views = sheet.subject.views();
+    let alone = fit(card, front, area, sheet.display);
+    let only = |scale: f32| {
+        vec![Pane {
+            view: None,
+            projection: Projection::centred(front, area, scale),
+            cell: layout.drawing(),
+            caption: None,
+        }]
+    };
+
+    let beside = views.iter().position(|view| view.place == Place::Beside);
+    let under = views.iter().position(|view| view.place == Place::Under);
+
+    if beside.is_none() && under.is_none() {
+        return (only(alone.0), alone.1);
+    }
+
+    // Across: the front view's x and anything under it, then what is beside
+    // it; down: the front view's y and anything beside it, then what is
+    // under it, and a caption under it all.
+    let span = |beside: Option<usize>, under: Option<usize>| {
+        let (mut left, mut right) = (front.min.x, front.max.x);
+        let (mut low, mut high) = (front.min.y, front.max.y);
+
+        if let Some(under) = under {
+            left = left.min(views[under].extent.min.x);
+            right = right.max(views[under].extent.max.x);
+        }
+
+        if let Some(beside) = beside {
+            low = low.min(views[beside].extent.min.y);
+            high = high.max(views[beside].extent.max.y);
+        }
+
+        (left, right, low, high)
+    };
+
+    let trials = [(beside, under), (beside, None), (None, under)];
+
+    for (beside, under) in trials {
+        if beside.is_none() && under.is_none() {
+            continue;
+        }
+
+        let (left, right, low, high) = span(beside, under);
+        let across = right - left + beside.map_or(0.0, |i| views[i].extent.width());
+        let down = high - low + under.map_or(0.0, |i| views[i].extent.height());
+        let gaps = (
+            if beside.is_some() { BETWEEN } else { 0 },
+            if under.is_some() { BETWEEN } else { 0 } + CAPTION,
+        );
+        let (scale, ratio) = fit_span(card, (across, down), gaps, area, sheet.display);
+
+        // On a narrow display, never smaller than the front view alone.
+        if !layout.wide && scale < alone.0 * 0.999 {
+            continue;
+        }
+
+        let width = scale * across + gaps.0 as f32;
+        let height = scale * down + gaps.1 as f32;
+        let x = area.x as f32 + (area.width as f32 - width) / 2.0;
+        let y = area.y as f32 + (area.height as f32 - height) / 2.0;
+        let front_origin = ((x - scale * left).round(), (y + scale * high).round());
+        let drawing = layout.drawing();
+        let split_x = (x + scale * (right - left) + BETWEEN as f32 / 2.0).round() as i32;
+        let split_y = (y + scale * (high - low) + BETWEEN as f32 / 2.0).round() as i32;
+        let bottom = drawing.y + drawing.height;
+        let end = drawing.x + drawing.width;
+
+        let mut panes = vec![Pane {
+            view: None,
+            projection: Projection {
+                origin: front_origin,
+                scale,
+            },
+            cell: rect(
+                drawing.x,
+                drawing.y,
+                if beside.is_some() { split_x } else { end } - drawing.x,
+                if under.is_some() { split_y } else { bottom } - drawing.y,
+            ),
+            caption: None,
+        }];
+
+        let caption = |view: usize, projection: &Projection| {
+            let extent = views[view].extent;
+            let middle = projection.px(v(extent.centre().x, extent.min.y));
+
+            Some((views[view].name.clone(), Point::new(middle.x, middle.y + 6)))
+        };
+
+        if let Some(beside) = beside {
+            let projection = Projection {
+                origin: (
+                    (x + scale * (right - left) + BETWEEN as f32
+                        - scale * views[beside].extent.min.x)
+                        .round(),
+                    front_origin.1,
+                ),
+                scale,
+            };
+
+            panes.push(Pane {
+                view: Some(beside),
+                caption: caption(beside, &projection),
+                projection,
+                cell: rect(
+                    split_x,
+                    drawing.y,
+                    end - split_x,
+                    if under.is_some() { split_y } else { bottom } - drawing.y,
+                ),
+            });
+        }
+
+        if let Some(under) = under {
+            let projection = Projection {
+                origin: (
+                    front_origin.0,
+                    (y + scale * (high - low) + BETWEEN as f32 + scale * views[under].extent.max.y)
+                        .round(),
+                ),
+                scale,
+            };
+
+            panes.push(Pane {
+                view: Some(under),
+                caption: caption(under, &projection),
+                projection,
+                cell: rect(
+                    drawing.x,
+                    split_y,
+                    if beside.is_some() { split_x } else { end } - drawing.x,
+                    bottom - split_y,
+                ),
+            });
+        }
+
+        return (panes, ratio);
+    }
+
+    (only(alone.0), alone.1)
+}
+
 impl<'a> Scene<'a> {
     fn new(sheet: &'a Sheet<'a>, width: i32, height: i32, planned: &Planned) -> Self {
         let card = sheet.subject.card();
         let layout = Layout::new(width, height, card);
-        let extent = sheet.subject.extent();
-        let (scale, main_ratio) = fit(card, extent, layout.view, sheet.display);
-        let main = Projection::centred(extent, layout.view, scale);
+        let (panes, main_ratio) = arrange(sheet, &layout);
+        let main = panes[0].projection;
 
         let mut draft = Draft::new();
         sheet.subject.draw(&mut draft, sheet.showing.moment.run);
 
-        // Where the automatic annotations go, from where the subject's
-        // parts go over its run: the same on every frame of the sheet.
-        let plan = planned.get(sheet.showing.subject, (width, height), || {
+        // Where the automatic annotations go in each view, from where the
+        // subject's parts go over its run: the same on every frame.
+        let plans = planned.get(sheet.showing.subject, (width, height), || {
             let running = timeline::running(card.parts.len());
             // Spread by the golden ratio, which no cycle of the subject's
             // keeps time with: evenly spaced samples can all catch a part
@@ -469,10 +666,15 @@ impl<'a> Scene<'a> {
                 })
                 .collect();
 
-            Plan::new(&samples, &main, layout.drawing())
+            panes
+                .iter()
+                .map(|pane| Plan::new(&samples, &pane.projection, pane.cell, pane.view))
+                .collect()
         });
 
-        plan.apply(draft.marks_mut(), &main);
+        for (plan, pane) in plans.iter().zip(&panes) {
+            plan.apply(draft.marks_mut(), &pane.projection);
+        }
 
         let detail = sheet.showing.moment.focus().and_then(|focus| {
             let detail = sheet.subject.detail(focus.part, sheet.showing.moment.run)?;
@@ -508,8 +710,27 @@ impl<'a> Scene<'a> {
             draft,
             main,
             main_ratio,
+            panes,
             detail,
         }
+    }
+
+    /// The marks every view shows, each with its view's projection; a
+    /// cutting plane only when the sheet shows its section.
+    fn shown(&self) -> impl Iterator<Item = (&Mark, &Projection)> {
+        self.panes.iter().flat_map(|pane| {
+            self.draft
+                .marks()
+                .iter()
+                .filter(|mark| mark.shown_in(pane.view))
+                .filter(|mark| match mark.ink {
+                    Ink::Section { view, .. } => {
+                        self.panes.iter().any(|pane| pane.view == Some(view))
+                    }
+                    _ => true,
+                })
+                .map(|mark| (mark, &pane.projection))
+        })
     }
 
     fn scale_label(&self, ratio: Option<Ratio>) -> String {
@@ -542,17 +763,12 @@ impl<'a> Scene<'a> {
             Phase::Plot(share) => Some(share),
             _ => None,
         };
-        let marks = self
-            .draft
-            .marks()
-            .iter()
-            .filter(|mark| mark.shown_in(true) && layer.takes(mark.moving));
+        let marks = self.shown().filter(|(mark, _)| layer.takes(mark.moving));
         let mut pen = Pen::new(frame);
         let head = plot(
             &mut pen,
             palette,
             marks,
-            &self.main,
             self.layout.drawing(),
             moment.focus().map(|f| f.part),
             share,
@@ -615,12 +831,11 @@ impl<'a> Scene<'a> {
         geometries
     }
 
-    /// The main view's pieces in the plotter's order, all of them.
+    /// The views' pieces in the plotter's order, all of them.
     fn view_pieces(&self) -> Vec<Inked> {
         let moment = self.sheet.showing.moment;
-        let marks = self.draft.marks().iter().filter(|mark| mark.shown_in(true));
 
-        pieces(marks, &self.main, moment.focus().map(|focus| focus.part))
+        pieces(self.shown(), moment.focus().map(|focus| focus.part))
     }
 
     /// The title block, parts list, notes and the view's caption.
@@ -670,6 +885,19 @@ impl<'a> Scene<'a> {
             layout.caption.y + LINE,
             palette.edge,
         );
+
+        // The other views' names, under them.
+        for (name, at) in self.panes.iter().filter_map(|pane| pane.caption.as_ref()) {
+            typist.text(pen, name, *at, Anchor::TOP, palette.muted);
+
+            let underline = i32::from(LETTERING.width(name));
+            pen.hline(
+                at.x - underline / 2,
+                at.x - underline / 2 + underline - 1,
+                at.y + LINE,
+                palette.edge,
+            );
+        }
     }
 
     /// The title and the instruments, along the top of the main area.
@@ -830,14 +1058,14 @@ impl<'a> Scene<'a> {
             .draft
             .marks()
             .iter()
-            .filter(|mark| mark.shown_in(false) && view.takes(layer, mark));
+            .filter(|mark| mark.magnified() && view.takes(layer, mark))
+            .map(|mark| (mark, &view.projection));
         let share = (plotted < 1.0).then_some(plotted);
 
         let head = plot(
             &mut pen,
             palette,
             marks,
-            &view.projection,
             inside,
             Some(view.focus.part),
             share,
@@ -883,17 +1111,16 @@ fn buckets(pieces: &[Inked], cost: usize) -> impl Iterator<Item = &[Inked]> {
     })
 }
 
-/// The pieces of `marks` through `projection` in the plotter's order, the
-/// marks of part `focus` in the accent.
+/// The pieces of `marks`, each through its projection, in the plotter's
+/// order, the marks of part `focus` in the accent.
 fn pieces<'m>(
-    marks: impl Iterator<Item = &'m Mark>,
-    projection: &Projection,
+    marks: impl Iterator<Item = (&'m Mark, &'m Projection)>,
     focus: Option<usize>,
 ) -> Vec<Inked> {
     let mut pieces: Vec<(crate::draft::Pass, Inked)> = Vec::new();
     let mut buffer = Vec::new();
 
-    for mark in marks {
+    for (mark, projection) in marks {
         raster::rasterize(mark, projection, &mut buffer);
 
         let focused = focus.is_some() && mark.part == focus;
@@ -957,19 +1184,18 @@ fn draw_pieces<Renderer: geometry::Renderer>(
     None
 }
 
-/// Draws `marks` through `projection` inside `clip`, the marks of part
-/// `focus` in the accent. With a `share`, only that share of the drawing is
+/// Draws `marks`, each through its projection, inside `clip`, the marks of
+/// part `focus` in the accent. With a `share`, only that share of the drawing is
 /// plotted, in the plotter's order; the pen's position is returned.
 fn plot<'m, Renderer: geometry::Renderer>(
     pen: &mut Pen<'_, Renderer>,
     palette: &Palette,
-    marks: impl Iterator<Item = &'m Mark>,
-    projection: &Projection,
+    marks: impl Iterator<Item = (&'m Mark, &'m Projection)>,
     clip: Rectangle<i32>,
     focus: Option<usize>,
     share: Option<f32>,
 ) -> Option<Head> {
-    let pieces = pieces(marks, projection, focus);
+    let pieces = pieces(marks, focus);
     let total: usize = pieces.iter().map(|inked| inked.piece.cost()).sum();
     let mut budget = share.map_or(usize::MAX, |share| (share * total as f32) as usize);
 
@@ -979,7 +1205,7 @@ fn plot<'m, Renderer: geometry::Renderer>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draft::{Ink, Pass, Placement};
+    use crate::draft::{Pass, Placement};
     use crate::headless::Output;
     use crate::subjects;
     use schedule::Schedule;
@@ -1055,7 +1281,7 @@ mod tests {
                         .marks()
                         .iter()
                         .zip(scene.draft.marks())
-                        .filter(|(mark, _)| mark.shown_in(true) && mark.pass() >= Pass::Annotation)
+                        .filter(|(mark, _)| mark.shown_in(None) && mark.pass() >= Pass::Annotation)
                         .map(|(mark, placed)| {
                             let auto = matches!(
                                 mark.ink,
@@ -1116,6 +1342,66 @@ mod tests {
                                 );
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every view the sheet shows is framed inside a cell of the main area
+    /// of its own, on both displays, for every subject; and lined up with
+    /// the front view.
+    #[test]
+    fn views_are_framed_apart_and_lined_up() {
+        let subjects = subjects::all();
+
+        for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+            let (width, height) = output.virtual_size();
+
+            for index in 0..subjects.len() {
+                let sheet = sheet(&subjects, index, output, 30.0);
+                let layout = Layout::new(width as i32, height as i32, sheet.subject.card());
+                let (panes, _) = arrange(&sheet, &layout);
+                let views = sheet.subject.views();
+                let drawing = layout.drawing();
+                let name = subjects[index].name();
+
+                assert_eq!(panes[0].view, None);
+
+                for (i, pane) in panes.iter().enumerate() {
+                    let extent = match pane.view {
+                        None => sheet.subject.extent(),
+                        Some(view) => views[view].extent,
+                    };
+                    let corner = pane.projection.px(v(extent.min.x, extent.max.y));
+                    let far = pane.projection.px(v(extent.max.x, extent.min.y));
+                    let framed = rect(corner.x, corner.y, far.x - corner.x, far.y - corner.y);
+
+                    assert!(
+                        raster::intersection(pane.cell, drawing) == Some(pane.cell),
+                        "{name}: view {i} {:?} leaves the drawing",
+                        pane.cell
+                    );
+                    assert!(
+                        raster::intersection(framed, pane.cell) == Some(framed),
+                        "{name} on {width}: view {i} {framed:?} leaves its cell {:?}",
+                        pane.cell
+                    );
+
+                    for other in &panes[i + 1..] {
+                        assert!(raster::intersection(pane.cell, other.cell).is_none());
+                    }
+
+                    // Beside the front view on its rows, under it on its
+                    // columns.
+                    match pane.view.map(|view| views[view].place) {
+                        Some(Place::Beside) => {
+                            assert_eq!(pane.projection.origin.1, panes[0].projection.origin.1);
+                        }
+                        Some(Place::Under) => {
+                            assert_eq!(pane.projection.origin.0, panes[0].projection.origin.0);
+                        }
+                        None => {}
                     }
                 }
             }

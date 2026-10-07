@@ -158,6 +158,17 @@ pub enum Ink {
     },
     /// A square dot on the pixel grid, `size` pixels across.
     Dot { at: V2, size: i32 },
+    /// Where the section that is view `view` is cut: a chain line from
+    /// `from` to `to`, thick at its ends, where arrows point the way it is
+    /// seen, `toward`, each by the section's letter. Drawn only when the
+    /// view is.
+    Section {
+        view: usize,
+        from: V2,
+        to: V2,
+        toward: V2,
+        letter: char,
+    },
 }
 
 /// The geometry of a stroke.
@@ -201,6 +212,9 @@ pub struct Mark {
     /// Whether it moves while the subject runs, and so is drawn every frame.
     pub moving: bool,
     pub scope: Scope,
+    /// The subject's view it is drawn in, by its index among the other
+    /// views; `None` for the front view.
+    pub view: Option<usize>,
 }
 
 /// The order a plotter draws in: the construction first, then the edges,
@@ -217,13 +231,15 @@ pub enum Pass {
 }
 
 impl Mark {
-    /// Whether the mark belongs in a main view (`false`: in a detail).
-    pub fn shown_in(&self, main: bool) -> bool {
-        match self.scope {
-            Scope::Everywhere => true,
-            Scope::Main => main,
-            Scope::Detail => !main,
-        }
+    /// Whether the mark is drawn in `view` (`None`: the front view).
+    pub fn shown_in(&self, view: Option<usize>) -> bool {
+        self.view == view && self.scope != Scope::Detail
+    }
+
+    /// Whether the mark is drawn in a detail, which magnifies the front
+    /// view.
+    pub fn magnified(&self) -> bool {
+        self.view.is_none() && self.scope != Scope::Main
     }
 
     pub fn pass(&self) -> Pass {
@@ -236,7 +252,9 @@ impl Mark {
             },
             Ink::Area { .. } => Pass::Areas,
             Ink::Dot { .. } => Pass::Traces,
-            Ink::Label { .. } | Ink::Dimension { .. } | Ink::Note { .. } => Pass::Annotation,
+            Ink::Label { .. } | Ink::Dimension { .. } | Ink::Note { .. } | Ink::Section { .. } => {
+                Pass::Annotation
+            }
             Ink::Balloon { .. } => Pass::Balloons,
         }
     }
@@ -249,6 +267,7 @@ pub struct Draft {
     part: Option<usize>,
     moving: bool,
     detail: bool,
+    view: Option<usize>,
 }
 
 /// The mark just made, to say more about it.
@@ -316,6 +335,14 @@ impl Draft {
         self.moving = outer;
     }
 
+    /// Records what `draw` makes as the drawing of the subject's other view
+    /// `index` (see [`Subject::views`](crate::subjects::Subject::views)).
+    pub fn in_view(&mut self, index: usize, draw: impl FnOnce(&mut Self)) {
+        let outer = self.view.replace(index);
+        draw(self);
+        self.view = outer;
+    }
+
     /// Records what `draw` makes for detail views only: the dimensions and
     /// notes of features too small to letter in the main view.
     pub fn in_detail(&mut self, draw: impl FnOnce(&mut Self)) {
@@ -327,7 +354,11 @@ impl Draft {
     fn push(&mut self, ink: Ink, tone: Tone) -> Made<'_> {
         let annotation = matches!(
             ink,
-            Ink::Label { .. } | Ink::Dimension { .. } | Ink::Note { .. } | Ink::Balloon { .. }
+            Ink::Label { .. }
+                | Ink::Dimension { .. }
+                | Ink::Note { .. }
+                | Ink::Balloon { .. }
+                | Ink::Section { .. }
         );
         let scope = if self.detail {
             Scope::Detail
@@ -343,6 +374,7 @@ impl Draft {
             part: self.part,
             moving: self.moving,
             scope,
+            view: self.view,
         });
 
         Made(self.marks.last_mut().expect("Just pushed"))
@@ -460,6 +492,28 @@ impl Draft {
                 item: index + 1,
                 target,
                 offset: offset.into(),
+            },
+            Tone::Ink,
+        )
+    }
+
+    /// Where section `letter`, the subject's view `view`, is cut: from
+    /// `from` to `to`, seen looking `toward`.
+    pub fn cutting_plane(
+        &mut self,
+        view: usize,
+        from: V2,
+        to: V2,
+        toward: V2,
+        letter: char,
+    ) -> Made<'_> {
+        self.push(
+            Ink::Section {
+                view,
+                from,
+                to,
+                toward,
+                letter,
             },
             Tone::Ink,
         )
