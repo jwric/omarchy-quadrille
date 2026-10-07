@@ -11,6 +11,9 @@ field. Physical calibration and the live Rust overlay are unchanged.
 All 96 offscreen renders, isolated GPU QA/QB and both real empty outputs passed.
 No host installation, control, push or history rewriting is authorized.
 The current overlay is live by default (`--overlay-rest-ms`), per layershell/NOTES.md.
+Refined the same day: calmer star (faint on ground), plain wording, outlined swatches,
+balanced corners and DETAIL A (the centre on panel pixels, 6:1); renders under
+`/tmp/quadrille-testcard-20261006/refine/`.
 
 Written at a pause (2026-10-05, evening). Read this, then `plugins/NOTES.md` and
 `layershell/NOTES.md` (each has a "Status at pause" section from the agent that

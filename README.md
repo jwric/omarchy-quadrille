@@ -83,13 +83,15 @@ and 796.6 × 333.5 mm; these are inferred sizes. A mark rounds to the nearest vp
 half a vpx, conservatively rounded upward; it is not a calibration guarantee.
 Missing EDID uses an explicitly estimated density and `~` labels.
 
-Each output draws its own static test-card plate: a calibrated central Siemens
-star, labelled frequency rings and sampled bursts, the current theme's role
-colours, corner geometry, a 2% safe frame and a true-size ruler. Panel and virtual-
-grid aliasing limits are labelled separately; the last two bursts deliberately
-show lost detail. EDID and inferred sizes are separate from raster tolerance.
-Binary patterns are precomputed into an exact texture on display/theme events;
-the wallpaper does no work between changes. The live cursor overlay is separate.
+Each output draws its own static test card: a calibrated Siemens star in quiet
+theme tones, labelled stripes, the theme's role colours as outlined swatches, a
+slanted edge, corner marks, a 2% frame and a true-size ruler. The card says what
+it shows in plain words, and what this grid cannot show: ring A marks where the
+star turns to noise on the virtual-pixel grid, and DETAIL A redraws the centre on
+the panel's own pixels at 6:1 with their pitch. Inferred sizes say so; unknown
+ones carry `~`. Binary patterns are precomputed into an exact texture on
+display/theme events; the wallpaper does no work between changes. The live cursor
+overlay is separate.
 
 An optional `~/.config/quadrille/displays.toml` supplies measured dimensions.
 Nothing creates it by default. Replace these example sizes with measurements;

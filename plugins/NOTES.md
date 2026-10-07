@@ -1101,42 +1101,46 @@ changes**: give it a count, or a model that is edited in place. If a popup is ev
 
 ## Design
 
-Aperture is the per-output test-card plate: a central 32-pair Siemens star,
-frequency rings and flanking sampled bursts, a role-colour strip, active-corner
-geometry, a 2% safe frame and a 1:1 ruler. The star's stated whole-mm diameter
-checks aspect; the slanted edge is exactly 1:12 (4.76 degrees). Native large
-bitmap digits give the station index; every other mark uses the small face.
+Aperture is the per-output test card: a central 32-pair Siemens star, labelled
+stripes, the theme's roles as swatches, a slanted edge, corner marks, a 2% frame and
+a 1:1 ruler, laid out inside the frame with a 24 vpx gutter. Corners balance: the
+callsign (top left), DETAIL A (top right), the ruler (bottom left), the title block
+and the native large screen number (bottom right); the palette runs above them.
 
-Three drawing languages were rendered at both scales for both real outputs.
-Aperture wins on hierarchy and negative space. Broadcast uses a dominant role-bar
-field and Bayer ramps, but its small star feels like a badge. Bench uses an
-orthogonal group array, but competing blocks make a busy desktop. Rejected PNGs
-and the five-line rationale: `/tmp/quadrille-testcard-20261006/explorations/`;
-final four-theme matrix: `/tmp/quadrille-testcard-20261006/final/`.
+**Star tone.** Full-contrast ink on void was the loudest thing on the desktop. The
+wedges are now `faint` on `ground` (a quiet disc), chosen from three role pairs
+rendered for TERMINAL and PAPER (`wallpaper.py --explore`): `edge` on ground was
+calmest but fades to 1.6-1.9:1 (WCAG) in four themes; `muted` on ground (4.1-6.5:1)
+is still loud. Faint on ground (1.9-2.5:1 in all five) keeps the 32 pairs and the
+centre's noise plainly visible in every theme. Full contrast stays where contrast is the point: the
+stripes and the slanted edge. The detail view uses the star's own tones, so it reads
+as the same object.
 
-A line pair is one ink/void cycle ([target convention](https://www.edmundoptics.com/knowledge-center/application-notes/imaging/testing-and-targets)).
-For 32 pairs, frequency is 32/(2*pi*r) lp/mm. Panel Nyquist is px/mm divided by 2;
-the virtual drawing grid has a lower Nyquist. Both corresponding alias radii
-are marked and named; the last two burst signals are explicitly aliased. A solid
-block is honest lost detail, not a broken shader. All inferred or missing-EDID
-sizes remain labelled; mark quantisation error is separate from calibration.
+**Words.** Every label is a plain, true sentence: PAIR = ONE LIGHT + ONE DARK STRIPE,
+TOO FINE: SHOWS AS 0.83, SHOULD LOOK ROUND, SIZE INFERRED FROM THE SCREEN'S 34 x 22
+cm. "Virtual pixel" is defined once, beside the slanted edge whose steps show it.
 
-JS fixed-point determinants precompute binary wedge runs on change events into
-the existing Canvas.Image texture; no shader angle/precision decision can change
-a wedge. The backing size pads to the reduced 1/120-scale numerator, avoiding
-Canvas rounding at 200/120. One RGBA copy is 1.75 MiB (laptop), 4.72 MiB (Dell);
-both uploads enlarge only by that output's whole physical-pixel factor. The
-shader only fills the constant void role. No smoothing, blended tones, extra pixel unit, detail magnification or wallpaper poll. The live overlay,
-physical model, background fallback and Settle first-frame gate are unchanged.
+**Limits.** Ring A (accent) is where the wedges turn to noise on the virtual grid
+(32/pi vpx from the centre). The right-hand stripes are that limit and what lies past
+it: 2 vpx (the finest the grid draws), 1.5 vpx (aliases to half its frequency), 1 vpx
+(comes out solid). The old "panel limit" stripe was a 1.24 lp/mm alias labelled 3.71;
+the panel's limit is now shown only where it is true: DETAIL A redraws the star's
+centre on the panel's own pixels, each one a block of whole virtual pixels (6:1 on
+both outputs: 2 vpx a pixel on the laptop, 3 on the Dell), with ring A and the
+panel's own limit ring (caution, 32/pi pixels) drawn in it, a pixel scale, the pitch
+(0.135 / 0.232 mm, 7.4 / 4.3 pixels per mm) and the pixels across. A 45-degree
+leader leaves ring A along a wedge boundary to the inset; where a shoulder does not
+fit (portrait), a short leader ends at the letter A.
 
-`python3 plugins/tools/wallpaper.py OUT` checks 24 layout/output/scale cases in
-TERMINAL, PAPER, PHOSPHOR and LCD. It checks rendered ruler ticks, independent
-angle samples, measured annular pair counts/pitches, burst cells and crisp.py.
-`--explore` renders the three compositions; `--nested` checks the actual service
-clone and GPU texture upload under the existing short live lock. Live empty-
-workspace capture uses guarded `popup-shots.sh`, EMPTY_A=7 EMPTY_B=6.
+Rings are drawn the way a pixel artist draws them (pixels within half a pixel of the
+radius), so the outline is 8-fold symmetric with no nubs at the compass points.
 
-Verification: all 96 final renders passed geometry, crispness and numeric checks;
-the GPU clone passed QA/QB with final sizes from the first visible paint and
-855x535 / 1720x720 backing images. Both live outputs were inspected over empty
-workspaces. Live hotplug, rotation, scale and theme changes were not forced.
+`python3 plugins/tools/wallpaper.py OUT` renders every case (the real layout from each
+output, side by side, stacked, three outputs, portrait, single, estimated, 1920x1080 at
+1, 2560x1440 at 1.5) in all five themes and checks rulers, wedges against independent
+angles, ring pair counts and frequencies, bursts, the inset pixel by pixel, swatch
+outlines, outline roundness and crisp.py; `node plugins/tools/wallpaper-test.js`
+asserts the geometry (nothing dropped, nothing touching). `--nested` (QA/QB, GPU)
+passed too. The physical model, the live overlay, event-driven redraw and the Settle
+first-frame gate are unchanged. Not yet seen live: the session was locked when the
+refinement was finished, and a locked shell is never restarted.

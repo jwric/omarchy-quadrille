@@ -18,12 +18,13 @@ Item {
   property var monitors: []
   property var overrides: ({})
   property string composition: "aperture"
+  property string starTone: "faint"
   readonly property bool software: Quickshell.env("QT_QPA_PLATFORM") === "offscreen"
   readonly property bool compiled: software || glow.status === ShaderEffect.Compiled
   readonly property bool failed: !software && glow.status === ShaderEffect.Error
   readonly property var physical: Physical.resolve(monitor, overrides)
   readonly property var measured: monitors.map(function(m) { return { input: m, physical: Physical.resolve(m, root.overrides) } })
-  readonly property var drawing: Drafting.plan(monitor, physical, measured, Glyphs, Px.barVpx, Big, composition)
+  readonly property var drawing: Drafting.plan(monitor, physical, measured, Glyphs, Px.barVpx, Big, composition, starTone)
   readonly property var colors: ({ "void": Role.void_, ground: Role.ground,
     raised: Role.raised, hover: Role.hover, edge: Role.edge, line: Role.line,
     faint: Role.faint, accent: Role.accent, ink: Role.ink, muted: Role.muted,
