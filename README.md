@@ -186,7 +186,8 @@ the scale reads `~2:1`. Lettering,
 patterns and line types are whole virtual pixels, in the Omarchy theme's
 roles. Still parts of a settled sheet are kept and only what moves is drawn
 again, so the renderer's damage is the size of the motion
-(`quadrille-screensaver bench` times the drawing headless).
+(`quadrille-screensaver bench` times the drawing, and repainting what
+changed as a live surface does, headless).
 
 ```sh
 layershell/tools/install.sh               # builds and installs it with quadrille-bar

@@ -244,7 +244,7 @@ fn time(bench: Bench) -> Result<(), String> {
     let stages = [Stage::Plot, Stage::DetailIn, Stage::Settled, Stage::Wipe];
 
     println!(
-        "a frame on the {}: milliseconds drawing the sheet, and the share of the output repainted live, 95th percentile / worst",
+        "a frame on the {}, 95th percentile / worst: milliseconds drawing the sheet, milliseconds repainting what changed, and the share of the output that is",
         match bench.output {
             Desk::Laptop => "laptop",
             Desk::Ultrawide => "ultrawide",
@@ -252,7 +252,7 @@ fn time(bench: Bench) -> Result<(), String> {
     );
     print!("{:<10}", "");
     for stage in stages {
-        print!(" {:<25}", stage.name());
+        print!(" {:<34}", stage.name());
     }
     println!();
 
@@ -266,23 +266,27 @@ fn time(bench: Bench) -> Result<(), String> {
         for stage in stages {
             let of_stage = || frames.iter().skip(1).filter(|f| f.stage == stage);
             let mut draw: Vec<f64> = of_stage().map(|f| ms(f.draw)).collect();
-            let mut repainted: Vec<f32> = of_stage().map(|f| f.repainted * 100.0).collect();
+            let mut repaint: Vec<f64> = of_stage().map(|f| ms(f.repaint.took)).collect();
+            let mut share: Vec<f64> = of_stage()
+                .map(|f| f64::from(f.repaint.share) * 100.0)
+                .collect();
 
-            draw.sort_by(f64::total_cmp);
-            repainted.sort_by(f32::total_cmp);
+            let spread = |values: &mut Vec<f64>| {
+                values.sort_by(f64::total_cmp);
+                values
+                    .last()
+                    .map(|worst| (values[values.len() * 95 / 100], *worst))
+            };
 
-            let cell = match (draw.last(), repainted.last()) {
-                (Some(worst), Some(worst_share)) => format!(
-                    "{:4.1} {:4.1}  {:3.0}% {:3.0}%",
-                    draw[draw.len() * 95 / 100],
-                    worst,
-                    repainted[repainted.len() * 95 / 100],
-                    worst_share
+            let cell = match (spread(&mut draw), spread(&mut repaint), spread(&mut share)) {
+                (Some(draw), Some(repaint), Some(share)) => format!(
+                    "{:4.1} {:4.1}  {:4.1} {:4.1}  {:3.0}% {:3.0}%",
+                    draw.0, draw.1, repaint.0, repaint.1, share.0, share.1
                 ),
                 _ => "-".into(),
             };
 
-            print!(" {cell:<25}");
+            print!(" {cell:<34}");
         }
 
         println!();

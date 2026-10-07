@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use image::{RgbaImage, imageops};
 
 use iced_core::renderer::{Headless, Style};
-use iced_core::{Length, Size, mouse};
+use iced_core::{Length, Rectangle, Size, mouse};
+use iced_graphics::damage;
 use iced_runtime::user_interface::{self, UserInterface};
 use iced_widget::{Widget as _, canvas};
 use quadrille::Theme;
@@ -113,9 +114,25 @@ impl Stage {
 pub struct Timed {
     pub stage: Stage,
     pub draw: Duration,
-    /// The share of the output a live surface repaints for the frame: the
-    /// damage the software compositor computes against the frame before.
-    pub repainted: f32,
+    pub repaint: Repaint,
+}
+
+/// A frame presented on a live surface.
+#[derive(Debug, Clone, Copy)]
+pub struct Repaint {
+    /// The share of the output repainted: the damage the software compositor
+    /// works out against the frame before.
+    pub share: f32,
+    /// How long repainting it took.
+    pub took: Duration,
+}
+
+/// What a live surface keeps between frames: its pixels, the layers they
+/// were drawn from, and its clip mask.
+struct Surface {
+    pixels: Vec<u8>,
+    layers: Vec<iced_tiny_skia::Layer>,
+    mask: tiny_skia::Mask,
 }
 
 /// A renderer drawing sheets offscreen for one output, keeping what a live
@@ -123,8 +140,8 @@ pub struct Timed {
 pub struct Studio<'a> {
     renderer: iced_renderer::Renderer,
     cache: user_interface::Cache,
-    /// The layers of the frame drawn before, for the damage between them.
-    previous: Option<Vec<iced_tiny_skia::Layer>>,
+    /// The surface frames are presented on, once there is one.
+    surface: Option<Surface>,
     subjects: &'a [Box<dyn Subject>],
     output: Output,
     theme: &'a Theme,
@@ -153,7 +170,7 @@ impl<'a> Studio<'a> {
         Ok(Self {
             renderer,
             cache: user_interface::Cache::default(),
-            previous: None,
+            surface: None,
             subjects,
             output,
             theme,
@@ -211,36 +228,75 @@ impl<'a> Studio<'a> {
         showing
     }
 
-    /// The share of the output the frame just drawn damages, as the
-    /// software compositor works it out to repaint a live surface.
-    fn damage(&mut self) -> f32 {
-        let iced_renderer::fallback::Renderer::Secondary(renderer) = &mut self.renderer else {
-            return 1.0;
-        };
-        let (width, height) = self.output.virtual_size();
-        let bounds = iced_core::Rectangle::with_size(Size::new(width as f32, height as f32));
-        let layers = renderer.layers().to_vec();
+    /// The software renderer, which draws what a live surface shows.
+    fn software(&mut self) -> &mut iced_tiny_skia::Renderer {
+        match &mut self.renderer {
+            iced_renderer::fallback::Renderer::Secondary(renderer) => renderer,
+            iced_renderer::fallback::Renderer::Primary(_) => {
+                unreachable!("the studio asks for the software renderer")
+            }
+        }
+    }
 
-        let share = match &self.previous {
-            Some(previous) => {
-                let damage = iced_graphics::damage::diff(
-                    previous,
+    /// The output as the software renderer draws to it, and all of it.
+    fn viewport(&self) -> (iced_graphics::Viewport, Rectangle) {
+        let (width, height) = self.output.virtual_size();
+        let viewport = iced_graphics::Viewport::with_physical_size(
+            Size::new(width, height),
+            iced_core::renderer::Scale {
+                window: 1.0,
+                application: 1.0,
+            },
+        );
+        let whole = Rectangle::with_size(viewport.logical_size());
+
+        (viewport, whole)
+    }
+
+    /// Presents the frame just drawn as a live surface does: repainting only
+    /// what the damage since the surface's last frame covers.
+    fn present(&mut self) -> Repaint {
+        let (width, height) = self.output.virtual_size();
+        let (viewport, whole) = self.viewport();
+        let background = self.theme.palette().void;
+        let layers = self.software().layers().to_vec();
+
+        let damage = match &self.surface {
+            Some(surface) => damage::group(
+                damage::diff(
+                    &surface.layers,
                     &layers,
                     |layer| vec![layer.bounds],
                     iced_tiny_skia::Layer::damage,
-                );
-
-                iced_graphics::damage::group(damage, bounds)
-                    .iter()
-                    .map(|region| region.width * region.height)
-                    .sum::<f32>()
-                    / (bounds.width * bounds.height)
-            }
-            None => 1.0,
+                ),
+                whole,
+            ),
+            None => vec![whole],
         };
+        let mut surface = self.surface.take().unwrap_or_else(|| Surface {
+            pixels: vec![0; width as usize * height as usize * 4],
+            layers: Vec::new(),
+            mask: tiny_skia::Mask::new(width, height).expect("A clip mask"),
+        });
 
-        self.previous = Some(layers);
-        share.min(1.0)
+        let started = Instant::now();
+        self.software().draw(
+            &mut tiny_skia::PixmapMut::from_bytes(&mut surface.pixels, width, height)
+                .expect("A pixmap"),
+            &mut surface.mask,
+            &viewport,
+            &damage,
+            background,
+        );
+        let took = started.elapsed();
+
+        surface.layers = layers;
+        self.surface = Some(surface);
+
+        Repaint {
+            share: (damage.iter().map(Rectangle::area).sum::<f32>() / whole.area()).min(1.0),
+            took,
+        }
     }
 
     /// The renderer's layers rasterized, every pixel of them.
@@ -281,8 +337,8 @@ impl<'a> Studio<'a> {
 
     /// Every frame of subject `first`'s sheet at `fps`, timed: drawing the
     /// sheet (the canvas program, what a live surface runs every frame) and
-    /// rasterizing all of it (a live surface rasterizes only what changed,
-    /// and its compositor then upscales that; neither is measured here).
+    /// repainting what changed of it (what the software compositor does
+    /// next, before it upscales that, which is not measured here).
     pub fn bench(&mut self, first: usize, fps: f32) -> Vec<Timed> {
         let parts = self.subjects[first].card().parts.len();
         let frames = (timeline::duration(parts) * fps) as usize;
@@ -292,14 +348,11 @@ impl<'a> Studio<'a> {
                 let started = Instant::now();
                 let showing = self.draw(first, frame as f32 / fps);
                 let drawn = started.elapsed();
-                let repainted = self.damage();
-                // What the frame rasterizes to, as a live surface would.
-                let _ = self.rasterize();
 
                 Timed {
                     stage: Stage::of(showing.moment),
                     draw: drawn,
-                    repainted,
+                    repaint: self.present(),
                 }
             })
             .collect()
@@ -333,6 +386,77 @@ mod tests {
                 busy.frame(first, 30.0) == fresh.frame(first, 30.0),
                 "subject {first}"
             );
+        }
+    }
+
+    impl Studio<'_> {
+        /// The frame just drawn, drawn whole onto a surface of its own.
+        fn whole(&mut self) -> Vec<u8> {
+            let (width, height) = self.output.virtual_size();
+            let (viewport, whole) = self.viewport();
+            let background = self.theme.palette().void;
+            let mut pixels = vec![0; width as usize * height as usize * 4];
+
+            self.software().draw(
+                &mut tiny_skia::PixmapMut::from_bytes(&mut pixels, width, height)
+                    .expect("A pixmap"),
+                &mut tiny_skia::Mask::new(width, height).expect("A clip mask"),
+                &viewport,
+                &[whole],
+                background,
+            );
+
+            pixels
+        }
+    }
+
+    /// Repaints a sheet frame by frame at `fps` over `seconds`, and fails at
+    /// the first frame that differs from the same frame drawn whole.
+    fn repaints_as_drawn(first: usize, output: Output, seconds: std::ops::Range<f32>, fps: f32) {
+        load_fonts();
+
+        let subjects = crate::subjects::all();
+        let theme = Theme::TERMINAL;
+        let mut studio = Studio::new(&subjects, output, &theme, "2026-10-07").unwrap();
+        let frames = ((seconds.end - seconds.start) * fps) as usize;
+
+        for frame in 0..frames {
+            let at = seconds.start + frame as f32 / fps;
+            let _ = studio.draw(first, at);
+            let _ = studio.present();
+            let whole = studio.whole();
+            let repainted = &studio.surface.as_ref().expect("A surface").pixels;
+            let wrong = repainted
+                .chunks_exact(4)
+                .zip(whole.chunks_exact(4))
+                .filter(|(a, b)| a != b)
+                .count();
+
+            assert!(
+                wrong == 0,
+                "{}, {at:.2} s in: {wrong} pixels repainted wrong",
+                subjects[first].name()
+            );
+        }
+    }
+
+    /// A surface repaints only what changed since its last frame, and shows
+    /// what drawing the whole frame would: through a sheet's plot, its
+    /// detail coming in, and the wipe to the next.
+    #[test]
+    fn repainting_the_damage_draws_the_whole_frame() {
+        repaints_as_drawn(0, Output::LAPTOP, 0.0..16.0, 4.0);
+        repaints_as_drawn(0, Output::LAPTOP, 40.0..48.0, 4.0);
+    }
+
+    /// Every sheet, on both outputs, at a live frame rate.
+    #[test]
+    #[ignore = "minutes: run with --release --ignored"]
+    fn every_sheet_repaints_as_drawn() {
+        for first in 0..crate::subjects::all().len() {
+            for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+                repaints_as_drawn(first, output, 0.0..80.0, 30.0);
+            }
         }
     }
 
