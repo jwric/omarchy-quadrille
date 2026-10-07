@@ -12,6 +12,7 @@ use crate::draft::{Draft, Extent, V2};
 use crate::machine::Machine;
 
 mod aerofoil;
+mod computer;
 mod engine;
 mod gears;
 mod geneva;
@@ -20,10 +21,10 @@ mod orbit;
 mod schematic;
 mod timer;
 
-/// Every subject, in sheet order: the designed ones, and the sheets of
-/// `machine`, the computer they are drawn on (to come).
-pub fn all(_machine: &Machine) -> Vec<Box<dyn Subject>> {
-    vec![
+/// Every subject, in sheet order: the designed ones, then the sheets of
+/// `machine`, the computer they are drawn on, that it has enough for.
+pub fn all(machine: &Machine) -> Vec<Box<dyn Subject>> {
+    let mut subjects: Vec<Box<dyn Subject>> = vec![
         Box::new(gears::Gears::new()),
         Box::new(engine::Engine::new()),
         Box::new(geneva::Geneva::new()),
@@ -31,7 +32,10 @@ pub fn all(_machine: &Machine) -> Vec<Box<dyn Subject>> {
         Box::new(optics::Optics::new()),
         Box::new(aerofoil::Aerofoil::new()),
         Box::new(orbit::Orbit::new()),
-    ]
+    ];
+
+    subjects.extend(computer::sheets(machine));
+    subjects
 }
 
 /// A drawing of one thing.
@@ -205,6 +209,8 @@ pub enum Domain {
     Optical,
     Aeronautical,
     Astronautical,
+    /// The computer the sheets are drawn on.
+    Computing,
 }
 
 impl Domain {
@@ -215,13 +221,14 @@ impl Domain {
             Self::Optical => "OPTICAL",
             Self::Aeronautical => "AERONAUTICAL",
             Self::Astronautical => "ASTRONAUTICAL",
+            Self::Computing => "COMPUTING",
         }
     }
 
     /// What the parts list calls the column after the quantity.
     pub fn material_heading(self) -> &'static str {
         match self {
-            Self::Electrical => "VALUE",
+            Self::Electrical | Self::Computing => "VALUE",
             _ => "MATERIAL",
         }
     }

@@ -15,9 +15,6 @@
 //!
 //! [`Machine::fixture`] is a made-up laptop with the same shape, whose
 //! values are a function of time: what tests and committed images draw.
-// The sheets of this computer read the inventory; until they are drawn, not
-// all of it is.
-#![allow(dead_code)]
 
 mod buses;
 mod displays;
@@ -56,7 +53,9 @@ pub struct Machine {
     pub usb: Vec<UsbDevice>,
     /// The graphics cards' outputs, and the displays on them.
     pub connectors: Vec<Connector>,
+    #[allow(dead_code, reason = "the cooling sheet reads it, to come")]
     pub batteries: Vec<Battery>,
+    #[allow(dead_code, reason = "the cooling sheet reads it, to come")]
     pub chargers: Vec<Charger>,
     /// The network interfaces with hardware behind them.
     pub interfaces: Vec<Interface>,
@@ -134,6 +133,7 @@ impl Machine {
     }
 
     /// The displays connected, and the outputs they are on.
+    #[allow(dead_code, reason = "the displays sheet reads it, to come")]
     pub fn displays(&self) -> impl Iterator<Item = (&Connector, &Panel)> {
         self.connectors
             .iter()
@@ -146,6 +146,7 @@ impl Machine {
     }
 
     /// The PCI devices directly behind `bridge`, or on the root bus.
+    #[allow(dead_code, reason = "only the tests walk the tree with it yet")]
     pub fn pci_behind(&self, bridge: Option<PciAddress>) -> impl Iterator<Item = &PciDevice> {
         self.pci
             .iter()
@@ -168,6 +169,7 @@ impl Machine {
     }
 
     /// The fans, with their indices in a [`Snapshot`].
+    #[allow(dead_code, reason = "the cooling sheet reads it, to come")]
     pub fn fans(&self) -> impl Iterator<Item = (usize, &Sensor)> {
         self.sensors
             .iter()
