@@ -2,6 +2,7 @@
 //! and a locking disc holds it still between.
 use std::f32::consts::{PI, TAU};
 
+use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Line, Tone, V2, arc_points, geom::wrap, number, polar, v};
 
 use super::{Card, Detail, Domain, Part, Reading, Subject, Unit};
@@ -260,18 +261,18 @@ impl Subject for Geneva {
             });
 
             d.part(1, |d| {
-                d.balloon(1, pin, (-34, -30));
+                d.balloon(1, pin, Auto);
             });
         });
 
         d.part(0, |d| {
-            d.balloon(0, polar(LOCK - 3.0, 3.6), (-30, 30));
+            d.balloon(0, polar(LOCK - 3.0, 3.6), Auto);
         });
         d.part(2, |d| {
-            d.balloon(2, WHEEL + v(14.0, -26.0), (36, 26));
+            d.balloon(2, WHEEL + v(14.0, -26.0), Auto);
         });
         d.part(3, |d| {
-            d.balloon(3, WHEEL + v(2.0, -2.0), (40, -56));
+            d.balloon(3, WHEEL + v(2.0, -2.0), Auto);
             d.dim_diameter(WHEEL, SHAFT, 2.4, 30);
         });
         d.part(2, |d| {
