@@ -8,9 +8,9 @@
 //! - lines up along an edge of the drawing, in a column beside it or, for a
 //!   balloon, a row above or below it, fanned along it in the order of what
 //!   it points at so that leaders rise and fall without crossing
-//!   (quadrille's `fan`); or,
-//! - on a moving part, rides it at the offset that keeps clearest of the
-//!   drawing and of the other annotations wherever the part goes;
+//!   (quadrille's `fan`); or
+//! - sits just off what it points at, riding it if it moves, at the offset
+//!   that keeps clearest of the drawing wherever the part goes;
 //!
 //! and the ways of choosing between these are weighed for the cheapest.
 //! Costs are counted on the pixel grid: the drawing an annotation would
@@ -35,17 +35,20 @@ const MARGIN: i32 = 2;
 const GAP: i32 = 4;
 
 /// What it costs to hide a pixel of the drawing under an annotation...
-const HIDES_DRAWING: f32 = 12.0;
+const HIDES_DRAWING: f32 = 20.0;
 /// ...or of other lettering, which no one could then read.
 const HIDES_LETTERING: f32 = 400.0;
 /// A leader crossing a pixel of the drawing...
 const CROSSES_DRAWING: f32 = 1.0;
 /// ...or of lettering.
-const CROSSES_LETTERING: f32 = 40.0;
+const CROSSES_LETTERING: f32 = 400.0;
 /// Two leaders meeting, a pixel at a time.
 const CROSSES_LEADER: f32 = 200.0;
 /// A pixel of leader: shorter reads better.
-const REACH: f32 = 0.1;
+const REACH: f32 = 0.4;
+/// An annotation not lined up with the others: a drawing reads tidier with
+/// them lined up, when that costs little more.
+const LOOSE: f32 = 40.0;
 /// An annotation left out for want of room.
 const LEFT_OUT: f32 = 20_000.0;
 
@@ -66,7 +69,7 @@ enum Spot {
     /// its target is.
     At(Point<i32>),
     /// This far from its target, wherever that goes.
-    Riding(i32, i32),
+    Off(i32, i32),
 }
 
 /// An annotation, as the same one is recorded at every moment.
@@ -100,8 +103,8 @@ impl Id {
 enum Choice {
     /// In the column or row along this edge of the drawing.
     Beside(Edge),
-    /// Riding its moving target.
-    Ride,
+    /// Just off its target, riding it if it moves.
+    Near,
 }
 
 /// An edge of the drawing, which annotations line up along.
@@ -217,14 +220,14 @@ impl Spot {
     fn offset(self, target: Point<i32>) -> (i32, i32) {
         match self {
             Self::At(at) => (at.x - target.x, at.y - target.y),
-            Self::Riding(x, y) => (x, y),
+            Self::Off(x, y) => (x, y),
         }
     }
 
     fn key(self) -> (bool, i32, i32) {
         match self {
             Self::At(at) => (false, at.x, at.y),
-            Self::Riding(x, y) => (true, x, y),
+            Self::Off(x, y) => (true, x, y),
         }
     }
 }
@@ -235,8 +238,9 @@ struct Search<'a> {
     slots: Vec<Slot>,
     ground: Ground,
     projection: &'a Projection,
-    /// The offset each moving annotation would ride at, on its own.
-    riding: Vec<Option<(i32, i32)>>,
+    /// The offset each annotation would sit at just off its target, on its
+    /// own.
+    near: Vec<Option<(i32, i32)>>,
     /// How each annotation sits beside each edge.
     reach: Vec<[Reach; 4]>,
     /// Each annotation placed at a spot, and what that costs on the ground,
@@ -263,25 +267,23 @@ impl<'a> Search<'a> {
             slots,
             ground: Ground::new(samples, projection, clip),
             projection,
-            riding: Vec::new(),
+            near: Vec::new(),
             reach,
             placed: RefCell::default(),
             clashes: RefCell::default(),
         };
 
-        search.riding = (0..search.slots.len())
-            .map(|i| search.slots[i].moving.then(|| search.ride(i)).flatten())
-            .collect();
+        search.near = (0..search.slots.len()).map(|i| search.near(i)).collect();
         search
     }
 
     /// Where each annotation may go: beside any edge (a note only beside
-    /// one at the side, where its shelf runs out), or riding if it moves.
+    /// one at the side, where its shelf runs out), or just off its target.
     fn options(&self) -> Vec<Vec<Choice>> {
         self.slots
             .iter()
-            .zip(&self.riding)
-            .map(|(slot, riding)| {
+            .zip(&self.near)
+            .map(|(slot, near)| {
                 let note = matches!(slot.id, Id::Note(_));
                 let mut options: Vec<Choice> = Edge::ALL
                     .into_iter()
@@ -289,7 +291,7 @@ impl<'a> Search<'a> {
                     .map(Choice::Beside)
                     .collect();
 
-                options.extend(riding.map(|_| Choice::Ride));
+                options.extend(near.map(|_| Choice::Near));
                 options
             })
             .collect()
@@ -312,16 +314,16 @@ impl<'a> Search<'a> {
     }
 
     /// Where each annotation goes for `choices`: lined up beside the
-    /// drawing, or riding at its offset; `None` for one that does not fit
+    /// drawing, or just off its target; `None` for one that does not fit
     /// inside the view.
     fn arrange(&self, choices: &[Choice]) -> Vec<Option<Spot>> {
         let clip = self.ground.clip;
         let drawing = self.ground.outline.unwrap_or(clip);
         let mut spots: Vec<Option<Spot>> = choices
             .iter()
-            .zip(&self.riding)
-            .map(|(choice, riding)| match choice {
-                Choice::Ride => riding.map(|(x, y)| Spot::Riding(x, y)),
+            .zip(&self.near)
+            .map(|(choice, near)| match choice {
+                Choice::Near => near.map(|(x, y)| Spot::Off(x, y)),
                 Choice::Beside(_) => None,
             })
             .collect();
@@ -434,6 +436,10 @@ impl<'a> Search<'a> {
 
             cost += own;
 
+            if choices[i] == Choice::Near {
+                cost += LOOSE;
+            }
+
             for (j, other) in spots.iter().enumerate().skip(i + 1) {
                 let Some(other) = other else {
                     continue;
@@ -459,7 +465,7 @@ impl<'a> Search<'a> {
     }
 
     /// The likeliest choices: each annotation beside the edge of the
-    /// drawing nearest what it points at, or riding when that costs less
+    /// drawing nearest what it points at, or just off it when that costs less
     /// on its own.
     fn start(&self, options: &[Vec<Choice>]) -> Vec<Choice> {
         let drawing = self.ground.outline.unwrap_or(self.ground.clip);
@@ -477,7 +483,7 @@ impl<'a> Search<'a> {
                     .iter()
                     .filter_map(|choice| match choice {
                         Choice::Beside(edge) => Some(*edge),
-                        Choice::Ride => None,
+                        Choice::Near => None,
                     })
                     .min_by_key(|edge| distance(*edge))
                     .map(Choice::Beside);
@@ -488,12 +494,12 @@ impl<'a> Search<'a> {
                     self.cost(&choices)
                 };
 
-                match (nearest, self.riding[i]) {
-                    (Some(nearest), Some(_)) if alone(Choice::Ride) < alone(nearest) => {
-                        Choice::Ride
+                match (nearest, self.near[i]) {
+                    (Some(nearest), Some(_)) if alone(Choice::Near) < alone(nearest) => {
+                        Choice::Near
                     }
                     (Some(nearest), _) => nearest,
-                    (None, _) => Choice::Ride,
+                    (None, _) => Choice::Near,
                 }
             })
             .collect()
@@ -531,10 +537,10 @@ impl<'a> Search<'a> {
         choices
     }
 
-    /// The offset moving annotation `i` would ride its target at, on its
-    /// own: the one that costs least over the samples, among those that
-    /// keep it inside the view in every one of them.
-    fn ride(&self, i: usize) -> Option<(i32, i32)> {
+    /// The offset annotation `i` would sit at just off its target, on its
+    /// own: the one that costs least (over the samples, when it moves)
+    /// among those that keep it inside the view.
+    fn near(&self, i: usize) -> Option<(i32, i32)> {
         let mut best: Option<(f32, (i32, i32))> = None;
 
         for distance in [24, 32, 42, 54, 66] {
@@ -545,7 +551,7 @@ impl<'a> Search<'a> {
                     (distance as f32 * angle.sin()).round() as i32,
                 );
 
-                if let Some((_, cost)) = &*self.placed(i, Spot::Riding(offset.0, offset.1))
+                if let Some((_, cost)) = &*self.placed(i, Spot::Off(offset.0, offset.1))
                     && best.is_none_or(|(least, _)| *cost < least)
                 {
                     best = Some((*cost, offset));
@@ -1292,11 +1298,12 @@ mod tests {
     }
 
     #[test]
-    fn a_moving_annotation_rides_its_part_at_one_offset() {
-        let samples: Vec<Draft> = (0..4)
+    fn a_moving_annotation_is_clear_of_its_part_wherever_it_goes() {
+        let at = |k: usize| -60.0 + 40.0 * k as f32;
+        let mut samples: Vec<Draft> = (0..4)
             .map(|k| {
                 let mut draft = Draft::new();
-                let x = -60.0 + 40.0 * k as f32;
+                let x = at(k);
 
                 draft.moving(|draft| {
                     draft.rect(v(x - 10.0, -10.0), v(x + 10.0, 10.0), Line::Outline);
@@ -1307,9 +1314,23 @@ mod tests {
             .collect();
         let plan = Plan::new(&samples, &UNIT, VIEW);
 
-        assert!(matches!(
-            plan.spots.get(&Id::Balloon(1)),
-            Some(Spot::Riding(..))
-        ));
+        assert!(plan.places(&samples[0].marks()[1]));
+
+        for (k, sample) in samples.iter_mut().enumerate() {
+            plan.apply(sample.marks_mut(), &UNIT);
+
+            let footprint = Footprint::of(&sample.marks()[1], &UNIT);
+            let corner = UNIT.px(v(at(k) - 10.0, 10.0));
+            let part = rect(corner.x, corner.y, 21, 21);
+
+            assert!(footprint.inside(VIEW));
+            assert!(
+                footprint
+                    .boxes
+                    .iter()
+                    .all(|area| raster::intersection(*area, part).is_none()),
+                "at {k}: {footprint:?} over {part:?}"
+            );
+        }
     }
 }
