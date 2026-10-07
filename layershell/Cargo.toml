@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/iced_layer", "crates/bar", "crates/vptr"]
+members = ["crates/iced_layer", "crates/desktop", "crates/bar", "crates/screensaver", "crates/vptr"]
 
 [workspace.package]
 edition = "2024"

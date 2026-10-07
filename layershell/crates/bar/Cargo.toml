@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 iced_layer = { path = "../iced_layer" }
+quadrille-desktop = { path = "../desktop" }
 quadrille.workspace = true
 iced_widget.workspace = true
 iced_futures.workspace = true

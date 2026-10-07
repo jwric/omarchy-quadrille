@@ -2,16 +2,16 @@
 //! drawn by quadrille on layer-shell surfaces.
 mod commands;
 mod glyphs;
-mod graphics;
 mod host;
 mod ipc;
 mod overlay;
 mod panels;
-mod physical;
 mod sys;
 mod sysmon;
-mod theme;
 mod widgets;
+
+// Shared with the screensaver.
+use quadrille_desktop::{graphics, physical, theme};
 
 use host::{Host, Options};
 

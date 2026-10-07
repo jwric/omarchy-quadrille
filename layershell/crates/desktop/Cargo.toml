@@ -1,0 +1,15 @@
+[package]
+name = "quadrille-desktop"
+version = "0.0.1"
+description = "What an Omarchy desktop tells a quadrille program: its theme, the physical size of its displays, and the toolkit's settings"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+quadrille.workspace = true
+iced_core.workspace = true
+iced_futures.workspace = true
+iced_widget.workspace = true
+libc = "0.2"
+log = "0.4"
+serde_json = "1"
