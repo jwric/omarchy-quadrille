@@ -27,7 +27,7 @@ use crate::draft::letters;
 use crate::draft::place::Plan;
 use crate::draft::raster::{self, Head, Inked, LETTERING, Projection, colour, rect};
 use crate::draft::scale::Ratio;
-use crate::draft::{Draft, Extent, Mark, Tone};
+use crate::draft::{Draft, Extent, Line, Mark, Tone};
 use crate::subjects::{Card, Detail, Subject};
 
 use layout::{CAPTION, LINE, Layout};
@@ -54,7 +54,7 @@ const TYPING_RATE: f32 = 900.0;
 
 /// The moments across a subject's run its automatic annotations are placed
 /// against: where its moving parts go.
-const PLACING_SAMPLES: usize = 8;
+const PLACING_SAMPLES: usize = 12;
 
 /// A sheet on one output, at one moment.
 pub struct Sheet<'a> {
@@ -435,12 +435,36 @@ impl<'a> Scene<'a> {
         // parts go over its run: the same on every frame of the sheet.
         let plan = planned.get(sheet.showing.subject, (width, height), || {
             let running = timeline::running(card.parts.len());
+            // Spread by the golden ratio, which no cycle of the subject's
+            // keeps time with: evenly spaced samples can all catch a part
+            // at the same point of its stroke.
             let samples: Vec<Draft> = (0..PLACING_SAMPLES)
                 .map(|k| {
                     let mut sample = Draft::new();
-                    let t = running * k as f32 / (PLACING_SAMPLES - 1) as f32;
+                    let t = running * (k as f32 * 0.618_034).fract();
 
                     sheet.subject.draw(&mut sample, t);
+
+                    // The circles the sheet marks details with, and their
+                    // letters, which annotations keep clear of too.
+                    for index in 0..card.parts.len() {
+                        if let Some(detail) = sheet.subject.detail(index, t) {
+                            let corner = main.length(detail.radius).max(4) * 7 / 10;
+                            let marker = |d: &mut Draft| {
+                                d.circle(detail.centre, detail.radius, Line::Phantom);
+                                d.label(detail.centre, letter(index).to_string())
+                                    .anchor(Anchor::LEFT)
+                                    .nudge(corner + 8, -corner - 6);
+                            };
+
+                            if detail.follows {
+                                sample.moving(marker);
+                            } else {
+                                marker(&mut sample);
+                            }
+                        }
+                    }
+
                     sample
                 })
                 .collect();
