@@ -188,15 +188,13 @@ pointer enter (it was never hidden). `plugins/quadrille.idle` (opt-in,
 
 ### Next for the screensaver
 
-- **Damage fixes in the iced fork** (done locally, not pushed): seven commits on
+- **Damage fixes in the iced fork** (done, pushed 2026-10-07): seven commits on
   `jwric/iced` `0.15-pixel-scale` (canvas text bounds, stroke reach, drawings
   compared part by part, lists aligned past an insertion, clip mask rebuilt only
-  when needed, scattered damage repainted in one pass). Waiting on the user's
-  go-ahead to push; then drop the local `[patch]`, `cargo update` the iced git
-  source, rebuild, reinstall `quadrille-bar` and `quadrille-screensaver`. While
-  the fork is unpushed, layershell builds against it only through an
-  uncommitted `[patch."https://github.com/jwric/iced"]` of all eleven crates
-  pointing at `/home/jwric/dev/iced/.claude/worktrees/0.15-pixel-scale`.
+  when needed, scattered damage repainted in one pass); layershell's lock is on
+  `195692f`, and both programs are reinstalled. Quadrille's own lock can follow.
+  A possible next step: rasterize each damaged region into a band of rows, as
+  settled frames on the ultrawide still take 10 to 14 ms to repaint.
 - **CAD sheets** (plan approved 2026-10-07, done): automatic placement of
   balloons and notes (`draft/place.rs`), views lined up by first-angle
   projection with sections of the gears and the Geneva drive
