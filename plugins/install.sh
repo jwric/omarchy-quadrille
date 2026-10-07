@@ -9,6 +9,9 @@
 #   plugins/install.sh lab          also link the specimen sheet (not enabled)
 #   plugins/install.sh lock         the lock screen's face, on its own (not part of the
 #                                   default set: read plugins/tools/lock-nested-test.sh first)
+#   plugins/install.sh idle         the idle service that starts quadrille-screensaver
+#                                   (layershell/tools/install.sh installs it), on its own:
+#                                   it also decides when the screen locks
 #
 # Restarts the shell at the end: the notification clone is a daemon, and a
 # daemon is only swapped cleanly at startup.
@@ -24,6 +27,7 @@ want=${1:-all}
 case $want in
   bar) ids=(quadrille.bar) ;;
   lock) ids=(quadrille.lock) ;;
+  idle) ids=(quadrille.idle) ;;
   lab) ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon quadrille.audio quadrille.power quadrille.background quadrille.reminders quadrille.emojis quadrille.clipboard quadrille.image-picker quadrille.bluetooth quadrille.network quadrille.monitor quadrille.weather quadrille.clock quadrille.agents quadrille.tailscale quadrille.lab) ;;
   *)   ids=(quadrille.bar quadrille.osd quadrille.notifications quadrille.menu quadrille.sysmon quadrille.audio quadrille.power quadrille.background quadrille.reminders quadrille.emojis quadrille.clipboard quadrille.image-picker quadrille.bluetooth quadrille.network quadrille.monitor quadrille.weather quadrille.clock quadrille.agents quadrille.tailscale) ;;
 esac

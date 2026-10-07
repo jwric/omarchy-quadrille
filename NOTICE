@@ -19,6 +19,9 @@ Third-party material, which keeps its own licence:
   processes, Model.js, Service.qml, Main.qml) is the originals'; the views are new.
   QPopup (plugins/quadrille.bar/Q) is derived from the shell's Ui/KeyboardPanel.qml
   in the same way.
+- plugins/quadrille.idle is a copy of Omarchy's idle service
+  (shell/plugins/services/idle: Service.qml, IdleModel.js), MIT as above,
+  changed only where marked QUADRILLE.
 - plugins/quadrille.menu/AppSearch.js is a copy of Omarchy's
   shell/services/AppSearch.js (MIT, as above).
 - Departure Mono (not included here; tools/install.sh copies it from

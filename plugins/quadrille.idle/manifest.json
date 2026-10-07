@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "quadrille.idle",
+  "name": "Quadrille idle",
+  "version": "0.1.0",
+  "author": "jwric",
+  "description": "Omarchy's idle service, unchanged but for the screensaver it starts: quadrille-screensaver (technical drawings on layer surfaces) through quadrille-screensaver-launch, which falls back to the stock one. Its layer surfaces count as the screensaver being up, as the stock screensaver's window does.",
+  "kinds": ["service"],
+  "keepLoaded": true,
+  "entryPoints": { "service": "Service.qml" },
+  "omarchy": { "clonedFrom": "omarchy.idle" }
+}

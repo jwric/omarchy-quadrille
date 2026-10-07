@@ -1,0 +1,23 @@
+#!/bin/bash
+# Start the quadrille screensaver the way omarchy-launch-screensaver starts the
+# stock one: not when the screensaver is switched off (unless forced), and not
+# twice (the screensaver holds a lock). Without quadrille-screensaver installed,
+# it hands over to the stock screensaver.
+#
+#   quadrille-screensaver-launch [force]
+#
+# It runs detached, its output in the journal (journalctl -t quadrille-screensaver),
+# under Omarchy's own name for a screensaver, org.omarchy.screensaver: the idle
+# service follows its surfaces by it, and omarchy-system-lock stops it by it.
+set -u
+
+if omarchy-toggle-enabled screensaver-off && [[ ${1:-} != force ]]; then
+  exit 1
+fi
+
+if ! command -v quadrille-screensaver >/dev/null; then
+  exec omarchy-launch-screensaver "$@"
+fi
+
+setsid -f systemd-cat -t quadrille-screensaver \
+  quadrille-screensaver --namespace org.omarchy.screensaver
