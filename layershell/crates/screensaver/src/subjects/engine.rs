@@ -5,7 +5,7 @@ use std::f32::consts::{PI, TAU};
 use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Line, Tone, Turn, V2, arc_points, number, polar, v};
 
-use super::{Card, Detail, Domain, Part, Reading, Subject, Unit};
+use super::{Card, Detail, Domain, Part, Reading, Revision, Subject, Unit};
 
 const BORE: f32 = 40.0;
 const CRANK: f32 = 20.0;
@@ -69,6 +69,7 @@ impl Engine {
                 format!("ROD/CRANK {:.2}", ROD / CRANK),
                 "VALVES: IO 10° BTDC, IC 40° ABDC, EO 40° BBDC, EC 10° ATDC".into(),
             ],
+            revisions: vec![Revision::first()],
             parts: vec![
                 Part::new("PISTON", 1, "AL ALLOY")
                     .spec("DIAMETER", format!("Ø{}", number(BORE - 0.1)))
@@ -419,7 +420,8 @@ impl Subject for Engine {
         }
         d.dim_v(v(-half, tdc), v(-half, bdc), -(WALL + 4.0));
         d.dim_h(v(-half, DECK + HEAD), v(half, DECK + HEAD), 14.0)
-            .text(format!("Ø{}", number(BORE)));
+            .text(format!("Ø{}", number(BORE)))
+            .fit("H7");
 
         d.part(3, Self::cylinder);
         Self::chart(d);

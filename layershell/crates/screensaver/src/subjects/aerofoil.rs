@@ -9,7 +9,7 @@ use num_complex::Complex64 as C;
 use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, number, v};
 
-use super::{Card, Domain, Part, Reading, Subject, Unit};
+use super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
 
 /// The circle's centre off the origin: left for thickness, up for camber.
 const CENTRE: C = C::new(-0.09, 0.07);
@@ -196,6 +196,7 @@ impl Aerofoil {
                 "DOTS RELEASED TOGETHER: THE UPPER ONES ARRIVE FIRST".into(),
                 "ENVELOPE: PRESSURE COEFFICIENT, SUCTION OUTWARD".into(),
             ],
+            revisions: vec![Revision::first()],
             parts: vec![
                 Part::new("SECTION", 1, "AL 2024")
                     .spec("CHORD", format!("{} mm", number(chord())))

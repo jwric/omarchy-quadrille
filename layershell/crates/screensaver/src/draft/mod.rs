@@ -110,6 +110,13 @@ pub enum Measure {
     },
 }
 
+/// What a geometric tolerance controls (ISO 1101).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Characteristic {
+    Position,
+    Perpendicularity,
+}
+
 /// Where an annotation goes, from what it points at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
@@ -158,6 +165,22 @@ pub enum Ink {
     },
     /// A square dot on the pixel grid, `size` pixels across.
     Dot { at: V2, size: i32 },
+    /// A surface texture symbol standing on `at`, for a surface machined
+    /// to `text`: `Ra 0.8`.
+    Finish { at: V2, text: String },
+    /// A datum feature: a filled triangle on `at`, its leader running
+    /// `toward` a frame with the datum's letter.
+    Datum { at: V2, toward: V2, letter: char },
+    /// A feature control frame `offset` pixels from `at`, its leader
+    /// arrowed onto `at`: what it controls, the tolerance zone and the
+    /// datums it is measured from.
+    Control {
+        at: V2,
+        offset: (i32, i32),
+        characteristic: Characteristic,
+        tolerance: String,
+        datums: String,
+    },
     /// Where the section that is view `view` is cut: a chain line from
     /// `from` to `to`, thick at its ends, where arrows point the way it is
     /// seen, `toward`, each by the section's letter. Drawn only when the
@@ -252,9 +275,13 @@ impl Mark {
             },
             Ink::Area { .. } => Pass::Areas,
             Ink::Dot { .. } => Pass::Traces,
-            Ink::Label { .. } | Ink::Dimension { .. } | Ink::Note { .. } | Ink::Section { .. } => {
-                Pass::Annotation
-            }
+            Ink::Label { .. }
+            | Ink::Dimension { .. }
+            | Ink::Note { .. }
+            | Ink::Section { .. }
+            | Ink::Finish { .. }
+            | Ink::Datum { .. }
+            | Ink::Control { .. } => Pass::Annotation,
             Ink::Balloon { .. } => Pass::Balloons,
         }
     }
@@ -287,6 +314,35 @@ impl Made<'_> {
             | Ink::Label { text: old, .. }
             | Ink::Note { text: old, .. } => *old = text.into(),
             _ => {}
+        }
+        self
+    }
+
+    /// Gives a dimension its limits: `upper` and `lower` deviations from
+    /// what it measures, written `±` when they are the same either way.
+    pub fn tolerance(self, upper: f32, lower: f32) -> Self {
+        if let Ink::Dimension { text, .. } = &mut self.0.ink {
+            if (upper + lower).abs() < 1e-6 {
+                text.push_str(&format!(" ±{}", deviation(upper)));
+            } else {
+                text.push_str(&format!(
+                    " {}{} {}{}",
+                    sign(upper),
+                    deviation(upper.abs()),
+                    sign(lower),
+                    deviation(lower.abs())
+                ));
+            }
+        }
+        self
+    }
+
+    /// Gives a dimension a fit: an ISO 286 tolerance class, or a hole's and
+    /// a shaft's for two parts that fit together, `H7/k6`.
+    pub fn fit(self, classes: &str) -> Self {
+        if let Ink::Dimension { text, .. } = &mut self.0.ink {
+            text.push(' ');
+            text.push_str(classes);
         }
         self
     }
@@ -359,6 +415,9 @@ impl Draft {
                 | Ink::Note { .. }
                 | Ink::Balloon { .. }
                 | Ink::Section { .. }
+                | Ink::Finish { .. }
+                | Ink::Datum { .. }
+                | Ink::Control { .. }
         );
         let scope = if self.detail {
             Scope::Detail
@@ -519,6 +578,44 @@ impl Draft {
         )
     }
 
+    /// The surface at `at` machined to `requirement`: `Ra 0.8`.
+    pub fn finish(&mut self, at: V2, requirement: impl Into<String>) -> Made<'_> {
+        self.push(
+            Ink::Finish {
+                at,
+                text: requirement.into(),
+            },
+            Tone::Ink,
+        )
+    }
+
+    /// The feature at `at` is datum `letter`, its frame `toward` it.
+    pub fn datum(&mut self, at: V2, toward: V2, letter: char) -> Made<'_> {
+        self.push(Ink::Datum { at, toward, letter }, Tone::Ink)
+    }
+
+    /// The feature at `at` held to `tolerance` in `characteristic`, from
+    /// `datums`, its frame `offset` pixels away.
+    pub fn control(
+        &mut self,
+        at: V2,
+        offset: (i32, i32),
+        characteristic: Characteristic,
+        tolerance: impl Into<String>,
+        datums: impl Into<String>,
+    ) -> Made<'_> {
+        self.push(
+            Ink::Control {
+                at,
+                offset,
+                characteristic,
+                tolerance: tolerance.into(),
+                datums: datums.into(),
+            },
+            Tone::Ink,
+        )
+    }
+
     pub fn dot(&mut self, at: V2, size: i32) -> Made<'_> {
         self.push(Ink::Dot { at, size }, Tone::Live)
     }
@@ -592,6 +689,22 @@ impl Draft {
     }
 }
 
+/// The sign a deviation is written with: a minus, not a hyphen.
+fn sign(deviation: f32) -> char {
+    if deviation < 0.0 { '−' } else { '+' }
+}
+
+/// A deviation as limits are written: to the thousandth it is given to,
+/// and no further.
+fn deviation(value: f32) -> String {
+    let written = format!("{value:.3}");
+
+    written
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
+}
+
 /// A measurement as a drawing writes it: whole when it is, to a tenth
 /// otherwise, and to a hundredth below one.
 pub fn number(value: f32) -> String {
@@ -616,6 +729,30 @@ mod tests {
         assert_eq!(number(47.5), "47.5");
         assert_eq!(number(0.25), "0.25");
         assert_eq!(number(119.999), "120");
+    }
+
+    #[test]
+    fn limits_and_fits_follow_the_value() {
+        let mut draft = Draft::new();
+
+        draft
+            .dim_h(V2::ZERO, v(48.0, 0.0), 5.0)
+            .tolerance(0.02, -0.02);
+        draft
+            .dim_h(V2::ZERO, v(20.0, 0.0), 5.0)
+            .tolerance(0.0, -0.1);
+        draft.dim_diameter(V2::ZERO, 4.0, 0.0, 10).fit("H7/k6");
+
+        let texts: Vec<&str> = draft
+            .marks()
+            .iter()
+            .filter_map(|mark| match &mark.ink {
+                Ink::Dimension { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(texts, ["48 ±0.02", "20 +0 −0.1", "Ø8 H7/k6"]);
     }
 
     #[test]

@@ -3,9 +3,11 @@
 use std::f32::consts::{PI, TAU};
 
 use crate::draft::Placement::Auto;
-use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, arc_points, geom::wrap, number, polar, v};
+use crate::draft::{
+    Characteristic, Draft, Extent, Fill, Line, Tone, V2, arc_points, geom::wrap, number, polar, v,
+};
 
-use super::{Card, Detail, Domain, Part, Place, Reading, Subject, Unit, View};
+use super::{Card, Detail, Domain, Part, Place, Reading, Revision, Subject, Unit, View};
 
 const SLOTS: u32 = 6;
 /// Between the driver's and the wheel's centres.
@@ -61,6 +63,10 @@ impl Geneva {
                     number(360.0 - moving)
                 ),
                 "THE PIN ENTERS AND LEAVES EACH SLOT SQUARE TO IT: NO SHOCK".into(),
+            ],
+            revisions: vec![
+                Revision::first(),
+                Revision::new('B', "SECTION A–A ADDED", "2026-10-07"),
             ],
             parts: vec![
                 Part::new("DRIVER", 1, "STEEL")
@@ -258,6 +264,16 @@ impl Geneva {
             v(2.0 * CENTRES - LOCK - 0.5, -face),
             v(2.0 * CENTRES - LOCK - 0.5, face),
             5.0,
+        );
+
+        // The pin is placed from the driver's shaft, its axis datum A.
+        d.datum(v(SHAFT, -(arm + SHAFT_DOWN) / 2.0), v(1.0, 0.0), 'A');
+        d.control(
+            v(pin, face),
+            (-12, -26),
+            Characteristic::Position,
+            format!("Ø{}", number(0.05)),
+            "A",
         );
     }
 

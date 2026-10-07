@@ -7,7 +7,7 @@ use crate::draft::geom::{along, length};
 use crate::draft::{Draft, Extent, Line, Tone, V2, number, v};
 
 use super::schematic::Schematic;
-use super::{Card, Domain, Part, Reading, Subject, Unit};
+use super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
 
 const SUPPLY: f32 = 5.0;
 const R1: f32 = 1.0e3;
@@ -88,6 +88,7 @@ impl Timer {
                 format!("f = 1.44 / ((R1 + 2 R2) C1) = {:.2} Hz", frequency),
                 format!("SUPPLY {} V; PIN 5 NOT CONNECTED", number(SUPPLY)),
             ],
+            revisions: vec![Revision::first()],
             parts: vec![
                 Part::new("U1 NE555", 1, "DIP-8")
                     .spec("SUPPLY", "4.5 TO 16 V")

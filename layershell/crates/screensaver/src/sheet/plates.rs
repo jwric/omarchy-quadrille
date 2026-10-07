@@ -27,6 +27,11 @@ impl Typist {
         }
     }
 
+    /// Whether everything set so far is typed in, with more to come.
+    pub fn caught_up(&self) -> bool {
+        self.budget > 0
+    }
+
     pub fn text<Renderer: geometry::Renderer>(
         &mut self,
         pen: &mut Pen<'_, Renderer>,
@@ -214,6 +219,8 @@ pub fn title_block<'a>(
         vec![
             Field::new("DOMAIN", card.domain.label(), 3),
             Field::new("SCALE", scale, 2),
+            // The projection symbol's.
+            Field::new("", "", 1),
         ],
         vec![
             Field::new("UNIT", card.unit.label(), 2),
@@ -222,6 +229,40 @@ pub fn title_block<'a>(
             Field::new("DRAWN", "QUADRILLE", 3),
         ],
     ]
+}
+
+/// The middle of the field the projection symbol takes in a title block at
+/// `bounds`: the last of its second row.
+pub fn projection_cell(bounds: Rectangle<i32>, rows: &[Vec<Field<'_>>]) -> Point<i32> {
+    let (left, right) = cells(bounds, &rows[1])
+        .last()
+        .copied()
+        .unwrap_or((bounds.x, bounds.x + bounds.width - 1));
+
+    Point::new((left + right) / 2, bounds.y + FIELD + FIELD / 2)
+}
+
+/// The first-angle projection symbol (ISO 5456-2) round `centre`: a cone's
+/// frustum seen from the front, and seen from its large end, drawn on its
+/// right as first-angle projection places a view from the left.
+pub fn first_angle<Renderer: geometry::Renderer>(
+    pen: &mut Pen<'_, Renderer>,
+    centre: Point<i32>,
+    color: iced_core::Color,
+) {
+    let at = |x: i32, y: i32| Point::new(centre.x + x, centre.y + y);
+
+    for (from, to) in [
+        (at(-11, -4), at(-1, -2)),
+        (at(-1, -2), at(-1, 2)),
+        (at(-1, 2), at(-11, 4)),
+        (at(-11, 4), at(-11, -4)),
+    ] {
+        pen.line(from, to, color);
+    }
+
+    pen.pixels(&quadrille::draw::shape::circle(at(7, 0), 4), color);
+    pen.pixels(&quadrille::draw::shape::circle(at(7, 0), 2), color);
 }
 
 /// The left and right edges of each field of `row` across `bounds`.
@@ -354,7 +395,6 @@ pub fn parts<Renderer: geometry::Renderer>(
     lit: Option<usize>,
     palette: &Palette,
 ) {
-    let widths = [4, 12, 3, 9];
     let header = ["ITEM", "NAME", "QTY", card.domain.material_heading()];
     let rows = card.parts.iter().enumerate().map(|(i, part)| {
         vec![
@@ -364,6 +404,74 @@ pub fn parts<Renderer: geometry::Renderer>(
             part.material.clone(),
         ]
     });
+
+    table(
+        pen,
+        typist,
+        bounds,
+        &[4, 12, 3, 9],
+        &header,
+        rows,
+        lit,
+        palette,
+    );
+}
+
+/// The revision table: what has changed on the drawing, under a caption.
+pub fn revisions<Renderer: geometry::Renderer>(
+    pen: &mut Pen<'_, Renderer>,
+    typist: &mut Typist,
+    bounds: Rectangle<i32>,
+    card: &Card,
+    palette: &Palette,
+) {
+    caption(
+        pen,
+        typist,
+        rect(bounds.x, bounds.y, bounds.width, CAPTION),
+        "REVISIONS",
+        "",
+        palette,
+    );
+
+    let rows = card.revisions.iter().map(|revision| {
+        vec![
+            revision.mark.to_string(),
+            revision.description.clone(),
+            revision.date.clone(),
+        ]
+    });
+
+    table(
+        pen,
+        typist,
+        rect(
+            bounds.x,
+            bounds.y + CAPTION,
+            bounds.width,
+            bounds.height - CAPTION,
+        ),
+        &[3, 15, 8],
+        &["REV", "DESCRIPTION", "DATE"],
+        rows,
+        None,
+        palette,
+    );
+}
+
+/// A table: its columns `widths` shares of the width, a row for each of
+/// `rows` under `header`, and row `lit`, if any, shown inverse.
+#[allow(clippy::too_many_arguments)]
+fn table<Renderer: geometry::Renderer>(
+    pen: &mut Pen<'_, Renderer>,
+    typist: &mut Typist,
+    bounds: Rectangle<i32>,
+    widths: &[i32],
+    header: &[&str],
+    rows: impl Iterator<Item = Vec<String>>,
+    lit: Option<usize>,
+    palette: &Palette,
+) {
     let height = LINE + 1;
     let total: i32 = widths.iter().sum::<i32>().max(1);
     let edges: Vec<i32> = std::iter::once(0)
@@ -376,7 +484,7 @@ pub fn parts<Renderer: geometry::Renderer>(
 
     pen.outline(bounds, palette.edge);
 
-    for (r, cells) in std::iter::once(header.map(String::from).to_vec())
+    for (r, cells) in std::iter::once(header.iter().map(|name| name.to_string()).collect())
         .chain(rows)
         .enumerate()
     {

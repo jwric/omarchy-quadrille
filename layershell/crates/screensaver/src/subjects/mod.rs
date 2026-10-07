@@ -105,7 +105,32 @@ pub struct Card {
     pub view: String,
     /// General notes, numbered on the sheet.
     pub notes: Vec<String>,
+    /// What has changed on the drawing since it was first issued.
+    pub revisions: Vec<Revision>,
     pub parts: Vec<Part>,
+}
+
+/// A revision of a drawing: its letter, what changed and when.
+#[derive(Debug, Clone)]
+pub struct Revision {
+    pub mark: char,
+    pub description: String,
+    pub date: String,
+}
+
+impl Revision {
+    pub fn new(mark: char, description: &str, date: &str) -> Self {
+        Self {
+            mark,
+            description: description.into(),
+            date: date.into(),
+        }
+    }
+
+    /// The first issue.
+    pub fn first() -> Self {
+        Self::new('A', "FIRST ISSUE", "2026-10-07")
+    }
 }
 
 /// One item of the parts list.

@@ -45,6 +45,8 @@ pub struct Layout {
     /// The specification of the part in detail.
     pub spec: Rectangle<i32>,
     pub notes: Rectangle<i32>,
+    /// The revision table, over the notes, if the column has room for it.
+    pub revisions: Option<Rectangle<i32>>,
     pub parts: Rectangle<i32>,
     pub title: Rectangle<i32>,
 }
@@ -152,6 +154,27 @@ impl Layout {
             (between, detail, spec)
         };
 
+        // The revision table over the notes, clear of whatever heads the
+        // column: the specification, or the detail and its specification.
+        let revisions_height = CAPTION + (card.revisions.len() as i32 + 1) * (LINE + 1) + 1;
+        let above = if wide {
+            spec
+        } else {
+            rect(
+                spec.x,
+                detail.y,
+                spec.width,
+                spec.y + spec.height - detail.y,
+            )
+        };
+        let revisions = rect(
+            right.x,
+            notes.y - GUTTER - revisions_height,
+            right.width,
+            revisions_height,
+        );
+        let revisions = (revisions.y >= above.y + above.height + GUTTER).then_some(revisions);
+
         Self {
             trim,
             border,
@@ -164,6 +187,7 @@ impl Layout {
             detail,
             spec,
             notes,
+            revisions,
             parts,
             title,
         }
@@ -244,6 +268,12 @@ mod tests {
                     layout.notes,
                     layout.parts,
                     layout.title,
+                    layout.revisions.unwrap_or(rect(
+                        layout.border.x + 1,
+                        layout.border.y + 1,
+                        1,
+                        1,
+                    )),
                 ];
 
                 for (i, region) in regions.iter().enumerate() {

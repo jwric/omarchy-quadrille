@@ -7,7 +7,7 @@ use crate::draft::Placement::Auto;
 use crate::draft::scale::grouped;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, polar, v};
 
-use super::{Card, Detail, Domain, Part, Reading, Subject, Unit};
+use super::{Card, Detail, Domain, Part, Reading, Revision, Subject, Unit};
 
 /// km³/s².
 const MU: f64 = 398_600.441_8;
@@ -176,6 +176,7 @@ impl Orbit {
                 "POSITIONS BY KEPLER'S EQUATION".into(),
                 "IN GEO THE SATELLITE KEEPS OVER ONE MERIDIAN".into(),
             ],
+            revisions: vec![Revision::first()],
             parts: vec![
                 Part::new("EARTH", 1, "—")
                     .spec("RADIUS", km(EARTH))

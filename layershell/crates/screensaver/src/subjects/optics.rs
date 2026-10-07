@@ -5,7 +5,7 @@ use quadrille::draw::Anchor;
 use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Line, Tone, V2, number, v};
 
-use super::{Card, Detail, Domain, Part, Reading, Subject, Unit};
+use super::{Card, Detail, Domain, Part, Reading, Revision, Subject, Unit};
 
 /// One refracting surface: its radius of curvature and the thickness and
 /// refractive index (d line) of what follows it.
@@ -269,6 +269,7 @@ impl Optics {
                 format!("BACK FOCUS {} mm (PARAXIAL)", number(back as f32)),
                 "GLASS SK16 AND F2, d LINE".into(),
             ],
+            revisions: vec![Revision::first()],
             parts: vec![
                 element("L1", "SK16", 0),
                 element("L2", "F2", 2),

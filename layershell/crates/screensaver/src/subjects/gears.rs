@@ -2,9 +2,11 @@
 use std::f32::consts::{PI, TAU};
 
 use crate::draft::Placement::Auto;
-use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, arc_points, number, polar, v};
+use crate::draft::{
+    Characteristic, Draft, Extent, Fill, Line, Tone, V2, arc_points, number, polar, v,
+};
 
-use super::{Card, Detail, Domain, Part, Place, Reading, Subject, Unit, View};
+use super::{Card, Detail, Domain, Part, Place, Reading, Revision, Subject, Unit, View};
 
 const MODULE: f32 = 2.0;
 const PRESSURE_ANGLE: f32 = 20.0 * PI / 180.0;
@@ -299,12 +301,34 @@ fn section(d: &mut Draft) {
         );
     });
 
-    d.dim_v(v(GEAR.x + gear.tip, -face), v(GEAR.x + gear.tip, face), 5.0);
+    d.dim_v(
+        v(GEAR.x + gear.tip, -face),
+        v(GEAR.x + gear.tip, face),
+        14.0,
+    );
     d.dim_v(
         v(PINION.x - pinion.tip, -PINION_FACE / 2.0),
         v(PINION.x - pinion.tip, PINION_FACE / 2.0),
         -5.0,
     );
+
+    // The gear's shaft is the datum its faces run true to, and its teeth
+    // are ground.
+    let shaft_end = HUB_LENGTH / 2.0 + SHAFT_OVERHANG;
+
+    d.datum(
+        v(GEAR.x - GEAR_SHAFT.radius, -(hub + shaft_end) / 2.0),
+        v(-1.0, 0.0),
+        'A',
+    );
+    d.control(
+        v(GEAR.x + (RIM_RADIUS + gear.root) / 2.0, -face),
+        (14, 10),
+        Characteristic::Perpendicularity,
+        "0.02",
+        "A",
+    );
+    d.finish(v(GEAR.x + (gear.root + gear.tip) / 2.0, face), "Ra 0.8");
 }
 
 /// The key's section: a rectangle across the joint of shaft and hub.
@@ -349,6 +373,10 @@ impl Gears {
                     (contact.1 - contact.0) / base_pitch
                 ),
                 "KEYS TO ISO 6885".into(),
+            ],
+            revisions: vec![
+                Revision::first(),
+                Revision::new('B', "SECTION A–A ADDED", "2026-10-07"),
             ],
             parts: vec![
                 Part::new("PINION", 1, "STEEL")
@@ -575,7 +603,7 @@ impl Subject for Gears {
 
         d.dim_angle(pitch_point, PI / 2.0, PI / 2.0 + PRESSURE_ANGLE, 34)
             .text("20°");
-        d.dim_h(PINION, GEAR, -36.0);
+        d.dim_h(PINION, GEAR, -36.0).tolerance(0.02, -0.02);
 
         // Where section A–A is cut, and what it shows.
         d.cutting_plane(
@@ -622,7 +650,8 @@ impl Subject for Gears {
                 );
             });
             d.part(2, |d| {
-                d.dim_diameter(PINION, PINION_SHAFT.radius, -0.5, 20);
+                d.dim_diameter(PINION, PINION_SHAFT.radius, -0.5, 20)
+                    .fit("H7/k6");
             });
         });
     }

@@ -11,7 +11,10 @@ use iced_core::{Color, Point, Rectangle};
 use quadrille::draw::{Anchor, Horizontal, Pen, Polygon, Vertical, shape};
 use quadrille::{Face, Palette};
 
-use super::{Axis, Extent, Fill, Ink, Line, Mark, Measure, Placement, Shape, Tone, V2, polar, v};
+use super::{
+    Axis, Characteristic, Extent, Fill, Ink, Line, Mark, Measure, Placement, Shape, Tone, V2,
+    polar, v,
+};
 
 /// Where a model lands on the sheet.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -548,6 +551,31 @@ pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
         } => balloon(*item, projection.px(*target), (*x, *y), tone, out),
         Ink::Note { .. } | Ink::Balloon { .. } => {}
         Ink::Dot { at, size } => out.push(dot(projection.px(*at), *size, tone)),
+        Ink::Finish { at, text } => finish(projection.px(*at), text, tone, out),
+        Ink::Datum { at, toward, letter } => {
+            datum(
+                projection.px(*at),
+                v(toward.x, -toward.y),
+                *letter,
+                tone,
+                out,
+            );
+        }
+        Ink::Control {
+            at,
+            offset,
+            characteristic,
+            tolerance,
+            datums,
+        } => control(
+            projection.px(*at),
+            *offset,
+            *characteristic,
+            tolerance,
+            datums,
+            tone,
+            out,
+        ),
         Ink::Section {
             from,
             to,
@@ -887,6 +915,206 @@ fn cutting_plane(from: V2, to: V2, toward: V2, letter: char, tone: Tone, out: &m
             tone,
             out,
         );
+    }
+}
+
+/// The outline of `area`, a pixel wide.
+fn outline(area: Rectangle<i32>, tone: Tone) -> Inked {
+    let (left, top) = (area.x, area.y);
+    let (right, bottom) = (area.x + area.width - 1, area.y + area.height - 1);
+
+    path(
+        shape::polyline(&[
+            Point::new(left, top),
+            Point::new(right, top),
+            Point::new(right, bottom),
+            Point::new(left, bottom),
+            Point::new(left, top),
+        ]),
+        tone,
+    )
+}
+
+/// The surface texture symbol of a machined surface (ISO 1302) standing on
+/// `tip`: a V of unequal legs, a bar along from the longer, and the
+/// requirement under the bar.
+fn finish(tip: Point<i32>, text: &str, tone: Tone, out: &mut Vec<Inked>) {
+    let short = Point::new(tip.x - 4, tip.y - 7);
+    let long = Point::new(tip.x + 8, tip.y - 14);
+    let width = i32::from(LETTERING.width(text));
+
+    out.push(path(shape::polyline(&[short, tip, long]), tone));
+    out.push(path(
+        shape::line(long, Point::new(long.x + width + 4, long.y)),
+        tone,
+    ));
+    lettering(
+        text,
+        place(
+            LETTERING,
+            text,
+            Point::new(long.x + 3, long.y + 3),
+            Anchor::new(Horizontal::Left, Vertical::CapTop),
+        ),
+        tone,
+        out,
+    );
+}
+
+/// A datum feature symbol (ISO 5459) on `at`: a filled triangle on the
+/// feature, a leader running `toward` its frame, and the letter in it.
+fn datum(at: Point<i32>, toward: V2, letter: char, tone: Tone, out: &mut Vec<Inked>) {
+    const FRAME: i32 = 13;
+
+    let toward = toward.normalize_or_zero();
+
+    if toward == V2::ZERO {
+        return;
+    }
+
+    let across = toward.perp();
+    let snap = |point: V2| Point::new(point.x.round() as i32, point.y.round() as i32);
+    let base = v(at.x as f32, at.y as f32);
+    let apex = base + toward * 5.0;
+
+    out.push(Inked {
+        piece: Piece::Rows {
+            rows: Polygon::new([
+                snap(base + across * 3.0),
+                snap(base - across * 3.0),
+                snap(apex),
+            ])
+            .rows(),
+            texture: Texture::Solid,
+            origin: at,
+        },
+        tone,
+    });
+
+    let end = apex + toward * 6.0;
+    out.push(path(shape::line(snap(apex), snap(end)), tone));
+
+    // The frame, its near side's middle on the leader's end.
+    let middle = end + toward * (FRAME as f32 / 2.0);
+    let corner = snap(middle - v(FRAME as f32 / 2.0, FRAME as f32 / 2.0));
+    let frame = rect(corner.x, corner.y, FRAME, FRAME);
+
+    out.push(Inked {
+        piece: Piece::Knockout(frame),
+        tone,
+    });
+    out.push(outline(frame, tone));
+
+    let text = letter.to_string();
+    out.push(Inked {
+        piece: Piece::Text {
+            at: place(LETTERING, &text, snap(middle), Anchor::CENTRE),
+            text,
+        },
+        tone,
+    });
+}
+
+/// A feature control frame (ISO 1101) `offset` from `at`: cells for what it
+/// controls, the tolerance and the datums, and a leader arrowed onto `at`
+/// from the frame's nearer end.
+fn control(
+    at: Point<i32>,
+    offset: (i32, i32),
+    characteristic: Characteristic,
+    tolerance: &str,
+    datums: &str,
+    tone: Tone,
+    out: &mut Vec<Inked>,
+) {
+    const HEIGHT: i32 = 13;
+
+    let corner = Point::new(at.x + offset.0, at.y + offset.1);
+    let cell = |text: &str| i32::from(LETTERING.width(text)) + 6;
+    let widths: Vec<i32> = [HEIGHT, cell(tolerance)]
+        .into_iter()
+        .chain((!datums.is_empty()).then(|| cell(datums)))
+        .collect();
+    let width = widths.iter().sum::<i32>() - (widths.len() as i32 - 1);
+    let frame = rect(corner.x, corner.y, width, HEIGHT);
+
+    // The leader, from whichever end of the frame faces the feature.
+    let middle = corner.y + HEIGHT / 2;
+    let start = if at.x < corner.x {
+        Point::new(corner.x - 1, middle)
+    } else {
+        Point::new(corner.x + width, middle)
+    };
+
+    out.push(path(shape::line(start, at), Tone::Line));
+    arrowhead(
+        at,
+        v((at.x - start.x) as f32, (at.y - start.y) as f32),
+        Tone::Line,
+        out,
+    );
+
+    out.push(Inked {
+        piece: Piece::Knockout(frame),
+        tone,
+    });
+    out.push(outline(frame, tone));
+
+    let mut left = corner.x;
+
+    for (index, width) in widths.iter().enumerate() {
+        if index > 0 {
+            out.push(path(
+                shape::line(
+                    Point::new(left, corner.y),
+                    Point::new(left, corner.y + HEIGHT - 1),
+                ),
+                tone,
+            ));
+        }
+
+        let centre = Point::new(left + width / 2, middle);
+        let text = match index {
+            1 => tolerance,
+            2 => datums,
+            _ => "",
+        };
+
+        if index == 0 {
+            symbol(characteristic, centre, tone, out);
+        } else {
+            out.push(Inked {
+                piece: Piece::Text {
+                    at: place(LETTERING, text, centre, Anchor::CENTRE),
+                    text: text.to_owned(),
+                },
+                tone,
+            });
+        }
+
+        left += width - 1;
+    }
+}
+
+/// The symbol of a geometric characteristic, drawn round `centre`: the
+/// lettering face has no glyphs for them.
+fn symbol(characteristic: Characteristic, centre: Point<i32>, tone: Tone, out: &mut Vec<Inked>) {
+    let at = |x: i32, y: i32| Point::new(centre.x + x, centre.y + y);
+    let lines: Vec<Vec<Point<i32>>> = match characteristic {
+        // A circle and a cross through it.
+        Characteristic::Position => vec![
+            ordered_circle(centre, 3),
+            shape::line(at(-4, 0), at(4, 0)),
+            shape::line(at(0, -4), at(0, 4)),
+        ],
+        Characteristic::Perpendicularity => vec![
+            shape::line(at(0, -4), at(0, 3)),
+            shape::line(at(-4, 3), at(4, 3)),
+        ],
+    };
+
+    for pixels in lines {
+        out.push(path(pixels, tone));
     }
 }
 

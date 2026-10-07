@@ -846,13 +846,21 @@ impl<'a> Scene<'a> {
         let scale = self.scale_label(self.main_ratio);
         let number = format!("{} OF {}", sheet.number, sheet.of);
 
-        plates::fields(
-            pen,
-            &mut typist,
-            layout.title,
-            &plates::title_block(card, &scale, &number, sheet.date),
-            palette,
-        );
+        let title_block = plates::title_block(card, &scale, &number, sheet.date);
+
+        plates::fields(pen, &mut typist, layout.title, &title_block, palette);
+
+        if typist.caught_up() {
+            plates::first_angle(
+                pen,
+                plates::projection_cell(layout.title, &title_block),
+                palette.muted,
+            );
+        }
+
+        if let Some(bounds) = layout.revisions {
+            plates::revisions(pen, &mut typist, bounds, card, palette);
+        }
 
         plates::parts(
             pen,
