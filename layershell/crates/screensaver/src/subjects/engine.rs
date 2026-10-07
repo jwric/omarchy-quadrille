@@ -2,6 +2,7 @@
 //! their timing, and the piston's travel charted against the crank angle.
 use std::f32::consts::{PI, TAU};
 
+use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Line, Tone, Turn, V2, arc_points, number, polar, v};
 
 use super::{Card, Detail, Domain, Part, Reading, Subject, Unit};
@@ -455,21 +456,21 @@ impl Subject for Engine {
 
             // Balloons that follow their parts.
             d.part(0, |d| {
-                d.balloon(0, v(-half + 6.0, crown - 2.0), (-46, -16));
+                d.balloon(0, v(-half + 6.0, crown - 2.0), Auto);
             });
             d.part(1, |d| {
-                d.balloon(1, crankpin.lerp(pin, 0.45), (-50, 14));
+                d.balloon(1, crankpin.lerp(pin, 0.45), Auto);
             });
         });
 
         d.part(2, |d| {
-            d.balloon(2, v(-COUNTERWEIGHT * 0.7, -COUNTERWEIGHT * 0.5), (-30, 24));
+            d.balloon(2, v(-COUNTERWEIGHT * 0.7, -COUNTERWEIGHT * 0.5), Auto);
         });
         d.part(3, |d| {
-            d.balloon(3, v(half + WALL - 1.0, LINER_FOOT + 6.0), (26, 10));
+            d.balloon(3, v(half + WALL - 1.0, LINER_FOOT + 6.0), Auto);
         });
         d.part(4, |d| {
-            d.balloon(4, v(VALVE_X + STEM, DECK + HEAD + 4.0), (30, -4));
+            d.balloon(4, v(VALVE_X + STEM, DECK + HEAD + 4.0), Auto);
         });
 
         d.in_detail(|d| {
