@@ -3,9 +3,9 @@
 use std::f32::consts::{PI, TAU};
 
 use crate::draft::Placement::Auto;
-use crate::draft::{Draft, Extent, Line, Tone, V2, arc_points, geom::wrap, number, polar, v};
+use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, arc_points, geom::wrap, number, polar, v};
 
-use super::{Card, Detail, Domain, Part, Reading, Subject, Unit};
+use super::{Card, Detail, Domain, Part, Place, Reading, Subject, Unit, View};
 
 const SLOTS: u32 = 6;
 /// Between the driver's and the wheel's centres.
@@ -16,6 +16,14 @@ const SHAFT: f32 = 5.0;
 /// The slot's bottom, from the wheel's centre.
 const SLOT_FOOT: f32 = 21.0;
 const DRIVER_RPM: f32 = 10.0;
+
+/// The depths section A–A shows: the wheel and the locking disc share a
+/// plate's thickness, the driver's arm runs under it, and the shafts are
+/// drawn this far each way.
+const PLATE: f32 = 6.0;
+const ARM: f32 = 5.0;
+const SHAFT_UP: f32 = 10.0;
+const SHAFT_DOWN: f32 = 14.0;
 
 const WHEEL: V2 = v(CENTRES, 0.0);
 
@@ -176,6 +184,83 @@ impl Geneva {
         points
     }
 
+    /// Section A–A, through both shafts with the driver turned away from
+    /// the wheel: across it the front view's `x`, up it the depth along the
+    /// shafts.
+    ///
+    /// The driver, disc and arm one piece, is lined one way and the wheel
+    /// the other; the pin and the shafts are not sectioned. The disc runs
+    /// in the wheel's locking arc, which holds the wheel still.
+    fn section(d: &mut Draft) {
+        let face = PLATE / 2.0;
+        let rectangle =
+            |x0: f32, x1: f32, z0: f32, z1: f32| [v(x0, z0), v(x1, z0), v(x1, z1), v(x0, z1)];
+        // Where the locking disc is cut back for the wheel's tips, on the
+        // line of centres, with the pin away from the wheel.
+        let relief = -CENTRES + Self::rim() + 1.0;
+        let pin = -crank();
+        let arm = face + ARM;
+
+        d.part(0, |d| {
+            // The arm from the shaft out under the pin, and the sliver of
+            // disc beside the relief, as one.
+            let left = [
+                v(-SHAFT, -arm),
+                v(pin - PIN, -arm),
+                v(pin - PIN, -face),
+                v(relief, -face),
+                v(relief, face),
+                v(-SHAFT, face),
+            ];
+            let right = rectangle(SHAFT, LOCK, -face, face);
+
+            for body in [&left[..], &right[..]] {
+                d.area(body, Fill::Hatch);
+                d.polygon(body, Line::Outline);
+            }
+        });
+
+        d.part(1, |d| {
+            d.polygon(&rectangle(pin - PIN, pin + PIN, -face, face), Line::Outline);
+            d.line(v(pin, -arm - 2.0), v(pin, face + 2.0), Line::Centre);
+        });
+
+        d.part(2, |d| {
+            let arc = LOCK + 0.5;
+
+            for body in [
+                rectangle(arc, CENTRES - SHAFT, -face, face),
+                rectangle(CENTRES + SHAFT, 2.0 * CENTRES - arc, -face, face),
+            ] {
+                d.area(&body, Fill::CrossHatch);
+                d.polygon(&body, Line::Outline);
+            }
+        });
+
+        d.part(3, |d| {
+            for (centre, down) in [(0.0, SHAFT_DOWN), (CENTRES, SHAFT_UP)] {
+                d.polygon(
+                    &rectangle(centre - SHAFT, centre + SHAFT, -down, SHAFT_UP),
+                    Line::Outline,
+                );
+            }
+        });
+
+        for centre in [0.0, CENTRES] {
+            d.line(
+                v(centre, -SHAFT_DOWN - 3.0),
+                v(centre, SHAFT_UP + 3.0),
+                Line::Centre,
+            );
+        }
+
+        d.dim_v(
+            v(2.0 * CENTRES - LOCK - 0.5, -face),
+            v(2.0 * CENTRES - LOCK - 0.5, face),
+            5.0,
+        );
+    }
+
     /// The driver's locking disc at angle `phi`, cut away where the wheel's
     /// tips pass while the pin drives it.
     fn locking_disc(phi: f32) -> Vec<V2> {
@@ -210,6 +295,17 @@ impl Subject for Geneva {
         Extent::new(v(-34.0, -50.0), v(CENTRES + Self::rim() + 6.0, 50.0))
     }
 
+    fn views(&self) -> Vec<View> {
+        vec![View {
+            name: "SECTION A–A, DRIVER AT 180°".into(),
+            place: Place::Under,
+            extent: Extent::new(
+                v(-34.0, -SHAFT_DOWN - 4.0),
+                v(CENTRES + Self::rim() + 6.0, SHAFT_UP + 4.0),
+            ),
+        }]
+    }
+
     fn draw(&self, d: &mut Draft, t: f32) {
         let phi = Self::driver(t);
         let (turn, _) = Self::wheel(phi);
@@ -226,6 +322,16 @@ impl Subject for Geneva {
         }
 
         d.dim_h(V2::ZERO, WHEEL, -(Self::rim() + 2.0));
+
+        // Where section A–A is cut, and what it shows.
+        d.cutting_plane(
+            0,
+            v(-LOCK - 12.0, 0.0),
+            v(CENTRES + Self::rim() + 4.0, 0.0),
+            v(0.0, -1.0),
+            'A',
+        );
+        d.in_view(0, Self::section);
         d.dim_angle(V2::ZERO, -alpha, alpha, 46).tone(Tone::Muted);
 
         d.moving(|d| {
