@@ -169,3 +169,19 @@ python3 tools/gen_themes.py               # regenerate the themes (QUADRILLE=/pa
 Back to how it was before any of this: `plugins/stock.sh`,
 `omarchy theme set ristretto`, `omarchy font set "CaskaydiaMono Nerd Font"`, delete
 `~/.config/fontconfig/conf.d/60-quadrille-pixel.conf`.
+
+## Screensaver (2026-10-07)
+
+`layershell/crates/screensaver` (`quadrille-screensaver`): technical drawings
+that plot themselves, run and document their parts on every output, on the
+iced_layer shell. Seven subjects (gears, engine, Geneva drive, 555 timer,
+Cooke triplet, Joukowski aerofoil, Hohmann transfer), each one file behind the
+`Subject` trait; the sheet (plot, scale, details, timing) is shared. Designed
+and reviewed headless (`quadrille-screensaver render`, `bench`): the user asked
+for no windows on their session, so `layershell/tools/screensaver-test.sh` (the
+nested-Hyprland check of surfaces, exit on input and the lock) ran once, early,
+and not on the final build. `theme`, `physical` and `graphics` moved from the bar
+into `crates/desktop` (shared). iced_layer: a hidden cursor is now applied on
+pointer enter (it was never hidden). `plugins/quadrille.idle` (opt-in,
+`plugins/install.sh idle`) starts it from Omarchy's idle service; it was linted
+(qmllint), not run live: enabling it is the user's call.

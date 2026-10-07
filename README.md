@@ -16,13 +16,14 @@ measurements that update as the pointer moves whenever the overlay is enabled.
 
 ![Menu, OSD and notifications at 3 physical pixels per virtual pixel](plugins/screenshots/laptop.png)
 
-It is three layers, each useful without the next:
+It is four layers, each useful without the next:
 
 | | what | where |
 |---|---|---|
 | 1. Themes and font | five Omarchy themes generated from quadrille's palettes (terminal, paper, phosphor, amber, lcd), a dithered graticule wallpaper, square whole-pixel Hyprland borders and gaps, no animation; a fontconfig rule that turns antialiasing off for Departure Mono | `themes/`, `fontconfig/`, `tools/` |
 | 2. Shell plugins | a QML kit (lamps, gauges, tabs, groups, 24 pixel icons, text from baked bitmaps), a replacement `quadrille.bar`, and restyled menu, OSD and notifications | `plugins/` |
 | 3. Panel host | `quadrille-bar`, an iced app on a layer-shell windowing shell of its own (sctk + tiny-skia): system, audio, network, Bluetooth and power panels, plus a cursor graticule, following the Omarchy theme live | `layershell/` |
+| 4. Screensaver | `quadrille-screensaver`, on the same shell: technical drawings that plot themselves, run and document their parts, subject after subject, at true scale on calibrated displays | `layershell/crates/screensaver/` |
 
 ## Use
 
@@ -151,6 +152,82 @@ in the user's own Lua config (the host never installs it):
 Off/on reloads display overrides. The wallpaper watches existing overrides;
 `omarchy-shell background refresh` also loads a newly created file.
 
+## Screensaver
+
+![Seven sheets, and the plotter at work on the gears](plugins/screenshots/screensaver-sheets.png)
+
+`quadrille-screensaver` covers every output with a drawing sheet. A pen
+plots the subject stroke by stroke (centre lines first, then edges, hidden
+lines, sections, dimensions and balloons) while the title block types itself
+in. The subject then runs, and each part in turn is picked out: lit in the
+accent, ringed on the view, magnified in a DETAIL view (which follows a moving
+part) and specified beside it. A wipe clears the sheet for the next subject.
+Each output starts on a different one. Any key, click or pointer movement ends
+it; the cursor is hidden only over its own surfaces.
+
+| subject | what moves, and how it is worked out |
+|---|---|
+| Spur gear pair | involute teeth (module 2, 20°, 18:30) in mesh; the contact points slide along the line of action |
+| Four-stroke single | slider-crank, valves on their timing, a spark; piston travel charted live |
+| Geneva drive | six slots indexed a sixth of a turn per turn, held by the locking disc between |
+| 555 astable | the RC charge and discharge, current along the path that carries it, a sweeping two-channel scope |
+| Cooke triplet | real rays traced through six spherical surfaces by Snell's law as the field sweeps to 20° |
+| Joukowski aerofoil | potential flow with the Kutta condition; particles released together, the upper ones arrive first |
+| Hohmann transfer | LEO to GEO by Kepler's equation, the burns, the Earth turning under the satellite |
+
+![The gears at 2:1 on the laptop, a frame at the panel's own pixels](plugins/screenshots/screensaver-gears.png)
+
+![The engine at 1:1 on the ultrawide, in the paper theme: the connecting rod in detail](plugins/screenshots/screensaver-engine-paper-ultrawide.png)
+
+Drawings to scale use a preferred scale (ISO 5455, with DIN 823's 2.5) that
+is true on the display's calibration: the engine is 1:1 on both monitors here,
+the gears 2:1 on the laptop and 2.5:1 on the ultrawide; on an estimated size
+the scale reads `~2:1`. Lettering,
+patterns and line types are whole virtual pixels, in the Omarchy theme's
+roles. Still parts of a settled sheet are kept and only what moves is drawn
+again, so the renderer's damage is the size of the motion
+(`quadrille-screensaver bench` times the drawing headless).
+
+```sh
+layershell/tools/install.sh               # builds and installs it with quadrille-bar
+quadrille-screensaver-launch force        # run it now
+quadrille-screensaver render --subject gears --at 12,20 --output ultrawide --theme paper
+quadrille-screensaver list                # the subjects
+```
+
+`render` draws any moment of any sheet offscreen to PNG, exactly as an output
+shows it (`--physical` upscales to the panel's pixels); it is how the sheets are
+designed, with no window opened.
+
+**Starting it when the desktop is idle.** Omarchy's idle service starts its own
+screensaver by name, so `quadrille.idle` is that service cloned, with two
+changes: it starts `quadrille-screensaver-launch` (which falls back to the stock
+screensaver), and it counts the screensaver's layer surfaces as the stock
+screensaver's window, so the lock still comes on time. It is opt-in, like the
+lock screen, because it also decides when the screen locks:
+
+```sh
+plugins/install.sh idle                   # back to the stock idle service: plugins/stock.sh
+```
+
+The launcher honours Omarchy's screensaver switch, runs the screensaver as
+`org.omarchy.screensaver` (so `omarchy-system-lock` stops it, as it stops the
+stock one) and logs to the journal (`journalctl -t quadrille-screensaver`). For
+the menu's *Screensaver* entry, add to `~/.config/omarchy/extensions/omarchy-menu.jsonc`:
+
+```jsonc
+"system.screensaver": {"action": "quadrille-screensaver-launch force"},
+```
+
+A subject is one file in `layershell/crates/screensaver/src/subjects/`: it
+draws itself in its own units on a `Draft` (lines of each type, hatching,
+dimensions, notes, balloons; `schematic.rs` adds circuit symbols) at a moment
+of its motion, and fills in a card (title, notes, parts with their
+specifications and detail circles). Plotting, scale, sheet, details and
+timing are the sheet's, the same for every subject. Add the type to
+`subjects::all()`; the tests check that every part is drawn and that names fit
+the parts list.
+
 ## What is not exact
 
 - The stock widgets the bar keeps (tray, agents, indicators, weather), popup
@@ -170,7 +247,8 @@ themes/        generated by tools/gen_themes.py from quadrille's theme.rs
 fontconfig/    antialiasing and subpixel colour off for Departure Mono
 tools/         gen_themes.py, install.sh
 plugins/       the QML kit and plugins, NOTES.md (findings), screenshots/
-layershell/    the panel host: windowing shell, bar crate, nested-compositor tests; NOTES.md
+layershell/    the panel host and the screensaver: windowing shell, shared desktop crate
+               (theme, calibration), bar and screensaver crates, nested-compositor tests; NOTES.md
 ```
 
 `layershell/` depends on quadrille and on the
