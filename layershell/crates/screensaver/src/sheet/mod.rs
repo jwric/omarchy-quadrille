@@ -765,6 +765,15 @@ impl<'a> Scene<'a> {
         };
         let marks = self.shown().filter(|(mark, _)| layer.takes(mark.moving));
         let mut pen = Pen::new(frame);
+
+        // The circle is still once it is drawn round a still detail. It goes
+        // under the view's marks, so their lettering reads across it, and
+        // its letter over them.
+        let marker = self
+            .detail
+            .as_ref()
+            .filter(|view| layer == Layer::All || (layer == Layer::Fixed) == view.marked());
+        let circle = marker.and_then(|view| self.detail_marker(&mut pen, palette, view));
         let head = plot(
             &mut pen,
             palette,
@@ -774,13 +783,11 @@ impl<'a> Scene<'a> {
             share,
         );
 
-        // The circle is still once it is drawn round a still detail.
-        match &self.detail {
-            Some(view) if layer == Layer::All || (layer == Layer::Fixed) == view.marked() => {
-                head.or(self.detail_marker(&mut pen, palette, view))
-            }
-            _ => head,
+        if let Some(view) = marker {
+            self.detail_letter(&mut pen, palette, view);
         }
+
+        head.or(circle)
     }
 
     /// The wipe: the sheet's ground painted over what it has passed, in
@@ -957,8 +964,8 @@ impl<'a> Scene<'a> {
         }
     }
 
-    /// The circle on the main view round what the detail magnifies, and its
-    /// letter; drawn in as the part is picked out.
+    /// The circle on the main view round what the detail magnifies, drawn
+    /// in as the part is picked out.
     fn detail_marker<Renderer: geometry::Renderer>(
         &self,
         pen: &mut Pen<'_, Renderer>,
@@ -973,29 +980,67 @@ impl<'a> Scene<'a> {
             raster::Stipple::of(crate::draft::Line::Phantom),
         );
         let budget = (share * circle.cost() as f32) as usize;
-        let head = circle.draw(
+
+        circle.draw(
             pen,
             palette.accent,
             palette.void,
             budget,
             self.layout.drawing(),
-        );
+        )
+    }
 
-        if share >= 1.0 {
-            let corner = Point::new(centre.x + radius * 7 / 10, centre.y - radius * 7 / 10);
-            let label = Point::new(corner.x + 6, corner.y - 6);
+    /// The letter of the circle on the main view, once it is drawn in.
+    fn detail_letter<Renderer: geometry::Renderer>(
+        &self,
+        pen: &mut Pen<'_, Renderer>,
+        palette: &Palette,
+        view: &DetailView,
+    ) {
+        let centre = self.main.px(view.detail.centre);
+        let radius = self.main.length(view.detail.radius).max(4);
 
-            pen.line(corner, label, palette.accent);
-            letters::set(
-                pen,
-                &letter(view.focus.part).to_string(),
-                Point::new(label.x + 2, label.y),
-                Anchor::new(Horizontal::Left, Vertical::Middle),
-                palette.accent,
+        if view.focus.time >= MARK {
+            let text = letter(view.focus.part).to_string();
+            // Up and right, unless what the view draws or letters is in the
+            // way there and not at another corner; a circle that follows a
+            // moving part keeps to one.
+            let (corner, leader, at, anchor) = if view.detail.follows {
+                marker_letter(centre, radius, CORNERS[0])
+            } else {
+                let pieces = pieces(self.shown(), None);
+                let drawing = self.layout.drawing();
+
+                CORNERS
+                    .iter()
+                    .map(|&way| marker_letter(centre, radius, way))
+                    .min_by_key(|&(corner, leader, at, anchor)| {
+                        let area = letter_area(corner, leader, &text, at, anchor);
+
+                        match raster::intersection(area, drawing) {
+                            Some(inside) if inside == area => crowding(&pieces, area),
+                            _ => usize::MAX,
+                        }
+                    })
+                    .expect("Four corners")
+            };
+
+            // Over line work it cannot keep clear of, on the sheet's ground.
+            let top_left = raster::place(LETTERING, &text, at, anchor);
+            let cap_top = top_left.y + i32::from(LETTERING.cap_top());
+
+            pen.line(corner, leader, palette.accent);
+            pen.fill(
+                rect(
+                    top_left.x - 1,
+                    cap_top - 1,
+                    i32::from(LETTERING.width(&text)) + 1,
+                    i32::from(LETTERING.cap()) + 2,
+                ),
+                palette.void,
             );
+            letters::set(pen, &text, at, anchor, palette.accent);
         }
-
-        head
     }
 
     /// The detail view in its window, and the part's specification.
@@ -1072,17 +1117,9 @@ impl<'a> Scene<'a> {
             .map(|mark| (mark, &view.projection));
         let share = (plotted < 1.0).then_some(plotted);
 
-        let head = plot(
-            &mut pen,
-            palette,
-            marks,
-            inside,
-            Some(view.focus.part),
-            share,
-        );
-
         if view.paints(layer) {
-            // The boundary of what the main view's circle marks.
+            // The boundary of what the main view's circle marks, under the
+            // marks so their lettering reads across it.
             let centre = view.projection.px(view.detail.centre);
             let radius = view.projection.length(view.detail.radius);
             let circle = raster::Piece::path(
@@ -1093,9 +1130,104 @@ impl<'a> Scene<'a> {
             circle.draw(&mut pen, palette.faint, palette.void, usize::MAX, inside);
         }
 
-        head
+        plot(
+            &mut pen,
+            palette,
+            marks,
+            inside,
+            Some(view.focus.part),
+            share,
+        )
     }
 }
+
+/// The corners of a detail's circle its letter may stand at, as the ways
+/// out from its centre, the first preferred.
+const CORNERS: [(i32, i32); 4] = [(1, -1), (-1, -1), (1, 1), (-1, 1)];
+
+/// A detail circle's letter at the corner `(x, y)` out from the circle at
+/// `centre` of `radius`: where its leader leaves the circle and ends, and
+/// where the letter is set from and how.
+fn marker_letter(
+    centre: Point<i32>,
+    radius: i32,
+    (x, y): (i32, i32),
+) -> (Point<i32>, Point<i32>, Point<i32>, Anchor) {
+    let reach = radius * 7 / 10;
+    let corner = Point::new(centre.x + x * reach, centre.y + y * reach);
+    let leader = Point::new(corner.x + x * 6, corner.y + y * 6);
+    let side = if x > 0 {
+        Horizontal::Left
+    } else {
+        Horizontal::Right
+    };
+
+    (
+        corner,
+        leader,
+        Point::new(leader.x + x * 2, leader.y),
+        Anchor::new(side, Vertical::Middle),
+    )
+}
+
+/// What a detail circle's letter and its leader take up.
+fn letter_area(
+    corner: Point<i32>,
+    leader: Point<i32>,
+    text: &str,
+    at: Point<i32>,
+    anchor: Anchor,
+) -> Rectangle<i32> {
+    let top_left = raster::place(LETTERING, text, at, anchor);
+    let cap_top = top_left.y + i32::from(LETTERING.cap_top());
+    let (left, top) = (
+        corner.x.min(leader.x).min(top_left.x - 2),
+        corner.y.min(leader.y).min(cap_top - 2),
+    );
+    let (right, bottom) = (
+        corner
+            .x
+            .max(leader.x)
+            .max(top_left.x + i32::from(LETTERING.width(text)) + 1),
+        corner
+            .y
+            .max(leader.y)
+            .max(cap_top + i32::from(LETTERING.cap()) + 2),
+    );
+
+    rect(left, top, right - left + 1, bottom - top + 1)
+}
+
+/// How much of `pieces` is in `area`: a pixel for each pixel of line work
+/// or an area, and many for lettering, which nothing is to be set over.
+fn crowding(pieces: &[Inked], area: Rectangle<i32>) -> usize {
+    let covered = |bounds: Rectangle<i32>| {
+        raster::intersection(bounds, area).map_or(0, |part| (part.width * part.height) as usize)
+    };
+
+    pieces
+        .iter()
+        .map(|inked| match &inked.piece {
+            raster::Piece::Path { pixels, .. } => pixels
+                .iter()
+                .filter(|pixel| raster::contains(area, **pixel))
+                .count(),
+            raster::Piece::Rows { rows, .. } => rows
+                .iter()
+                .map(|&(y, from, to)| covered(rect(from, y, to - from + 1, 1)))
+                .sum(),
+            raster::Piece::Block(bounds) => covered(*bounds),
+            raster::Piece::Knockout(bounds) => {
+                raster::intersection(*bounds, area).map_or(0, |_| LETTERED)
+            }
+            raster::Piece::Text { .. } => 0,
+        })
+        .sum()
+}
+
+/// What lettering in the way of a detail's letter counts for: more than the
+/// line work its box could hold.
+const LETTERED: usize = 1000;
 
 /// `pieces` in consecutive buckets of about `cost` pixels of pen travel.
 fn buckets(pieces: &[Inked], cost: usize) -> impl Iterator<Item = &[Inked]> {
@@ -1459,6 +1591,103 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+    /// A detail's letter stands at the first corner of its circle that is
+    /// clear of lettering, and not at one that is lettered over.
+    #[test]
+    fn a_details_letter_keeps_clear_of_lettering() {
+        let centre = Point::new(200, 200);
+        let choose = |pieces: &[Inked]| {
+            CORNERS
+                .iter()
+                .copied()
+                .min_by_key(|&way| {
+                    let (corner, leader, at, anchor) = marker_letter(centre, 40, way);
+                    crowding(pieces, letter_area(corner, leader, "B", at, anchor))
+                })
+                .unwrap()
+        };
+        let lettered = |way: (i32, i32)| {
+            let (corner, leader, at, anchor) = marker_letter(centre, 40, way);
+            Inked {
+                piece: raster::Piece::Knockout(letter_area(corner, leader, "B", at, anchor)),
+                tone: Tone::Ink,
+            }
+        };
+        // A line across where the letter goes up and right.
+        let (corner, ..) = marker_letter(centre, 40, CORNERS[0]);
+        let line = Inked {
+            piece: raster::Piece::path(
+                (150..260).map(|x| Point::new(x, corner.y - 3)).collect(),
+                raster::Stipple::of(Line::Outline),
+            ),
+            tone: Tone::Line,
+        };
+
+        assert_eq!(choose(&[]), CORNERS[0]);
+        assert_eq!(choose(&[lettered(CORNERS[0])]), CORNERS[1]);
+        assert_eq!(
+            choose(&[lettered(CORNERS[0]), lettered(CORNERS[1])]),
+            CORNERS[2]
+        );
+        // A corner with line work in the way gives way to a clear one, and
+        // is taken before one with lettering in the way.
+        assert_eq!(choose(&[line.clone(), lettered(CORNERS[1])]), CORNERS[2]);
+        assert_eq!(
+            choose(&[
+                line,
+                lettered(CORNERS[1]),
+                lettered(CORNERS[2]),
+                lettered(CORNERS[3])
+            ]),
+            CORNERS[0]
+        );
+    }
+
+    /// On the displays sheet no dimension's value is lettered over a
+    /// display's edge, on either display.
+    #[test]
+    fn the_displays_dimensions_clear_their_edges() {
+        let subjects = subjects::all(&Machine::fixture());
+        let index = subjects::find(&subjects, "displays").expect("The displays sheet");
+
+        for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+            let (width, height) = output.virtual_size();
+            let sheet = sheet(&subjects, index, output, 12.0);
+            let scene = Scene::new(&sheet, width as i32, height as i32, &Planned::default());
+            let mut values = Vec::new();
+            let mut edges = Vec::new();
+
+            for (mark, projection) in scene.shown() {
+                let mut pieces = Vec::new();
+                raster::rasterize(mark, projection, &mut pieces);
+
+                for inked in pieces {
+                    match (&mark.ink, inked.piece) {
+                        (Ink::Dimension { .. }, raster::Piece::Knockout(area)) => {
+                            values.push(area);
+                        }
+                        (
+                            Ink::Stroke {
+                                line: Line::Outline,
+                                ..
+                            },
+                            raster::Piece::Path { pixels, .. },
+                        ) => edges.extend(pixels),
+                        _ => {}
+                    }
+                }
+            }
+
+            assert!(values.len() >= 4 && !edges.is_empty());
+
+            for area in values {
+                assert!(
+                    !edges.iter().any(|pixel| raster::contains(area, *pixel)),
+                    "{area:?} on {output:?}"
+                );
             }
         }
     }

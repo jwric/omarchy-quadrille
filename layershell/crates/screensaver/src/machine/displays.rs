@@ -4,6 +4,8 @@
 //! The EDID is read a field at a time, and never where it keeps the
 //! display's serial number: not its four bytes at 12, and not a
 //! descriptor tagged as a serial string.
+use std::collections::HashMap;
+
 use quadrille_desktop::physical::{DisplayInput, Overrides, PhysicalSize};
 
 use super::{PciAddress, Tree, natural};
@@ -77,6 +79,7 @@ impl ConnectorKind {
 
 /// Every connector, the machine's own panel first.
 pub(super) fn connectors(tree: &Tree, overrides: &Overrides) -> Vec<Connector> {
+    let makers = makers(tree);
     let mut connectors: Vec<Connector> = tree
         .entries("sys/class/drm")
         .into_iter()
@@ -104,7 +107,7 @@ pub(super) fn connectors(tree: &Tree, overrides: &Overrides) -> Vec<Connector> {
                 kind: ConnectorKind::of(name),
                 gpu: tree.pci_path(at("")).last().copied(),
                 panel: connected
-                    .then(|| panel(tree, &at("edid"), name, preferred, overrides))
+                    .then(|| panel(tree, &at("edid"), name, preferred, &makers, overrides))
                     .flatten(),
                 name: name.to_owned(),
             })
@@ -120,13 +123,32 @@ pub(super) fn connectors(tree: &Tree, overrides: &Overrides) -> Vec<Connector> {
     connectors
 }
 
+/// The makers' names by their PNP IDs, from `pnp.ids` when it is installed:
+/// the table the compositor names displays from.
+fn makers(tree: &Tree) -> HashMap<String, String> {
+    tree.text("usr/share/hwdata/pnp.ids")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let (id, name) = line.split_once('\t')?;
+            Some((id.trim().to_owned(), name.trim().to_owned()))
+        })
+        .collect()
+}
+
 /// The display on a connector, from its EDID and the modes the kernel
 /// lists; `None` if neither says its resolution.
+///
+/// Its measured size in `displays.toml` is looked up as the sheets' scales
+/// look it up, by the make and model Hyprland gives the display (through
+/// libdisplay-info): the maker's name from `pnp.ids`, or its PNP ID; the
+/// name the display gives itself, or its product code.
 fn panel(
     tree: &Tree,
     edid: &str,
     connector: &str,
     preferred: Option<(u32, u32)>,
+    makers: &HashMap<String, String>,
     overrides: &Overrides,
 ) -> Option<Panel> {
     let edid = Edid::read(tree, edid);
@@ -136,11 +158,16 @@ fn panel(
         name: connector.into(),
         make: edid
             .as_ref()
-            .and_then(|edid| edid.maker.clone())
+            .and_then(|edid| edid.maker.as_ref())
+            .map(|id| makers.get(id).unwrap_or(id).clone())
             .unwrap_or_default(),
         model: edid
             .as_ref()
-            .and_then(|edid| edid.name.clone())
+            .map(|edid| {
+                edid.name
+                    .clone()
+                    .unwrap_or_else(|| format!("0x{:04X}", edid.product))
+            })
             .unwrap_or_default(),
         width: pixels.0,
         height: pixels.1,
@@ -166,6 +193,8 @@ fn panel(
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Edid {
     maker: Option<String>,
+    /// The maker's code for the model.
+    product: u16,
     name: Option<String>,
     pixels: Option<(u32, u32)>,
     refresh: Option<f32>,
@@ -197,6 +226,7 @@ impl Edid {
 
         let mut edid = Self {
             maker: maker(u16::from_be_bytes([head[8], head[9]])),
+            product: u16::from_le_bytes([head[10], head[11]]),
             year: (made[1] > 0).then(|| 1990 + u16::from(made[1])),
             mm: (size[0] > 0 && size[1] > 0)
                 .then(|| (u32::from(size[0]) * 10, u32::from(size[1]) * 10)),
@@ -273,6 +303,7 @@ fn text(bytes: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 pub(super) mod tests {
+    use super::super::Machine;
     use super::super::tests::laptop;
     use super::*;
 
@@ -372,6 +403,40 @@ pub(super) mod tests {
         );
 
         assert!(machine.connectors[2].panel.is_none());
+    }
+
+    /// A display's measured size in `displays.toml` is found by its make
+    /// and model as Hyprland gives them: the maker's name, and the name the
+    /// display gives itself or, with none, its product code.
+    #[test]
+    fn overrides_by_make_and_model_are_found() {
+        let fake = laptop();
+        let panel = "sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-1/edid";
+        let mut edid = std::fs::read(fake.root().join(panel)).unwrap();
+
+        edid[10..12].copy_from_slice(&0x1a2bu16.to_le_bytes());
+        fake.file(panel, edid).file(
+            "usr/share/hwdata/pnp.ids",
+            "GDL\tOther Ltd\nGEN\tGeneric Displays Ltd\n",
+        );
+
+        let overrides = Overrides::parse(
+            "[\"Generic Displays Ltd 0x1A2B\"]\nwidth_mm = 300\nheight_mm = 190\n\n\
+             [\"Generic Displays Ltd 27 Monitor\"]\ndiagonal_inches = 27.5\n",
+        )
+        .unwrap();
+        let machine = Machine::read(fake.root(), &overrides);
+        let sizes: Vec<_> = machine
+            .displays()
+            .map(|(_, panel)| (panel.size.source, panel.size.width_mm.round()))
+            .collect();
+
+        assert_eq!(sizes, [("override", 300.0), ("override", 609.0)]);
+        // The PNP ID is what the inventory keeps.
+        assert_eq!(
+            machine.displays().next().unwrap().1.maker.as_deref(),
+            Some("GEN")
+        );
     }
 
     #[test]

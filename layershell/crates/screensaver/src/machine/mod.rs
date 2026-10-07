@@ -92,7 +92,14 @@ impl Machine {
             sensors: hwmon
                 .sources
                 .iter()
-                .map(|(path, per_unit)| Some((tree.open(path)?, *per_unit)))
+                .zip(&hwmon.sensors)
+                .map(|((path, per_unit), sensor)| {
+                    Some(sensors::Channel {
+                        file: tree.open(path)?,
+                        per_unit: *per_unit,
+                        slow: sensor.slow(),
+                    })
+                })
                 .collect(),
             batteries: battery_gauges,
             chargers: charger_gauges,
@@ -516,25 +523,28 @@ pub(crate) mod tests {
         assert_eq!(chassis.bios.as_deref(), Some("1.07"));
     }
 
-    /// Serial numbers, hardware addresses, UUIDs and the like are in the
-    /// tree beside what is read, and none of them reaches the inventory or
-    /// a sample of it.
-    #[test]
-    fn no_identifier_is_ever_read() {
-        let fake = laptop();
-        let secrets = [
-            "SERIAL-DMI-0001",
-            "UUID-0000-1111",
-            "SERIAL-NVME-0002",
-            "EUI-0003",
-            "NQN-SERIAL-0004",
-            "02:00:5e:10:20:30",
-            "02:00:5e:40:50:60",
-            "SERIAL-BAT-0005",
-            "SERIAL-USB-0006",
-            "MACHINE-HOSTNAME",
-            "SERIAL-EDID-0007",
-        ];
+    /// What identifies a machine or its owner, planted in a tree by
+    /// [`plant`]; the EDID's serial number and serial string are in its
+    /// displays' EDIDs already.
+    pub const IDENTIFIERS: [&str; 12] = [
+        "SERIAL-DMI-0001",
+        "UUID-0000-1111",
+        "SERIAL-NVME-0002",
+        "EUI-0003",
+        "NQN-SERIAL-0004",
+        "02:00:5e:10:20:30",
+        "02:00:5e:40:50:60",
+        "SERIAL-BAT-0005",
+        "SERIAL-USB-0006",
+        "MACHINE-HOSTNAME",
+        "SN-7Y2K4Q9",
+        "1234567890",
+    ];
+
+    /// Writes [`IDENTIFIERS`] into `fake` where a machine keeps them, beside
+    /// what the inventory reads.
+    pub fn plant(fake: &Fake) {
+        let secrets = IDENTIFIERS;
 
         fake.file("sys/class/dmi/id/product_serial", secrets[0])
             .file("sys/class/dmi/id/board_serial", secrets[0])
@@ -576,23 +586,31 @@ pub(crate) mod tests {
             .file("proc/sys/kernel/hostname", secrets[9])
             .file("etc/hostname", secrets[9]);
 
-        let machine = fake.read();
-        let seen = format!("{machine:?}\n{:?}", machine.sample(0.0));
-
-        assert!(!machine.drives.is_empty() && !machine.interfaces.is_empty());
-        for secret in secrets {
-            assert!(!seen.contains(secret), "{secret} was read");
-        }
-
-        // The EDID's serial number and its serial string are in the file,
-        // and are skipped.
+        // The monitor's EDID carries both of its serial numbers.
         let edid = std::fs::read(
             fake.root()
                 .join("sys/devices/pci0000:00/0000:00:02.0/drm/card0/card0-DP-1/edid"),
         )
         .unwrap();
         assert!(edid.windows(4).any(|w| w == b"SN-7"));
-        assert!(!seen.contains("SN-7") && !seen.contains("1234567890"));
+        assert_eq!(edid[12..16], 1_234_567_890u32.to_le_bytes());
+    }
+
+    /// Serial numbers, hardware addresses, UUIDs and the like are in the
+    /// tree beside what is read, and none of them reaches the inventory or
+    /// a sample of it (the sheets' test checks none reaches a sheet).
+    #[test]
+    fn no_identifier_is_ever_read() {
+        let fake = laptop();
+        plant(&fake);
+
+        let machine = fake.read();
+        let seen = format!("{machine:?}\n{:?}", machine.sample(0.0));
+
+        assert!(!machine.drives.is_empty() && !machine.interfaces.is_empty());
+        for secret in IDENTIFIERS {
+            assert!(!seen.contains(secret), "{secret} was read");
+        }
     }
 
     #[test]

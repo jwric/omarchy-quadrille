@@ -4,8 +4,10 @@
 //! The inventory says what is measured ([`Sensor`]); a [`Sampler`] says
 //! what it reads. On the machine a background thread reads every source
 //! once a second into a [`Snapshot`] that frames take as it stands, so a
-//! slow sysfs read (an NVMe drive's temperature is a command to the drive)
-//! never holds a frame up. The fixture's snapshot is a function of time.
+//! slow sysfs read never holds a frame up. A drive's temperature is a
+//! command to the drive, which can keep it from its deepest sleep or, a
+//! hard disk's, from spinning down: those are read once a minute, and not
+//! before the first frame. The fixture's snapshot is a function of time.
 use std::fs::File;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
@@ -72,6 +74,14 @@ pub struct Snapshot {
     pub interfaces: Vec<Option<Traffic>>,
 }
 
+impl Sensor {
+    /// Whether reading it costs a command to a drive: it is read once a
+    /// minute.
+    pub(super) fn slow(&self) -> bool {
+        SLOW_CHIPS.contains(&self.chip.as_str())
+    }
+}
+
 impl Snapshot {
     /// Sensor `index`'s value.
     pub fn sensor(&self, index: usize) -> Option<f32> {
@@ -101,6 +111,9 @@ pub(super) struct Hwmon {
     pub sources: Vec<(String, f64)>,
     pub modules: Vec<Module>,
 }
+
+/// The chips whose every read is a command to a drive.
+const SLOW_CHIPS: [&str; 2] = ["drivetemp", "nvme"];
 
 /// The chips that measure the processor, and memory modules.
 const PROCESSOR_CHIPS: [&str; 4] = ["coretemp", "k10temp", "zenpower", "cpu_thermal"];
@@ -242,10 +255,19 @@ fn site(chip: &str, path: &[PciAddress], pci: &[PciDevice]) -> Site {
     }
 }
 
+/// A sensor's open value file.
+pub(super) struct Channel {
+    pub file: File,
+    /// What its values are divided by to be in its kind's unit.
+    pub per_unit: f64,
+    /// Whether it is read only now and then ([`Sensor::slow`]).
+    pub slow: bool,
+}
+
 /// The open files the live values are read from, in the order of the
 /// machine's lists.
 pub(super) struct Gauges {
-    pub sensors: Vec<Option<(File, f64)>>,
+    pub sensors: Vec<Option<Channel>>,
     pub batteries: Vec<power::Gauge>,
     pub chargers: Vec<Option<File>>,
     /// Each drive's `stat`.
@@ -263,8 +285,13 @@ pub(super) struct Counters {
 
 impl Gauges {
     /// Reads every source, and the I/O rates since `before` when there was
-    /// one.
-    pub(super) fn sample(&self, before: Option<(&Counters, Duration)>) -> (Snapshot, Counters) {
+    /// one; the slow sensors too unless their values are `held` from an
+    /// earlier snapshot.
+    pub(super) fn sample(
+        &self,
+        before: Option<(&Counters, Duration)>,
+        held: Option<&Snapshot>,
+    ) -> (Snapshot, Counters) {
         let number = |file: &File| reread(file)?.parse::<f64>().ok();
         let counters = Counters {
             drives: self
@@ -308,9 +335,14 @@ impl Gauges {
             sensors: self
                 .sensors
                 .iter()
-                .map(|source| {
-                    let (file, per_unit) = source.as_ref()?;
-                    Some((number(file)? / per_unit) as f32)
+                .enumerate()
+                .map(|(index, channel)| {
+                    let channel = channel.as_ref()?;
+
+                    match held {
+                        Some(held) if channel.slow => held.sensor(index),
+                        _ => Some((number(&channel.file)? / channel.per_unit) as f32),
+                    }
                 })
                 .collect(),
             batteries: self.batteries.iter().map(power::Gauge::read).collect(),
@@ -353,8 +385,9 @@ pub(super) fn reread(file: &File) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// How often the machine is sampled.
+/// How often the machine is sampled, and its slow sensors.
 const PERIOD: Duration = Duration::from_secs(1);
+const SLOW_PERIOD: Duration = Duration::from_secs(60);
 
 /// Where a machine's live values come from.
 #[derive(Clone)]
@@ -376,10 +409,11 @@ struct Shared {
 }
 
 impl Sampler {
-    /// Samples `gauges` once now, and then once a second from the first
-    /// time it is asked, for as long as anything holds it.
+    /// Samples `gauges` once now but for the slow sensors, and then once a
+    /// second from the first time it is asked, for as long as anything
+    /// holds it.
     pub(super) fn live(gauges: Gauges) -> Self {
-        let (snapshot, counters) = gauges.sample(None);
+        let (snapshot, counters) = gauges.sample(None, Some(&Snapshot::default()));
 
         Self(Source::Live(Arc::new(Shared {
             latest: Mutex::new(Arc::new(snapshot)),
@@ -429,19 +463,33 @@ impl std::fmt::Debug for Sampler {
     }
 }
 
-/// Samples once a second until nothing holds the sampler.
+/// Samples once a second until nothing holds the sampler, the slow sensors
+/// the first time and once a minute after.
 fn keep_sampling(
     shared: Weak<Shared>,
     (gauges, mut counters, mut then): (Gauges, Counters, Instant),
 ) {
+    let mut slow: Option<Instant> = None;
+
     loop {
         std::thread::sleep(PERIOD);
 
-        let now = Instant::now();
-        let (snapshot, next) = gauges.sample(Some((&counters, now - then)));
         let Some(shared) = shared.upgrade() else {
             return;
         };
+        let now = Instant::now();
+        let latest = shared
+            .latest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let due = slow.is_none_or(|read| now - read >= SLOW_PERIOD);
+        let (snapshot, next) =
+            gauges.sample(Some((&counters, now - then)), (!due).then_some(&*latest));
+
+        if due {
+            slow = Some(now);
+        }
 
         *shared.latest.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(snapshot);
         (counters, then) = (next, now);
@@ -507,7 +555,7 @@ mod tests {
     fn rates_are_what_the_counters_moved_over_the_time_between() {
         let fake = laptop();
         let (_, gauges) = super::super::Machine::inventory(fake.root(), &Default::default());
-        let (first, counters) = gauges.sample(None);
+        let (first, counters) = gauges.sample(None, None);
 
         assert_eq!(first.drives, [None]);
         assert_eq!(first.interfaces, [None, None]);
@@ -518,7 +566,7 @@ mod tests {
             .file(rx, "3000000\n")
             .file("sys/class/hwmon/hwmon1/temp1_input", "61500\n");
 
-        let (second, _) = gauges.sample(Some((&counters, Duration::from_secs(2))));
+        let (second, _) = gauges.sample(Some((&counters, Duration::from_secs(2))), None);
 
         assert_eq!(second.sensor(1), Some(61.5));
         assert_eq!(
@@ -555,6 +603,30 @@ mod tests {
         }
 
         assert!(machine.sample(0.0).drives[0].is_some());
+    }
+
+    /// A drive's temperature is not read before the first frame, and
+    /// when it is read, its value is held between reads.
+    #[test]
+    fn a_drives_temperature_is_read_now_and_then() {
+        let fake = laptop();
+        let nvme = "sys/class/hwmon/hwmon2/temp1_input";
+
+        assert!(fake.read().sensors[2].slow());
+        assert_eq!(fake.read().sample(0.0).sensor(2), None);
+
+        let (_, gauges) = super::super::Machine::inventory(fake.root(), &Default::default());
+        let (read, _) = gauges.sample(None, None);
+
+        fake.file(nvme, "50000\n")
+            .file("sys/class/hwmon/hwmon1/temp1_input", "61000\n");
+
+        let (held, _) = gauges.sample(None, Some(&read));
+        let (again, _) = gauges.sample(None, None);
+
+        assert_eq!(read.sensor(2), Some(41.85));
+        assert_eq!((held.sensor(1), held.sensor(2)), (Some(61.0), Some(41.85)));
+        assert_eq!(again.sensor(2), Some(50.0));
     }
 
     #[test]

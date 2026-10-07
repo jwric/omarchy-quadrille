@@ -16,12 +16,16 @@ use super::{SPEC_ROOM, counted, fit, lettered};
 /// The room the drawing leaves round and between the displays, in units of
 /// the row's length over `UNIT`: room for the dimensions and their values.
 const UNIT: f32 = 36.0;
-/// A dimension line's distance from what it measures...
+/// A width's dimension line's distance from what it measures, and a
+/// height's: its value is lettered across its line, and clears the edge it
+/// measures at the scales the sheet draws the row at...
 const OFFSET: f32 = 1.0;
-/// ...the gap between two displays, which holds the height of the second...
-const GAP: f32 = 3.5;
+const HEIGHT: f32 = 2.5;
+/// ...the gap between two displays, which holds the height of the second
+/// clear of the first...
+const GAP: f32 = 5.0;
 /// ...and the margins round the row.
-const LEFT: f32 = 3.0;
+const LEFT: f32 = 4.5;
 const RIGHT: f32 = 1.0;
 const BELOW: f32 = 2.0;
 const ABOVE: f32 = 1.0;
@@ -210,16 +214,8 @@ impl Displays {
             d.arrow(middle, low, Line::Thin);
         });
 
-        let pixels = screen.panel.pixels;
-
-        d.label(middle, screen.inches()).tone(Tone::Ink);
-        d.label(middle, format!("{} × {}", pixels.0, pixels.1))
-            .nudge(0, 12);
-        d.label(middle, screen.connector.name.as_str())
-            .nudge(0, -12);
-
         d.dim_h(low, v(high.x, low.y), -OFFSET * self.room);
-        d.dim_v(low, v(low.x, high.y), -OFFSET * self.room);
+        d.dim_v(low, v(low.x, high.y), -HEIGHT * self.room);
     }
 
     /// What the detail of `screen` shows: its corner, the frame beyond it,
@@ -282,6 +278,20 @@ impl Displays {
                 }
             });
         });
+    }
+
+    /// What is lettered at a display's centre: its connector, diagonal and
+    /// resolution. Drawn with what moves, after the scan line, so the line
+    /// passes behind it.
+    fn lettering(&self, d: &mut Draft, screen: &Screen) {
+        let middle = screen.area.centre();
+        let pixels = screen.panel.pixels;
+
+        d.label(middle, screen.inches()).tone(Tone::Ink);
+        d.label(middle, format!("{} × {}", pixels.0, pixels.1))
+            .nudge(0, 12);
+        d.label(middle, screen.connector.name.as_str())
+            .nudge(0, -12);
     }
 
     /// The scan line of `screen` at `t`: down the display at its refresh
@@ -416,7 +426,12 @@ impl Subject for Displays {
         for (index, screen) in self.screens.iter().enumerate() {
             d.part(index, |d| self.screen(d, screen));
             self.corner(d, index, screen);
-            d.moving(|d| d.part(index, |d| self.scan(d, screen, t)));
+            d.moving(|d| {
+                d.part(index, |d| {
+                    self.scan(d, screen, t);
+                    self.lettering(d, screen);
+                });
+            });
         }
 
         for (index, screen) in self.screens.iter().enumerate() {

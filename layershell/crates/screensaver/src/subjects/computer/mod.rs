@@ -178,17 +178,46 @@ fn rate(bytes: f32) -> String {
     format!("{megabytes:5.1} MB/s")
 }
 
-/// A name from the inventory as a sheet letters it: in capitals, without
-/// trademark signs, its spaces single.
+/// Terms a sheet letters in their own case wherever they are, from the
+/// inventory or not.
+const TERMS: [(&str, &str); 2] = [("PCIE", "PCIe"), ("NVME", "NVMe")];
+
+/// A name from the inventory as a sheet letters it: in capitals but for
+/// [`TERMS`], without trademark signs, its spaces single.
 fn lettered(name: &str) -> String {
     let name = ["(R)", "(r)", "(TM)", "(tm)", "®", "™"]
         .iter()
         .fold(name.to_owned(), |name, mark| name.replace(mark, ""));
-
-    name.split_whitespace()
+    let name = name
+        .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .to_uppercase()
+        .to_uppercase();
+
+    TERMS
+        .iter()
+        .fold(name, |name, (capitals, term)| cased(&name, capitals, term))
+}
+
+/// `text` with every `capitals` that is a word of its own (not a part of
+/// a longer one) written `term`.
+fn cased(text: &str, capitals: &str, term: &str) -> String {
+    let mut cased = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while let Some(at) = rest.find(capitals) {
+        let after = &rest[at + capitals.len()..];
+        let before = rest[..at].chars().last().or(cased.chars().last());
+        let alone = !before.is_some_and(char::is_alphanumeric)
+            && !after.chars().next().is_some_and(char::is_alphanumeric);
+
+        cased.push_str(&rest[..at]);
+        cased.push_str(if alone { term } else { capitals });
+        rest = after;
+    }
+
+    cased.push_str(rest);
+    cased
 }
 
 /// `n` of something, singular or plural: `1 DRIVE`, `2 DRIVES`.
@@ -238,6 +267,11 @@ mod tests {
             lettered("13th Gen  Intel(R) Core(TM) i7"),
             "13TH GEN INTEL CORE I7"
         );
+        assert_eq!(
+            lettered("NVMe SSD Controller, PCIe 4.0 (PCIE-X)"),
+            "NVMe SSD CONTROLLER, PCIe 4.0 (PCIe-X)"
+        );
+        assert_eq!(lettered("NVMEXPRESS PCIE4"), "NVMEXPRESS PCIE4");
         assert_eq!(fit("GIGABIT ETHERNET CONTROLLER", 12), "GIGABIT ETH…");
         assert_eq!(fit("WI-FI", 12), "WI-FI");
     }
@@ -245,5 +279,35 @@ mod tests {
     #[test]
     fn the_fixture_has_every_sheet() {
         assert_eq!(sheets(&Machine::fixture()).len(), 3);
+    }
+
+    /// A machine's serial numbers, addresses and names are in its tree
+    /// beside what is read, and none of them is lettered on a sheet: not in
+    /// what is drawn as a sheet runs, its card or its readings.
+    #[test]
+    fn no_identifier_reaches_a_sheet() {
+        use crate::machine::tests::{IDENTIFIERS, laptop, plant};
+
+        let fake = laptop();
+        plant(&fake);
+
+        let machine = fake.read();
+        let sheets = sheets(&machine);
+
+        assert_eq!(sheets.len(), 3);
+
+        for sheet in &sheets {
+            let mut seen = format!("{:?}", sheet.card());
+
+            for t in [0.0, 11.5, 17.0, 24.0, 31.0, 38.0, 45.0, 52.0, 59.0, 66.0] {
+                let mut draft = Draft::new();
+                sheet.draw(&mut draft, t);
+                seen += &format!("{:?}{:?}", draft.marks(), sheet.readings(t));
+            }
+
+            for secret in IDENTIFIERS {
+                assert!(!seen.contains(secret), "{secret} is on {}", sheet.name());
+            }
+        }
     }
 }

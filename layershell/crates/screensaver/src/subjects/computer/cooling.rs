@@ -73,6 +73,8 @@ const CELL: f32 = 44.0;
 /// a tube for its temperature.
 const DETAIL_TITLE: f32 = 7.0;
 const DETAIL_VALUE: f32 = 20.0;
+/// Between a detail's circle and the bulbs and name it encloses.
+const CLEAR: f32 = 5.0;
 
 /// Between blocks across and down.
 const ACROSS: f32 = 14.0;
@@ -227,7 +229,8 @@ impl Source {
 
     /// The circle a detail of it magnifies: its gauges and the lettering a
     /// detail adds round them, as a detail at twice the view's scale or
-    /// more has room for.
+    /// more has room for, with room to spare left of its bulbs, where its
+    /// name starts.
     fn ring(&self) -> (V2, f32) {
         let first = self.gauge(0);
         let last = match self.cores.len() {
@@ -236,7 +239,7 @@ impl Source {
         };
         let top = first.y + DETAIL_TITLE + 3.0;
         let (left, right) = (
-            first.x - BULB_RADIUS,
+            first.x - BULB_RADIUS - CLEAR,
             first.x + BULB_RADIUS + TUBE + DETAIL_VALUE,
         );
 
@@ -879,11 +882,18 @@ impl Cooling {
             ChassisKind::Desktop | ChassisKind::Server => Rotor::Axial,
             _ => Rotor::Blower,
         };
-        let listed = machine.fans().count();
-        let fans: Vec<Fan> = machine
-            .fans()
+        // The fans turning when the machine was first read are drawn before
+        // those that were not: a desktop's monitor lists every header on the
+        // board, the empty ones first as often as not.
+        let first = machine.sample(0.0);
+        let mut listed: Vec<(usize, &Sensor)> = machine.fans().collect();
+
+        listed.sort_by_key(|&(sensor, _)| rpm(&first, sensor) <= 0.0);
+
+        let fans: Vec<Fan> = listed
+            .iter()
             .take(MOST_FANS)
-            .map(|(sensor, about)| Fan {
+            .map(|&(sensor, about)| Fan {
                 sensor,
                 label: about.label.clone(),
                 chip: about.chip.clone(),
@@ -912,15 +922,15 @@ impl Cooling {
             notes.push("NO FAN MEASURED: NONE TURNS".into());
         } else {
             notes.push(format!("ROTORS SLOWED {SLOWED} TIMES"));
-            notes.push("PHANTOM: NOT SEEN TURNING".into());
+            notes.push("PHANTOM FANS: NOT SEEN TURNING".into());
         }
 
         notes.push(format!("THERMOMETERS {COLDEST} TO {HOTTEST} °C"));
 
-        if listed > fans.len() {
+        if listed.len() > fans.len() {
             notes.push(format!(
                 "{} MORE NOT SHOWN",
-                counted(listed - fans.len(), "FAN", "FANS")
+                counted(listed.len() - fans.len(), "FAN", "FANS")
             ));
         }
 
@@ -1542,8 +1552,13 @@ impl Cooling {
                         spec.extend(rows("SENSOR", &called(&machine.sensors[gauge])));
                     }
 
+                    // Every sensor but the package's is a core's, drawn
+                    // or not.
                     if !source.cores.is_empty() {
-                        spec.push(("CORES".into(), format!("{} MEASURED", source.cores.len())));
+                        spec.push((
+                            "CORES".into(),
+                            format!("{} MEASURED", source.sensors.len() - 1),
+                        ));
                     }
                 }
 
@@ -1619,7 +1634,8 @@ impl Cooling {
             }
             Item::Sources(Kind::Memory) => {
                 let memory = machine.memory.as_ref();
-                let modules = sources.iter().map(|s| s.gauges.len()).sum::<usize>();
+                // The modules there are, not the thermometers drawn.
+                let modules = memory.map_or(0, |memory| memory.modules.len());
                 let installed = memory.and_then(|memory| memory.installed()).map(binary);
                 let generation = memory
                     .and_then(|memory| memory.modules.first()?.generation.clone())
@@ -2027,6 +2043,92 @@ mod tests {
 
         assert_eq!(housings, [Line::Outline, Line::Outline, Line::Phantom]);
         assert!(!cooling.readings(3.0).iter().any(|r| r.name == "FAN 3"));
+    }
+
+    /// A monitor that lists its empty headers before the fans on it: the
+    /// fans turning are drawn, and the empty headers are the ones left out.
+    #[test]
+    fn the_fans_turning_are_drawn_before_empty_headers() {
+        let fake = crate::machine::tests::laptop();
+        let ec = "sys/class/hwmon/hwmon5";
+
+        for (fan, rpm) in [(1, 0), (2, 0), (3, 0), (4, 0), (5, 1200), (6, 900)] {
+            fake.file(&format!("{ec}/fan{fan}_input"), format!("{rpm}\n"));
+        }
+
+        let machine = fake.read();
+        let cooling = Cooling::new(&machine).unwrap();
+        let labels: Vec<Option<&str>> = cooling
+            .fans
+            .iter()
+            .map(|fan| machine.sensors[fan.sensor].label.as_deref())
+            .collect();
+
+        assert_eq!(labels, [None, None, Some("CPU Fan"), Some("System Fan")]);
+        assert_eq!(rpm(&machine.sample(0.0), cooling.fans[0].sensor), 1200.0);
+        assert!(
+            cooling
+                .card()
+                .notes
+                .contains(&"2 FANS MORE NOT SHOWN".into())
+        );
+
+        let readings: Vec<String> = cooling
+            .readings(1.0)
+            .iter()
+            .map(|reading| format!("{} {}", reading.name, reading.value))
+            .collect();
+
+        assert!(readings.contains(&"FAN 1 1200 rpm".into()), "{readings:?}");
+    }
+
+    /// Counts in the parts list are of what the machine has, not of what
+    /// the sheet has room to draw.
+    #[test]
+    fn counts_are_of_what_is_measured() {
+        let mut machine = Machine::fixture();
+        let package = machine.sensors[1].clone();
+        let module = machine.sensors[3].clone();
+
+        for core in 0..60 {
+            machine.sensors.push(Sensor {
+                label: Some(format!("Core {core}")),
+                ..package.clone()
+            });
+        }
+
+        for n in 2..8 {
+            machine.sensors.push(Sensor {
+                site: Site::Module(n),
+                ..module.clone()
+            });
+        }
+
+        let memory = machine.memory.as_mut().unwrap();
+        let first = memory.modules[0].clone();
+        memory.modules.resize(8, first);
+
+        let cooling = Cooling::new(&machine).unwrap();
+        let card = cooling.card();
+        let spec = |part: &str, row: &str| {
+            card.parts
+                .iter()
+                .find(|p| p.name == part)
+                .and_then(|p| p.spec.iter().find(|(name, _)| name == row))
+                .map(|(_, value)| value.clone())
+        };
+
+        assert_eq!(cooling.sources[0].cores.len(), MOST_CORES);
+        assert_eq!(spec("CPU", "CORES").as_deref(), Some("60 MEASURED"));
+        assert_eq!(spec("MEMORY", "MODULES").as_deref(), Some("8 × DDR5"));
+        assert_eq!(
+            card.parts
+                .iter()
+                .find(|p| p.name == "MEMORY")
+                .unwrap()
+                .quantity,
+            8
+        );
     }
 
     /// Four fans, two a side, leave room for one column between them: what

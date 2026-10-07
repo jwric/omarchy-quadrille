@@ -12,8 +12,8 @@
 //! whole number of pixels at any scale, so a block is made wide enough for
 //! its lettering at the laptop's scale, the smallest the sheet draws the
 //! diagram at, and [`Diagram::new`] folds a large tree (open connectors left
-//! out, the last devices on a busy hub counted rather than drawn) until it
-//! fits the laptop's view at that scale or larger.
+//! out, the last devices on a busy hub or controller counted rather than
+//! drawn) until it fits the laptop's view at that scale or larger.
 use quadrille::draw::{Anchor, Horizontal, Vertical};
 
 use crate::draft::raster::LETTERING;
@@ -332,8 +332,17 @@ fn graphics(machine: &Machine, device: &PciDevice) -> Node {
         .map(|(index, connector)| match &connector.panel {
             Some(panel) => {
                 let internal = connector.kind == ConnectorKind::Internal;
-                let inches = format!("{:.1}\"", panel.inches());
                 let pixels = format!("{} × {}", panel.pixels.0, panel.pixels.1);
+                // A size guessed from the pixels alone is not lettered as
+                // if it were measured.
+                let (inches, pitch) = if panel.size.estimated {
+                    ("SIZE UNKNOWN".to_owned(), String::new())
+                } else {
+                    (
+                        format!("{:.1}\"", panel.inches()),
+                        format!("PITCH {:.3} mm", panel.pitch_mm()),
+                    )
+                };
                 let name = match (&panel.name, internal) {
                     (_, true) => "BUILT-IN PANEL".to_owned(),
                     (Some(name), false) => fit(&lettered(name), DETAIL_ROOM),
@@ -356,7 +365,7 @@ fn graphics(machine: &Machine, device: &PciDevice) -> Node {
                         name,
                         format!("{inches} {pixels}"),
                         refresh,
-                        format!("PITCH {:.3} mm", panel.pitch_mm()),
+                        pitch,
                     ])
                 }
             }
@@ -438,13 +447,21 @@ fn drive(index: usize, drive: &Drive) -> Node {
     }
 }
 
-/// A drive's controller: an NVMe drive is its own, and one block with it.
+/// A drive's controller: an NVMe drive is its own, and one block with it,
+/// its detail closing on the controller's address rather than the drive's
+/// name.
 fn storage(device: &PciDevice, drives: &[(usize, &Drive)]) -> Node {
     if let [(index, only)] = drives
         && only.kind == DriveKind::Nvme
     {
         let mut node = drive(*index, only);
-        node.more[3] = bound(device);
+
+        // The detail's lines are fewer when nothing on the drive is
+        // mounted, so the last is found, not counted to.
+        if let Some(last) = node.more.last_mut() {
+            *last = bound(device);
+        }
+
         return node;
     }
 
@@ -729,15 +746,16 @@ fn walk(nodes: &mut [Node], column: usize, visit: &mut impl FnMut(&mut Node, usi
     }
 }
 
-/// The way down `nodes` to the USB host or hub with the most devices on it,
-/// three or more, and how many.
+/// The way down `nodes` to the block with the most blocks hanging off it,
+/// three or more, and how many: a USB host or hub, a controller with its
+/// drives. What is behind a bridge is the bridge's to show.
 fn busiest(nodes: &[Node], path: &mut Vec<usize>, best: &mut Option<(usize, Vec<usize>)>) {
     for (index, node) in nodes.iter().enumerate() {
         path.push(index);
 
         let many = node.children.len();
 
-        if node.group == Group::Usb
+        if node.form == Form::Block
             && many >= 3
             && best.as_ref().is_none_or(|(most, _)| many > *most)
         {
@@ -778,8 +796,8 @@ fn fold(tree: &mut [Node], wide: bool) -> bool {
         return true;
     }
 
-    // ...then the last two devices on the busiest USB host or hub counted
-    // in one block.
+    // ...then the last two devices on the busiest block counted in one,
+    // which carries no traffic of its own.
     let mut best = None;
     busiest(tree, &mut Vec::new(), &mut best);
 
@@ -799,16 +817,21 @@ fn fold(tree: &mut [Node], wide: bool) -> bool {
     let last = node.children.pop().expect("Three or more");
     let before = node.children.pop().expect("Three or more");
     let count = counted_in(&last) + counted_in(&before);
+    let (one, many) = match before.group {
+        Group::Drive => ("MORE DRIVE", "MORE DRIVES"),
+        Group::Display => ("MORE DISPLAY", "MORE DISPLAYS"),
+        _ => ("MORE DEVICE", "MORE DEVICES"),
+    };
 
     node.children.push(Node {
         count,
         ..Node::new(
-            Group::Usb,
+            before.group,
             Form::Block,
             Source::Summary,
             vec![format!("+{count} MORE")],
         )
-        .more(vec![counted(count, "MORE DEVICE", "MORE DEVICES")])
+        .more(vec![counted(count, one, many)])
     });
 
     true
@@ -1324,11 +1347,14 @@ fn package(cpu: &Cpu) -> (V2, impl Fn(V2, f32) -> Package) {
         .iter()
         .map(|&(kind, n)| row_width(kind, n))
         .fold(0.0, f32::max);
+    // Every row of cores as far from the next, of whichever kind: the die
+    // kept short, for the laptop's detail window to hold its cores and
+    // cache at twice the view's scale.
     let cores_height: f32 = kinds
         .iter()
         .map(|&(kind, n)| rows(n) * (size(kind) + 2.0) - 2.0)
         .sum::<f32>()
-        + 4.0 * (kinds.len() as f32 - 1.0);
+        + 2.0 * (kinds.len() as f32 - 1.0);
     let cache = cpu
         .caches
         .iter()
@@ -1340,7 +1366,7 @@ fn package(cpu: &Cpu) -> (V2, impl Fn(V2, f32) -> Package) {
                 binary(cache.bytes * u64::from(cache.instances))
             )
         });
-    let band = if cache.is_some() { 4.0 + 14.0 } else { 0.0 };
+    let band = if cache.is_some() { 2.0 + 14.0 } else { 0.0 };
     let width = (cores_width + 16.0).max(96.0).ceil();
     let height = (18.0 + 4.0 + cores_height + band + 4.0 + 4.0).ceil();
 
@@ -1373,8 +1399,6 @@ fn package(cpu: &Cpu) -> (V2, impl Fn(V2, f32) -> Package) {
 
                 y -= side + 2.0;
             }
-
-            y -= 2.0;
         }
 
         let cache = cache.clone().map(|text| {
@@ -1637,6 +1661,74 @@ mod tests {
         );
         assert_eq!(diagram.routes.len(), 5);
         assert_apart(&diagram);
+    }
+
+    /// A controller with more drives than the laptop's view holds: its
+    /// last drives are counted in a block of their own, with no traffic.
+    #[test]
+    fn a_controller_with_many_drives_is_folded_to_fit() {
+        let mut machine = Machine::fixture();
+        let sata = PciAddress::new(0, 0, 0x17, 0);
+        let mut device = machine.pci[0].clone();
+
+        device.address = sata;
+        device.class = 0x010601;
+        machine.pci.push(device);
+
+        for n in 0..16 {
+            let mut drive = machine.drives[0].clone();
+
+            drive.name = format!("sd{}", char::from(b'a' + n));
+            drive.kind = DriveKind::Sata;
+            drive.rotational = true;
+            drive.pci = Some(sata);
+            machine.drives.push(drive);
+        }
+
+        let diagram = Diagram::new(&machine).unwrap();
+        let size = v(diagram.extent.width(), diagram.extent.height());
+        let summary = diagram
+            .blocks
+            .iter()
+            .find(|block| block.source == Source::Summary)
+            .expect("The drives counted");
+        let drawn = diagram
+            .blocks
+            .iter()
+            .filter(|block| matches!(block.source, Source::Drive(_)))
+            .count();
+
+        assert!(size.x <= BUDGET.x && size.y <= BUDGET.y, "{size}");
+        assert_eq!(summary.group, Group::Drive);
+        assert_eq!(
+            summary.lines,
+            [format!("+{} MORE", 17 - drawn)],
+            "{drawn} drawn"
+        );
+        // The NVMe drive's route, and those of the SATA drives drawn.
+        assert_eq!(diagram.routes.len(), drawn + 2);
+        assert_apart(&diagram);
+    }
+
+    /// An NVMe drive with nothing on it mounted (a second system's, a
+    /// spare) has a line fewer in its detail, and is drawn all the same.
+    #[test]
+    fn a_drive_with_nothing_mounted_is_drawn() {
+        let mut machine = Machine::fixture();
+
+        for partition in &mut machine.drives[0].partitions {
+            partition.filesystem = None;
+        }
+
+        let diagram = Diagram::new(&machine).unwrap();
+        let drive = diagram
+            .blocks
+            .iter()
+            .find(|block| block.source == Source::Drive(0))
+            .expect("The drive");
+
+        assert_eq!(drive.more.len(), 3);
+        assert!(drive.more[2].starts_with("PCI 01:00.0"), "{:?}", drive.more);
     }
 
     #[test]

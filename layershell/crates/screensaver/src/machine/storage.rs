@@ -57,6 +57,9 @@ pub(super) fn drives(tree: &Tree) -> Vec<(Drive, Option<File>)> {
         .into_iter()
         // Hardware has a device; loop, zram and the device mapper do not.
         .filter(|name| tree.exists(format!("sys/block/{name}/device")))
+        // An eMMC chip's boot and replay-protected areas are parts of it,
+        // not drives of their own.
+        .filter(|name| !emmc_area(name))
         .filter_map(|name| {
             let at = |file: &str| format!("sys/block/{name}/{file}");
             let bytes = tree.number::<u64>(at("size"))? * SECTOR;
@@ -81,7 +84,7 @@ pub(super) fn drives(tree: &Tree) -> Vec<(Drive, Option<File>)> {
                 .into_iter()
                 .filter_map(|part| {
                     let at = |file: &str| format!("sys/block/{name}/{part}/{file}");
-                    let holders = tree.entries(at("holders"));
+                    let holders = stacked(tree, &at("holders"));
 
                     Some(Partition {
                         number: tree.number(at("partition"))?,
@@ -110,6 +113,40 @@ pub(super) fn drives(tree: &Tree) -> Vec<(Drive, Option<File>)> {
             Some((drive, tree.open(at("stat"))))
         })
         .collect()
+}
+
+/// Whether a block device is an eMMC chip's boot area (`mmcblk0boot0`) or
+/// its replay-protected one (`mmcblk0rpmb`).
+fn emmc_area(name: &str) -> bool {
+    name.strip_prefix("mmcblk").is_some_and(|rest| {
+        let area = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+
+        area != rest
+            && (area == "rpmb"
+                || area
+                    .strip_prefix("boot")
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
+    })
+}
+
+/// The devices stacked on a partition, from its `holders`, nearest first:
+/// an encrypted volume on it, then the logical volumes on that, and so on.
+fn stacked(tree: &Tree, holders: &str) -> Vec<String> {
+    let mut stacked = tree.entries(holders);
+    let mut next = 0;
+
+    // Each device once, so a tree that loops ends.
+    while let Some(device) = stacked.get(next) {
+        for above in tree.entries(format!("sys/block/{device}/holders")) {
+            if !stacked.contains(&above) {
+                stacked.push(above);
+            }
+        }
+
+        next += 1;
+    }
+
+    stacked
 }
 
 /// The type of filesystem on each block device that has one mounted, by
@@ -191,6 +228,51 @@ mod tests {
             );
 
         assert!(fake.read().drives.is_empty());
+    }
+
+    /// Logical volumes on an encrypted partition: the filesystem is two
+    /// devices up from the partition.
+    #[test]
+    fn a_filesystem_on_volumes_on_an_encrypted_partition_is_found() {
+        let fake = laptop();
+        fake.link("sys/devices/virtual/block/dm-0/holders/dm-1", "../../dm-1")
+            .file("sys/devices/virtual/block/dm-1/size", "1000000\n")
+            .link("sys/block/dm-1", "../devices/virtual/block/dm-1")
+            .link("dev/mapper/vg-root", "../dm-1")
+            .file(
+                "proc/mounts",
+                "/dev/mapper/vg-root / ext4 rw,relatime 0 0\n",
+            );
+
+        let system = &fake.read().drives[0].partitions[1];
+
+        assert_eq!(system.filesystem.as_deref(), Some("ext4"));
+        assert!(system.mapped);
+    }
+
+    /// An eMMC chip is one drive: its boot and replay-protected areas,
+    /// which the kernel lists beside it, are not drives.
+    #[test]
+    fn an_emmc_chips_boot_areas_are_not_drives() {
+        let fake = Fake::new();
+        let host = "sys/devices/pci0000:00/0000:00:1a.0/mmc_host/mmc0/mmc0:0001/block";
+
+        for (name, sectors) in [
+            ("mmcblk0", "122142720"),
+            ("mmcblk0boot0", "8192"),
+            ("mmcblk0boot1", "8192"),
+            ("mmcblk0rpmb", "8192"),
+        ] {
+            let dir = format!("{host}/{name}");
+            fake.file(&format!("{dir}/size"), sectors)
+                .dir(&format!("{dir}/device"))
+                .link(&format!("sys/block/{name}"), &format!("../{}", &dir[4..]));
+        }
+
+        let names: Vec<String> = fake.read().drives.into_iter().map(|d| d.name).collect();
+
+        assert_eq!(names, ["mmcblk0"]);
+        assert!(!emmc_area("mmcblk0") && !emmc_area("mmcblk10p1") && !emmc_area("mmcblkboot"));
     }
 
     #[test]
