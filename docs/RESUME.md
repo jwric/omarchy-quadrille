@@ -185,3 +185,35 @@ into `crates/desktop` (shared). iced_layer: a hidden cursor is now applied on
 pointer enter (it was never hidden). `plugins/quadrille.idle` (opt-in,
 `plugins/install.sh idle`) starts it from Omarchy's idle service; it was linted
 (qmllint), not run live: enabling it is the user's call.
+
+### Next for the screensaver
+
+- **Damage fixes in the iced fork** (done locally, not pushed): seven commits on
+  `jwric/iced` `0.15-pixel-scale` (canvas text bounds, stroke reach, drawings
+  compared part by part, lists aligned past an insertion, clip mask rebuilt only
+  when needed, scattered damage repainted in one pass). Waiting on the user's
+  go-ahead to push; then drop the local `[patch]`, `cargo update` the iced git
+  source, rebuild, reinstall `quadrille-bar` and `quadrille-screensaver`.
+- **CAD sheets** (plan approved 2026-10-07): automatic placement of balloons and
+  notes (in progress: `draft/place.rs`), then aligned orthographic views and
+  generated sections, then drawing conventions (tolerances, surface finish,
+  datums, projection symbol, revisions).
+- **"This computer"** (the user's idea, 2026-10-07): a subject drawn from the
+  machine it runs on, so every user's sheets are their own hardware. Sketch:
+  - Inventory, read once at start, no root needed: `/sys/class/dmi/id`
+    (vendor, product, chassis type), `/proc/cpuinfo` and
+    `/sys/devices/system/cpu` (cores, caches, frequencies), `/proc/meminfo`,
+    `/sys/block` (drives, partitions), `/sys/bus/pci` and `/sys/bus/usb`
+    (devices, with `pci.ids`/`usb.ids` names), `/sys/class/drm` and EDID
+    (`crates/desktop` already parses it: every display at its true size),
+    `/sys/class/power_supply` (battery design and current capacity, cycles),
+    `/sys/class/hwmon` (temperatures, fan speeds), `/sys/class/net`.
+  - Sheets: the bus topology as a block diagram (CPU, memory, PCIe, USB tree,
+    storage, GPU and its connectors to the real monitors); the displays drawn
+    to scale side by side; the drives' partition maps; a thermal sheet whose
+    fans turn at their measured rpm, with live temperatures as the readings.
+    Mechanical parts (fans, heatsink, chassis outline by chassis type) as
+    parametric drawings sized from the inventory.
+  - The parts list is the real components and models. Never draw serial
+    numbers, MAC addresses or UUIDs; screenshots for the README come from a
+    fixture inventory, not this machine.
