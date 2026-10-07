@@ -11,7 +11,7 @@ Item {
     { name: "HDMI-A-1", make: "Dell Inc.", model: "DELL U3417W", width: 3440, height: 1440,
       physicalWidth: 800, physicalHeight: 330, x: -952, y: -1440, scale: 1, refreshRate: 59.973 }]
   property int current: parseInt(Quickshell.env("H_CURRENT") || "0", 10)
-  property string composition: Quickshell.env("H_COMPOSITION") || "atlas"
+  property string composition: Quickshell.env("H_COMPOSITION") || "aperture"
   property var overrides: ({})
   Stage {
     implicitWidth: Math.round((root.outputs[root.current].transform % 2 ? root.outputs[root.current].height : root.outputs[root.current].width) / root.outputs[root.current].scale)

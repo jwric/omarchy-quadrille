@@ -83,6 +83,14 @@ and 796.6 × 333.5 mm; these are inferred sizes. A mark rounds to the nearest vp
 half a vpx, conservatively rounded upward; it is not a calibration guarantee.
 Missing EDID uses an explicitly estimated density and `~` labels.
 
+Each output draws its own static test-card plate: a calibrated central Siemens
+star, labelled frequency rings and sampled bursts, the current theme's role
+colours, corner geometry, a 2% safe frame and a true-size ruler. Panel and virtual-
+grid aliasing limits are labelled separately; the last two bursts deliberately
+show lost detail. EDID and inferred sizes are separate from raster tolerance.
+Binary patterns are precomputed into an exact texture on display/theme events;
+the wallpaper does no work between changes. The live cursor overlay is separate.
+
 An optional `~/.config/quadrille/displays.toml` supplies measured dimensions.
 Nothing creates it by default. Replace these example sizes with measurements;
 output names take priority over make/model keys:

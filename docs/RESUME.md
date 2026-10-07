@@ -1,23 +1,16 @@
 # Resuming the work
 
-## Live dimensioning redesign (2026-10-06)
+## Calibrated test-card plate (2026-10-06)
 
-Atlas sheet: hardware active-area elevation, native width hero, true 100 mm
-ruler, sparse registration and separated EDID/raster notes. Three compositions
-were compared offscreen; alternatives and final 72-image matrix are under
-`/tmp/quadrille-redesign-20261006`. Design rationale is in plugins/NOTES.md.
-The 34.1 snap entry is removed; independent anchors pass at 0.5% tolerance.
-
-The Rust overlay rests for 300 ms before showing nearest screen/window CAD
-measurements, all in whole mm. Movement keeps a small bracket reticle and
-releases the dimension surface. Shared glyphs are generated into Rust;
-no runtime QML parsing or compositor `eval` remains. See layershell/NOTES.md.
-The stale-output fix and regression tests from the interrupted work were kept.
-
-Build is only in layershell/target; no new host was installed. A temporary
-diagnostic accidentally quit the installed host; restoration approval is
-pending. The lead installs/restarts the host after review. No push is authorized.
-Report, precise verification outcomes and costs: `/tmp/quadrille-redesign-20261006/last.md`.
+Aperture replaces Atlas: a centred 32-pair Siemens star, calibrated frequency
+rings, flanking bursts, theme-role chart, corner/safe geometry and 1:1 ruler.
+Three distinct compositions and the four-theme case matrix are under
+`/tmp/quadrille-testcard-20261006`; rationale and implementation are in plugins/NOTES.md.
+The exact chart is precomputed in JS into Canvas.Image; the shader is a constant
+field. Physical calibration and the live Rust overlay are unchanged.
+All 96 offscreen renders, isolated GPU QA/QB and both real empty outputs passed.
+No host installation, control, push or history rewriting is authorized.
+The current overlay is live by default (`--overlay-rest-ms`), per layershell/NOTES.md.
 
 Written at a pause (2026-10-05, evening). Read this, then `plugins/NOTES.md` and
 `layershell/NOTES.md` (each has a "Status at pause" section from the agent that

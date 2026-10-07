@@ -1101,30 +1101,42 @@ changes**: give it a count, or a model that is edited in place. If a popup is ev
 
 ## Design
 
-Atlas: two focal points, the real active-area arrangement and this output's native large width readout.
-The frame, reference ruler and separated calibration notes keep the desktop calm and readable.
-Comparator: rejected because its top ruler compresses the elevation; PNGs: `/tmp/quadrille-redesign-20261006/explorations/comparator-*.png`.
-Section: rejected because the right-hand drawing and schedule bunch together; PNGs: `/tmp/quadrille-redesign-20261006/explorations/section-*.png`.
-All three were rendered for both real outputs at scales 1 and 1.666667; final set: `/tmp/quadrille-redesign-20261006/final/atlas-*.png`.
+Aperture is the per-output test-card plate: a central 32-pair Siemens star,
+frequency rings and flanking sampled bursts, a role-colour strip, active-corner
+geometry, a 2% safe frame and a 1:1 ruler. The star's stated whole-mm diameter
+checks aspect; the slanted edge is exactly 1:12 (4.76 degrees). Native large
+bitmap digits give the station index; every other mark uses the small face.
 
-The sheet draws active areas only: no invented bezels or stands. Compositor
-positions become physical offsets through each output's own density. Exposed
-sides carry dimension strings; every panel also has a keyed size in the schedule.
-Text and dimension geometry are checked before drawing. A 100 mm reference
-ruler rounds each mark independently; labels use one consistent 10/20/50 mm
-step chosen for the density, while major ticks stay 10 mm. Registration
-crosses belong only to the current elevation. All colour is a theme role; small
-Departure bitmaps and native `GlyphsBig` digits use the same virtual pixel.
+Three drawing languages were rendered at both scales for both real outputs.
+Aperture wins on hierarchy and negative space. Broadcast uses a dominant role-bar
+field and Bayer ramps, but its small star feels like a badge. Bench uses an
+orthogonal group array, but competing blocks make a busy desktop. Rejected PNGs
+and the five-line rationale: `/tmp/quadrille-testcard-20261006/explorations/`;
+final four-theme matrix: `/tmp/quadrille-testcard-20261006/final/`.
 
-Physical calibration remains an inference; the sheet separates EDID from the
-computed dimensions and states a conservatively rounded *raster* error bound.
-The unsupported 34.1 snap entry is removed. Independent panel anchors and
-nominal-family assertions complement language agreement fixtures.
+A line pair is one ink/void cycle ([target convention](https://www.edmundoptics.com/knowledge-center/application-notes/imaging/testing-and-targets)).
+For 32 pairs, frequency is 32/(2*pi*r) lp/mm. Panel Nyquist is px/mm divided by 2;
+the virtual drawing grid has a lower Nyquist. Both corresponding alias radii
+are marked and named; the last two burst signals are explicitly aliased. A solid
+block is honest lost detail, not a broken shader. All inferred or missing-EDID
+sizes remain labelled; mark quantisation error is separate from calibration.
 
-`python3 plugins/tools/wallpaper.py OUT` renders the 24 output/layout/scale cases
-in TERMINAL, PAPER and PHOSPHOR, checks painted ruler columns and runs crisp.py.
-`--explore` renders all three alternatives; `--nested` runs the actual service
-clone with synthetic EDID under a 55-second live lock. Monitor events, screen
-geometry, layout, scale, transform, theme and override changes drive redraws;
-there is no wallpaper poll. First visible GPU frames have final buffer sizes.
-Live capture uses the existing guarded `popup-shots.sh`, EMPTY_A=7 EMPTY_B=6.
+JS fixed-point determinants precompute binary wedge runs on change events into
+the existing Canvas.Image texture; no shader angle/precision decision can change
+a wedge. The backing size pads to the reduced 1/120-scale numerator, avoiding
+Canvas rounding at 200/120. One RGBA copy is 1.75 MiB (laptop), 4.72 MiB (Dell);
+both uploads enlarge only by that output's whole physical-pixel factor. The
+shader only fills the constant void role. No smoothing, blended tones, extra pixel unit, detail magnification or wallpaper poll. The live overlay,
+physical model, background fallback and Settle first-frame gate are unchanged.
+
+`python3 plugins/tools/wallpaper.py OUT` checks 24 layout/output/scale cases in
+TERMINAL, PAPER, PHOSPHOR and LCD. It checks rendered ruler ticks, independent
+angle samples, measured annular pair counts/pitches, burst cells and crisp.py.
+`--explore` renders the three compositions; `--nested` checks the actual service
+clone and GPU texture upload under the existing short live lock. Live empty-
+workspace capture uses guarded `popup-shots.sh`, EMPTY_A=7 EMPTY_B=6.
+
+Verification: all 96 final renders passed geometry, crispness and numeric checks;
+the GPU clone passed QA/QB with final sizes from the first visible paint and
+855x535 / 1720x720 backing images. Both live outputs were inspected over empty
+workspaces. Live hotplug, rotation, scale and theme changes were not forced.
