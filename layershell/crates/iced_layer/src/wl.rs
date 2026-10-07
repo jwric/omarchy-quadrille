@@ -389,7 +389,10 @@ pub struct Wl {
     pointer_focus: Option<window::Id>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     keyboard_focus: Option<window::Id>,
-    cursor: Option<CursorIcon>,
+    /// The cursor set since the pointer last entered: `None` until one is,
+    /// and `Some(None)` once it is hidden. A pointer that enters a surface has
+    /// no image until the client sets one, so hiding must be said too.
+    cursor: Option<Option<CursorIcon>>,
     pub conn: Connection,
 }
 
@@ -900,11 +903,11 @@ impl Wl {
             return;
         }
 
-        if self.cursor == icon {
+        if self.cursor == Some(icon) {
             return;
         }
 
-        self.cursor = icon;
+        self.cursor = Some(icon);
 
         let Some(pointer) = &self.pointer else {
             return;
