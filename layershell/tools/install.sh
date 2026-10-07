@@ -77,5 +77,5 @@ enable the idle clone (opt-in: it is also what locks the screen):
 
 and, for the menu's Screensaver entry, in ~/.config/omarchy/extensions/omarchy-menu.jsonc:
 
-  "system.screensaver": {"action": "quadrille-screensaver-launch force"},
+  "system.screensaver": {"icon":"󱄄","label":"Screensaver","action":"quadrille-screensaver-launch force"},
 LINES

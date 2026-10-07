@@ -213,10 +213,11 @@ plugins/install.sh idle                   # back to the stock idle service: plug
 The launcher honours Omarchy's screensaver switch, runs the screensaver as
 `org.omarchy.screensaver` (so `omarchy-system-lock` stops it, as it stops the
 stock one) and logs to the journal (`journalctl -t quadrille-screensaver`). For
-the menu's *Screensaver* entry, add to `~/.config/omarchy/extensions/omarchy-menu.jsonc`:
+the menu's *Screensaver* entry, add to `~/.config/omarchy/extensions/omarchy-menu.jsonc`
+(with the icon and label: the menu labels an override without them by its id):
 
 ```jsonc
-"system.screensaver": {"action": "quadrille-screensaver-launch force"},
+"system.screensaver": {"icon":"󱄄","label":"Screensaver","action":"quadrille-screensaver-launch force"},
 ```
 
 A subject is one file in `layershell/crates/screensaver/src/subjects/`: it
