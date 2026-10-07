@@ -2,6 +2,7 @@
 //! surfaces by Snell's law while the field angle sweeps.
 use quadrille::draw::Anchor;
 
+use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Line, Tone, V2, number, v};
 
 use super::{Card, Detail, Domain, Part, Reading, Subject, Unit};
@@ -406,23 +407,23 @@ impl Subject for Optics {
         });
 
         d.part(0, |d| {
-            d.balloon(0, v(1.5, 6.0), (-30, -30));
+            d.balloon(0, v(1.5, 6.0), Auto);
         });
         d.part(1, |d| {
-            d.balloon(1, v(vertex[2] as f32 + 0.4, -4.0), (-18, 52));
+            d.balloon(1, v(vertex[2] as f32 + 0.4, -4.0), Auto);
         });
         d.part(2, |d| {
-            d.balloon(2, v(vertex[4] as f32 + 1.8, 5.5), (14, -42));
+            d.balloon(2, v(vertex[4] as f32 + 1.8, 5.5), Auto);
         });
         d.part(3, |d| {
             d.balloon(
                 3,
                 v(vertex[STOP] as f32 + 1.2, -(stop_radius() as f32 + 3.0)),
-                (26, 40),
+                Auto,
             );
         });
         d.part(4, |d| {
-            d.balloon(4, v(image, 7.0), (20, -24));
+            d.balloon(4, v(image, 7.0), Auto);
         });
 
         d.in_detail(|d| {
