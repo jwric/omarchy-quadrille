@@ -219,7 +219,8 @@ pub enum Shape {
 pub enum Scope {
     /// Geometry: the main view and any detail of it.
     Everywhere,
-    /// What the main view says: its dimensions, notes and balloons.
+    /// What the main view says: its dimensions, notes and balloons, and
+    /// what is drawn for it alone.
     Main,
     /// What only a magnified detail can say legibly.
     Detail,
@@ -294,6 +295,7 @@ pub struct Draft {
     part: Option<usize>,
     moving: bool,
     detail: bool,
+    main: bool,
     view: Option<usize>,
 }
 
@@ -407,6 +409,16 @@ impl Draft {
         self.detail = outer;
     }
 
+    /// Records what `draw` makes for the main view only, never magnified:
+    /// geometry a detail would show a sliver of at great cost, such as an
+    /// edge hundreds of times longer than the detail is wide, which the
+    /// detail draws again as far as it shows it, in [`Self::in_detail`].
+    pub fn in_main(&mut self, draw: impl FnOnce(&mut Self)) {
+        let outer = std::mem::replace(&mut self.main, true);
+        draw(self);
+        self.main = outer;
+    }
+
     fn push(&mut self, ink: Ink, tone: Tone) -> Made<'_> {
         let annotation = matches!(
             ink,
@@ -421,7 +433,7 @@ impl Draft {
         );
         let scope = if self.detail {
             Scope::Detail
-        } else if annotation {
+        } else if annotation || self.main {
             Scope::Main
         } else {
             Scope::Everywhere
@@ -769,6 +781,9 @@ mod tests {
         draft.in_detail(|draft| {
             draft.label(V2::ZERO, "A");
         });
+        draft.in_main(|draft| {
+            draft.line(V2::ZERO, v(400.0, 0.0), Line::Outline);
+        });
 
         let marks = draft.marks();
 
@@ -780,5 +795,7 @@ mod tests {
         assert_eq!(marks[0].scope, Scope::Everywhere);
         assert_eq!(marks[2].scope, Scope::Main);
         assert_eq!(marks[3].scope, Scope::Detail);
+        assert_eq!(marks[4].scope, Scope::Main);
+        assert!(marks[4].shown_in(None) && !marks[4].magnified());
     }
 }

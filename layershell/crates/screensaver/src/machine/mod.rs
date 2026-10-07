@@ -133,7 +133,6 @@ impl Machine {
     }
 
     /// The displays connected, and the outputs they are on.
-    #[allow(dead_code, reason = "the displays sheet reads it, to come")]
     pub fn displays(&self) -> impl Iterator<Item = (&Connector, &Panel)> {
         self.connectors
             .iter()

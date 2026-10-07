@@ -35,7 +35,6 @@ pub enum ConnectorKind {
 #[derive(Debug, Clone)]
 pub struct Panel {
     /// The maker's three-letter PNP ID: `BOE`, `DEL`.
-    #[allow(dead_code, reason = "the displays sheet reads it, to come")]
     pub maker: Option<String>,
     /// The name it gives itself; laptop panels mostly give none.
     pub name: Option<String>,
@@ -44,7 +43,6 @@ pub struct Panel {
     /// The refresh rate of that mode, in Hz.
     pub refresh: Option<f32>,
     /// The year it was made, or the model year.
-    #[allow(dead_code, reason = "the displays sheet reads it, to come")]
     pub year: Option<u16>,
     /// Its physical size, as the sheets' scales resolve it.
     pub size: PhysicalSize,

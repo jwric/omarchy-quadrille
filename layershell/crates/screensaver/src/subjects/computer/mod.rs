@@ -13,6 +13,7 @@ use crate::machine::Machine;
 
 use super::Subject;
 
+mod displays;
 mod layout;
 mod topology;
 
@@ -22,6 +23,10 @@ pub fn sheets(machine: &Machine) -> Vec<Box<dyn Subject>> {
 
     if let Some(topology) = topology::Topology::new(machine) {
         sheets.push(Box::new(topology));
+    }
+
+    if let Some(displays) = displays::Displays::new(machine) {
+        sheets.push(Box::new(displays));
     }
 
     sheets
@@ -161,6 +166,6 @@ mod tests {
 
     #[test]
     fn the_fixture_has_every_sheet() {
-        assert_eq!(sheets(&Machine::fixture()).len(), 1);
+        assert_eq!(sheets(&Machine::fixture()).len(), 2);
     }
 }
