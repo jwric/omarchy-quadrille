@@ -6,6 +6,7 @@ use std::f64::consts::{PI, TAU};
 
 use num_complex::Complex64 as C;
 
+use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, number, v};
 
 use super::{Card, Domain, Part, Reading, Subject, Unit};
@@ -314,18 +315,18 @@ impl Subject for Aerofoil {
         });
 
         d.part(0, |d| {
-            d.balloon(0, v(20.0, 1.0), (40, 58));
+            d.balloon(0, v(20.0, 1.0), Auto);
         });
         d.part(1, |d| {
-            d.balloon(1, lead, (-30, -40));
+            d.balloon(1, lead, Auto);
         });
         d.part(2, |d| {
             // Mid-chord on the upper skin: the outline runs from the
             // trailing edge round the top.
-            d.balloon(2, outline[outline.len() / 4], (-16, -52));
+            d.balloon(2, outline[outline.len() / 4], Auto);
         });
         d.part(3, |d| {
-            d.balloon(3, trail, (24, -40));
+            d.balloon(3, trail, Auto);
         });
     }
 
