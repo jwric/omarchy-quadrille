@@ -391,7 +391,7 @@ mod tests {
             let now = craft(PARKING + TRANSFER + ARRIVED * k as f32 / 10.0);
             let off = (now.at.to_angle() - earth_turn(now.elapsed)).rem_euclid(TAU);
 
-            assert!(off < 1e-3 || off > TAU - 1e-3, "{off}");
+            assert!(off.min(TAU - off) < 1e-3, "{off}");
         }
     }
 }

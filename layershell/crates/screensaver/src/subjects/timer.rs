@@ -425,7 +425,7 @@ mod tests {
             let (volts, _) = state(i as f32 * 0.0013);
 
             assert!(
-                volts >= SUPPLY / 3.0 - 1e-3 && volts <= 2.0 * SUPPLY / 3.0 + 1e-3,
+                (SUPPLY / 3.0 - 1e-3..=2.0 * SUPPLY / 3.0 + 1e-3).contains(&volts),
                 "{volts}"
             );
         }
