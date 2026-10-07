@@ -1035,7 +1035,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 [[package]]
 name = "iced_core"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",
@@ -1054,7 +1054,7 @@ dependencies = [
 [[package]]
 name = "iced_debug"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "iced_core",
  "iced_futures",
@@ -1064,7 +1064,7 @@ dependencies = [
 [[package]]
 name = "iced_futures"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "futures",
  "iced_core",
@@ -1078,7 +1078,7 @@ dependencies = [
 [[package]]
 name = "iced_graphics"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -1119,7 +1119,7 @@ dependencies = [
 [[package]]
 name = "iced_program"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "iced_graphics",
  "iced_runtime",
@@ -1128,7 +1128,7 @@ dependencies = [
 [[package]]
 name = "iced_renderer"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "iced_graphics",
  "iced_tiny_skia",
@@ -1140,7 +1140,7 @@ dependencies = [
 [[package]]
 name = "iced_runtime"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "bytes",
  "iced_core",
@@ -1152,7 +1152,7 @@ dependencies = [
 [[package]]
 name = "iced_selector"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "iced_core",
 ]
@@ -1160,7 +1160,7 @@ dependencies = [
 [[package]]
 name = "iced_tiny_skia"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -1176,7 +1176,7 @@ dependencies = [
 [[package]]
 name = "iced_wgpu"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -1195,7 +1195,7 @@ dependencies = [
 [[package]]
 name = "iced_widget"
 version = "0.15.0-dev"
-source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#2b1b85765165b8fb65ee965e6449d1cbdd211397"
+source = "git+https://github.com/jwric/iced?branch=0.15-pixel-scale#195692f722dc09dab72796183c279794ed1bf327"
 dependencies = [
  "iced_renderer",
  "iced_runtime",
