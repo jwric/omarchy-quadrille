@@ -3,6 +3,7 @@
 //! changes of velocity, and the Earth turning under the satellite.
 use std::f64::consts::{PI, TAU};
 
+use crate::draft::Placement::Auto;
 use crate::draft::scale::grouped;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, polar, v};
 
@@ -257,8 +258,8 @@ impl Subject for Orbit {
         d.dim_h(v(leo, 0.0), v(-geo, 0.0), -geo * 0.94)
             .text(format!("2a {}", km(2.0 * a)));
         d.dim_radius(V2::ZERO, geo, 2.1, 22);
-        d.note(v(0.0, -leo), (16, 30), format!("LEO {}", km(LEO - EARTH)));
-        d.note(polar(geo, -0.9), (14, 16), "GEO");
+        d.note(v(0.0, -leo), Auto, format!("LEO {}", km(LEO - EARTH)));
+        d.note(polar(geo, -0.9), Auto, "GEO");
 
         d.moving(|d| {
             // The Earth turning: meridians, one of them marked.
@@ -299,28 +300,28 @@ impl Subject for Orbit {
                 let at = to_model(now.at);
                 d.dot(at, 5).tone(Tone::Accent);
                 d.arrow(at, at + to_model(now.velocity) * 2000.0, Line::Trace);
-                d.balloon(4, at, (22, -22));
+                d.balloon(4, at, Auto);
             });
         });
 
-        d.note(v(leo, 0.0), (26, 22), "PERIGEE BURN");
-        d.note(v(-geo, 0.0), (24, 34), "APOGEE BURN");
+        d.note(v(leo, 0.0), Auto, "PERIGEE BURN");
+        d.note(v(-geo, 0.0), Auto, "APOGEE BURN");
 
         d.part(0, |d| {
-            d.balloon(0, polar(EARTH as f32 * 0.7, 2.4), (-26, -40));
+            d.balloon(0, polar(EARTH as f32 * 0.7, 2.4), Auto);
         });
         d.part(1, |d| {
-            d.balloon(1, polar(leo, 2.0), (-40, -20));
+            d.balloon(1, polar(leo, 2.0), Auto);
         });
         d.part(2, |d| {
             d.balloon(
                 2,
                 to_model(glam::DVec2::new(-a * e, a * (1.0 - e * e).sqrt())),
-                (20, -26),
+                Auto,
             );
         });
         d.part(3, |d| {
-            d.balloon(3, polar(geo, 2.6), (-24, -26));
+            d.balloon(3, polar(geo, 2.6), Auto);
         });
     }
 
