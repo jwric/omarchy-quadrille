@@ -45,7 +45,7 @@ const PLOT_PIECE: usize = 96;
 /// ...and the pen travel of each separately kept bucket of them.
 const PLOT_BUCKET: usize = 1536;
 /// The strips the wipe is made of.
-const WIPE_STRIPS: i32 = 8;
+const WIPE_STRIPS: i32 = 32;
 
 /// How fast lettering types, in characters a second.
 const TYPING_RATE: f32 = 900.0;
@@ -91,10 +91,9 @@ pub struct Kept<Renderer: geometry::Renderer> {
     /// The finished buckets of a plot, and the passed strips of a wipe.
     ///
     /// The renderer counts a kept drawing it has seen before as unchanged,
-    /// so these keep a frame's repaint to the bucket the pen is in or the
-    /// strip the wipe is crossing. It counts a drawing newly kept as the
-    /// whole output changed, so they are few and large: a bucket is about
-    /// half a second of plotting, the wipe eight strips.
+    /// and one newly kept as changed only where it draws, so these keep a
+    /// frame's repaint to the piece the pen is in or the strip the wipe is
+    /// crossing.
     pieces: RefCell<Vec<Memo<Piece, Renderer>>>,
 }
 
@@ -239,14 +238,27 @@ where
 
                     layers.push(kept.piece(renderer, bounds.size(), key, |frame| {
                         let mut whole = usize::MAX;
-                        let _ =
-                            draw_pieces(&mut Pen::new(frame), palette, bucket, clip, &mut whole);
+                        let _ = draw_pieces(
+                            &mut Pen::new(frame),
+                            palette,
+                            bucket,
+                            clip,
+                            &mut whole,
+                            Paths::Apart,
+                        );
                     }));
                 } else {
                     let mut part = Frame::new(renderer, bounds.size());
                     let mut left = budget - spent;
 
-                    head = draw_pieces(&mut Pen::new(&mut part), palette, bucket, clip, &mut left);
+                    head = draw_pieces(
+                        &mut Pen::new(&mut part),
+                        palette,
+                        bucket,
+                        clip,
+                        &mut left,
+                        Paths::Apart,
+                    );
                     layers.push(part.into_geometry());
                     break;
                 }
@@ -821,6 +833,17 @@ fn pieces<'m>(
     pieces.into_iter().map(|(_, inked)| inked).collect()
 }
 
+/// How plotted pieces are handed to the renderer, which repaints by path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Paths {
+    /// A path for each piece: a frame that adds to one repaints only it, not
+    /// every piece plotted before it in the same colour. For the plot.
+    Apart,
+    /// The pen's runs of one colour as one path: a drawing that moves as a
+    /// whole repaints as a few large regions, not many small ones.
+    Batched,
+}
+
 /// Draws `pieces` inside `clip` until `budget` (in pixels of pen travel)
 /// runs out; returns where the pen stopped if it stopped inside a piece.
 fn draw_pieces<Renderer: geometry::Renderer>(
@@ -829,6 +852,7 @@ fn draw_pieces<Renderer: geometry::Renderer>(
     pieces: &[Inked],
     clip: Rectangle<i32>,
     budget: &mut usize,
+    paths: Paths,
 ) -> Option<Head> {
     for inked in pieces {
         let cost = inked.piece.cost();
@@ -839,6 +863,10 @@ fn draw_pieces<Renderer: geometry::Renderer>(
             (*budget).min(cost),
             clip,
         );
+
+        if paths == Paths::Apart {
+            pen.flush();
+        }
 
         if *budget <= cost {
             *budget = 0;
@@ -867,7 +895,7 @@ fn plot<'m, Renderer: geometry::Renderer>(
     let total: usize = pieces.iter().map(|inked| inked.piece.cost()).sum();
     let mut budget = share.map_or(usize::MAX, |share| (share * total as f32) as usize);
 
-    draw_pieces(pen, palette, &pieces, clip, &mut budget)
+    draw_pieces(pen, palette, &pieces, clip, &mut budget, Paths::Batched)
 }
 
 #[cfg(test)]
