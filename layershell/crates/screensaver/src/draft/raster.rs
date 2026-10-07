@@ -5,6 +5,8 @@
 //! is what lets a sheet plot a drawing a pixel at a time, and lets a line type
 //! be a pattern counted along the path, so a dashed circle is dashed the same
 //! way round as a dashed line is along.
+use std::collections::HashMap;
+
 use iced_core::{Color, Point, Rectangle};
 use quadrille::draw::{Anchor, Horizontal, Pen, Polygon, Vertical, shape};
 use quadrille::{Face, Palette};
@@ -498,9 +500,17 @@ pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
             let origin = points.first().copied().unwrap_or(Point::new(0, 0));
 
             if points.len() >= 3 {
+                let mut rows = Polygon::new(points).rows();
+
+                // Lining stops a pixel short of the area's edge, which is
+                // drawn over it otherwise and broken where it lands.
+                if *fill != Fill::Solid {
+                    rows = inset(&rows);
+                }
+
                 out.push(Inked {
                     piece: Piece::Rows {
-                        rows: Polygon::new(points).rows(),
+                        rows,
                         texture: Texture::of(*fill),
                         origin,
                     },
@@ -539,6 +549,46 @@ pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
         Ink::Note { .. } | Ink::Balloon { .. } => {}
         Ink::Dot { at, size } => out.push(dot(projection.px(*at), *size, tone)),
     }
+}
+
+/// The rows of an area a pixel in from its edge: each row short of its
+/// ends and of the rows above and below it.
+fn inset(rows: &[(i32, i32, i32)]) -> Vec<(i32, i32, i32)> {
+    let mut spans: HashMap<i32, Vec<(i32, i32)>> = HashMap::new();
+
+    for &(y, from, to) in rows {
+        spans.entry(y).or_default().push((from, to));
+    }
+
+    rows.iter()
+        .flat_map(|&(y, from, to)| {
+            // Within a pixel of its own row's ends, and of the rows either
+            // side's: any pixel of the edge's.
+            [y - 1, y + 1]
+                .iter()
+                .fold(vec![(from + 1, to - 1)], |pieces, other| {
+                    let neighbours = spans.get(other).map_or(&[][..], Vec::as_slice);
+
+                    pieces
+                        .into_iter()
+                        .flat_map(|(from, to)| clip_to(from, to, neighbours))
+                        .collect()
+                })
+                .into_iter()
+                .map(move |(from, to)| (y, from, to))
+        })
+        .collect()
+}
+
+/// The parts of `from..=to` within a pixel of the inside of `spans`.
+fn clip_to(from: i32, to: i32, spans: &[(i32, i32)]) -> Vec<(i32, i32)> {
+    spans
+        .iter()
+        .filter_map(|&(left, right)| {
+            let (a, b) = (from.max(left + 1), to.min(right - 1));
+            (a <= b).then_some((a, b))
+        })
+        .collect()
 }
 
 fn dot(at: Point<i32>, size: i32, tone: Tone) -> Inked {
@@ -1153,6 +1203,42 @@ mod tests {
         assert_eq!(cut.len(), 15);
         assert_eq!(lit(&cut), lit(&[whole]));
         assert_eq!(cut.iter().map(Piece::cost).sum::<usize>(), 100);
+    }
+
+    #[test]
+    fn lining_keeps_off_its_areas_edge() {
+        let mut draft = Draft::new();
+        let contour = [
+            v(-20.0, -10.0),
+            v(15.0, -14.0),
+            v(22.0, 12.0),
+            v(-18.0, 16.0),
+        ];
+        draft.hatch(&contour);
+        draft.polygon(&contour, Line::Outline);
+
+        let mut out = Vec::new();
+        for mark in draft.marks() {
+            rasterize(mark, &UNIT, &mut out);
+        }
+
+        let edge: Vec<Point<i32>> = match &out[1].piece {
+            Piece::Path { pixels, .. } => pixels.clone(),
+            other => panic!("not the edge: {other:?}"),
+        };
+        let Piece::Rows { rows, .. } = &out[0].piece else {
+            panic!("not the lining");
+        };
+
+        assert!(!rows.is_empty());
+        for &(y, from, to) in rows {
+            assert!(
+                !edge
+                    .iter()
+                    .any(|pixel| pixel.y == y && (from..=to).contains(&pixel.x)),
+                "row {y} from {from} to {to} touches the edge"
+            );
+        }
     }
 
     #[test]
