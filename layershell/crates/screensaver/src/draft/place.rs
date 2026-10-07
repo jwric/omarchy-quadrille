@@ -200,8 +200,9 @@ impl Plan {
     /// Places the automatic annotations among `marks`, drawn through
     /// `projection`; one the plan left out stays unplaced, and undrawn.
     ///
-    /// A moving one that would cover other lettering at this moment, or
-    /// run its leader through it, is left out for the moment instead.
+    /// A moving one that would cover other lettering at this moment, run its
+    /// leader through it or have another's run through it, is left out for
+    /// the moment instead.
     pub fn apply(&self, marks: &mut [Mark], projection: &Projection) {
         let mut moving = Vec::new();
 
@@ -224,13 +225,16 @@ impl Plan {
         for index in moving {
             let footprint = Footprint::of(&marks[index], projection);
             let covers = marks.iter().enumerate().any(|(other, mark)| {
-                other != index
-                    && mark.shown_in(self.view)
-                    && mark.pass() >= Pass::Annotation
-                    && Footprint::of(mark, projection)
-                        .boxes
-                        .iter()
-                        .any(|area| footprint.meets(*area))
+                if other == index || !mark.shown_in(self.view) || mark.pass() < Pass::Annotation {
+                    return false;
+                }
+
+                // Either way: its own over the other's lettering, or the
+                // other's leader through its own.
+                let other = Footprint::of(mark, projection);
+
+                other.boxes.iter().any(|area| footprint.meets(*area))
+                    || footprint.boxes.iter().any(|area| other.meets(*area))
             });
 
             if covers {
