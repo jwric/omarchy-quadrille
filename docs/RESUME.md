@@ -193,11 +193,20 @@ pointer enter (it was never hidden). `plugins/quadrille.idle` (opt-in,
   compared part by part, lists aligned past an insertion, clip mask rebuilt only
   when needed, scattered damage repainted in one pass). Waiting on the user's
   go-ahead to push; then drop the local `[patch]`, `cargo update` the iced git
-  source, rebuild, reinstall `quadrille-bar` and `quadrille-screensaver`.
-- **CAD sheets** (plan approved 2026-10-07): automatic placement of balloons and
-  notes (in progress: `draft/place.rs`), then aligned orthographic views and
-  generated sections, then drawing conventions (tolerances, surface finish,
-  datums, projection symbol, revisions).
+  source, rebuild, reinstall `quadrille-bar` and `quadrille-screensaver`. While
+  the fork is unpushed, layershell builds against it only through an
+  uncommitted `[patch."https://github.com/jwric/iced"]` of all eleven crates
+  pointing at `/home/jwric/dev/iced/.claude/worktrees/0.15-pixel-scale`.
+- **CAD sheets** (plan approved 2026-10-07, done): automatic placement of
+  balloons and notes (`draft/place.rs`), views lined up by first-angle
+  projection with sections of the gears and the Geneva drive
+  (`Subject::views`, `Draft::in_view`, `cutting_plane`), and drawing
+  conventions (limits and fits, surface finish, datums, feature control
+  frames, the projection symbol, a revision table). The engine has no second
+  view: its travel chart takes the place a side view would. Possible next:
+  automatic placement in detail views, more sections (the engine's crank
+  through its axis, if the chart moves), and dimensions placed automatically
+  too.
 - **"This computer"** (the user's idea, 2026-10-07): a subject drawn from the
   machine it runs on, so every user's sheets are their own hardware. Sketch:
   - Inventory, read once at start, no root needed: `/sys/class/dmi/id`

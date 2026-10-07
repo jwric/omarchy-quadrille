@@ -179,10 +179,26 @@ it; the cursor is hidden only over its own surfaces.
 
 ![The engine at 1:1 on the ultrawide, in the paper theme: the connecting rod in detail](plugins/screenshots/screensaver-engine-paper-ultrawide.png)
 
+![The gears and their section A–A on the ultrawide, in the paper theme: the key in detail](plugins/screenshots/screensaver-gears-section-paper-ultrawide.png)
+
+The sheets keep a drawing office's conventions. Views line up as first-angle
+projection places them: the gears and the Geneva drive are sectioned through
+their shafts under the front view, behind a cutting plane, with bodies lined,
+teeth, shafts, keys and pins left whole, and hidden teeth where gears mesh;
+on the laptop a view goes in only if it fits at the front view's scale.
+Dimensions carry limits and fits (`48 ±0.02`, `Ø8 H7/k6`), surfaces their
+finish (`√ Ra 0.8`), and features datums and geometric tolerances in feature
+control frames; the title block has the first-angle projection symbol and,
+where the column has room, a revision table. Balloons and notes place
+themselves: lined up beside the drawing, or just off what they point at,
+whichever hides least of the drawing and crosses least of it; a balloon on a
+moving part steps out of the way of lettering it would cover. Lettering is
+drawn whole or not at all.
+
 Drawings to scale use a preferred scale (ISO 5455, with DIN 823's 2.5) that
-is true on the display's calibration: the engine is 1:1 on both monitors here,
-the gears 2:1 on the laptop and 2.5:1 on the ultrawide; on an estimated size
-the scale reads `~2:1`. Lettering,
+is true on the display's calibration: the engine is 1:1 on both monitors here
+and the gears 2:1 (on the ultrawide, with room for their section under them);
+on an estimated size the scale reads `~2:1`. Lettering,
 patterns and line types are whole virtual pixels, in the Omarchy theme's
 roles. Still parts of a settled sheet are kept and only what moves is drawn
 again, so the renderer's damage is the size of the motion
