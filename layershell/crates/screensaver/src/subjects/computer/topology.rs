@@ -6,7 +6,6 @@
 use quadrille::draw::Anchor;
 
 use crate::draft::Placement::Auto;
-use crate::draft::geom::{along, length};
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, v};
 use crate::machine::{
     CoreKind, Interface, Link, Machine, PciDevice, PciKind, SensorKind, Site, UsbDevice,
@@ -15,7 +14,7 @@ use crate::machine::{
 use super::super::schematic::Schematic;
 use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
 use super::layout::{Diagram, Form, Gauge, Group, Placed, Source, named, short, version};
-use super::{binary, bits, counted, decimal, fit, lettered, rate};
+use super::{SPEC_ROWS, binary, bits, counted, decimal, fit, flow, lettered, rate, rows};
 
 /// A dot of traffic every so many units along a wire, running so fast.
 const SPACING: f64 = 8.0;
@@ -24,10 +23,6 @@ const SPEED: f64 = 40.0;
 /// second to a hundred megabytes, by their logarithm.
 const QUIETEST: f32 = 1e3;
 const BUSIEST: f32 = 1e8;
-/// The specification's rows, at most, and the characters a row holds on
-/// the laptop's column: name and value with room between them.
-const SPEC_ROWS: usize = 6;
-const SPEC_ROOM: usize = 33;
 
 /// What an item of the parts list is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -362,44 +357,21 @@ fn corners(extent: Extent) -> [V2; 4] {
 }
 
 /// Traffic along `pieces` at `rate` bytes a second, toward the processor
-/// if `inward`: dots a set distance apart running at a set speed, each
-/// there or not by its own number and the rate, so a busier link carries
-/// more of them and none blinks as it runs.
+/// if `inward`: dots a set distance apart running at a set speed, more of
+/// them on a busier link.
 fn dots(d: &mut Draft, pieces: &[Vec<V2>], rate: f32, inward: bool, t: f32, tone: Tone) {
     let share =
         ((rate.max(1.0).log10() - QUIETEST.log10()) / (BUSIEST / QUIETEST).log10()).clamp(0.0, 1.0);
 
-    if !share.is_finite() || share <= 0.0 {
-        return;
-    }
-
-    let lengths: Vec<f32> = pieces.iter().map(|piece| length(piece)).collect();
-    let total: f32 = lengths.iter().sum();
-    let travelled = f64::from(t) * SPEED;
-    let first = ((travelled - f64::from(total)) / SPACING).ceil() as i64;
-    let last = (travelled / SPACING).floor() as i64;
-    // The two ways' dots are numbered apart, so they are not all there or
-    // not together.
-    let offset = if inward { 0.5 } else { 0.0 };
-
-    for number in first..=last {
-        let lot = (number as f64 * 0.618_034 + offset).rem_euclid(1.0);
-
-        if lot >= f64::from(share) {
-            continue;
-        }
-
-        let run = (travelled - number as f64 * SPACING) as f32;
-        let mut left = if inward { total - run } else { run };
-
-        for (piece, &length) in pieces.iter().zip(&lengths) {
-            if left <= length {
-                d.dot(along(piece, left), 2).tone(tone);
-                break;
-            }
-            left -= length;
-        }
-    }
+    flow(
+        d,
+        pieces,
+        share,
+        SPACING,
+        f64::from(t) * SPEED,
+        inward,
+        tone,
+    );
 }
 
 /// Where the balloon for `block` points: its top right corner, which
@@ -424,26 +396,6 @@ fn ring(block: &Placed) -> (V2, f32) {
             (frame.width().max(frame.height()) / 2.0 + 4.0).round(),
         ),
     }
-}
-
-/// Specification rows of `name` and `value`, the value carried onto a
-/// second row if it is too long for one.
-fn rows(name: &str, value: &str) -> Vec<(String, String)> {
-    let room = SPEC_ROOM - name.chars().count() - 2;
-
-    if value.chars().count() <= room {
-        return vec![(name.into(), value.into())];
-    }
-
-    textwrap::wrap(value, room)
-        .into_iter()
-        .take(2)
-        .enumerate()
-        .map(|(k, line)| {
-            let name = if k == 0 { name } else { "" };
-            (name.to_owned(), fit(&line, room))
-        })
-        .collect()
 }
 
 /// The parts list's item `item` of `machine`, drawn as `diagram`.
@@ -940,6 +892,8 @@ mod tests {
     /// apart, and there are no more of them than the column has room for.
     #[test]
     fn the_specifications_fit_their_column() {
+        use super::super::SPEC_ROOM;
+
         let topology = Topology::new(&Machine::fixture()).unwrap();
 
         for part in &topology.card().parts {

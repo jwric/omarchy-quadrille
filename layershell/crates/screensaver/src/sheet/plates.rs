@@ -222,11 +222,13 @@ pub fn title_block<'a>(
             // The projection symbol's.
             Field::new("", "", 1),
         ],
+        // The unit is a symbol, and the sheet number takes up to `10 OF 10`
+        // on the laptop's column.
         vec![
-            Field::new("UNIT", card.unit.label(), 2),
-            Field::new("SHEET", sheet, 2),
-            Field::new("DATE", date, 3),
-            Field::new("DRAWN", "QUADRILLE", 3),
+            Field::new("UNIT", card.unit.label(), 3),
+            Field::new("SHEET", sheet, 5),
+            Field::new("DATE", date, 6),
+            Field::new("DRAWN", "QUADRILLE", 6),
         ],
     ]
 }

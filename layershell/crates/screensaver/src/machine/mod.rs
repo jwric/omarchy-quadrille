@@ -53,9 +53,7 @@ pub struct Machine {
     pub usb: Vec<UsbDevice>,
     /// The graphics cards' outputs, and the displays on them.
     pub connectors: Vec<Connector>,
-    #[allow(dead_code, reason = "the cooling sheet reads it, to come")]
     pub batteries: Vec<Battery>,
-    #[allow(dead_code, reason = "the cooling sheet reads it, to come")]
     pub chargers: Vec<Charger>,
     /// The network interfaces with hardware behind them.
     pub interfaces: Vec<Interface>,
@@ -168,7 +166,6 @@ impl Machine {
     }
 
     /// The fans, with their indices in a [`Snapshot`].
-    #[allow(dead_code, reason = "the cooling sheet reads it, to come")]
     pub fn fans(&self) -> impl Iterator<Item = (usize, &Sensor)> {
         self.sensors
             .iter()

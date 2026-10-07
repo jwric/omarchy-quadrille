@@ -9,13 +9,21 @@
 //! in capitals, as the rest of a sheet is, and never lettered whole where
 //! they would not fit: the parts list carries a short name and the
 //! specification as much of the full one as its column holds.
+use crate::draft::geom::{along, length};
+use crate::draft::{Draft, Tone, V2};
 use crate::machine::Machine;
 
 use super::Subject;
 
+mod cooling;
 mod displays;
 mod layout;
 mod topology;
+
+/// The specification's rows, at most, and the characters a row holds on
+/// the laptop's column: name and value with room between them.
+const SPEC_ROWS: usize = 6;
+const SPEC_ROOM: usize = 33;
 
 /// The sheets `machine` has enough to show, in sheet order.
 pub fn sheets(machine: &Machine) -> Vec<Box<dyn Subject>> {
@@ -29,7 +37,77 @@ pub fn sheets(machine: &Machine) -> Vec<Box<dyn Subject>> {
         sheets.push(Box::new(displays));
     }
 
+    if let Some(cooling) = cooling::Cooling::new(machine) {
+        sheets.push(Box::new(cooling));
+    }
+
     sheets
+}
+
+/// Specification rows of `name` and `value`, the value carried onto a
+/// second row if it is too long for one.
+fn rows(name: &str, value: &str) -> Vec<(String, String)> {
+    let room = SPEC_ROOM - name.chars().count() - 2;
+
+    if value.chars().count() <= room {
+        return vec![(name.into(), value.into())];
+    }
+
+    textwrap::wrap(value, room)
+        .into_iter()
+        .take(2)
+        .enumerate()
+        .map(|(k, line)| {
+            let name = if k == 0 { name } else { "" };
+            (name.to_owned(), fit(&line, room))
+        })
+        .collect()
+}
+
+/// Something running along a route: dots `spacing` apart that have gone
+/// `travelled` along `pieces` (from their end toward their start if
+/// `backward`), `share` of them there, each there or not by its own number
+/// so a busier route carries more of them and none blinks as it runs. The
+/// pieces are one route, broken where it passes through something drawn.
+fn flow(
+    d: &mut Draft,
+    pieces: &[Vec<V2>],
+    share: f32,
+    spacing: f64,
+    travelled: f64,
+    backward: bool,
+    tone: Tone,
+) {
+    if !share.is_finite() || share <= 0.0 {
+        return;
+    }
+
+    let lengths: Vec<f32> = pieces.iter().map(|piece| length(piece)).collect();
+    let total: f32 = lengths.iter().sum();
+    let first = ((travelled - f64::from(total)) / spacing).ceil() as i64;
+    let last = (travelled / spacing).floor() as i64;
+    // The two ways' dots are numbered apart, so they are not all there or
+    // not together.
+    let offset = if backward { 0.5 } else { 0.0 };
+
+    for number in first..=last {
+        let lot = (number as f64 * 0.618_034 + offset).rem_euclid(1.0);
+
+        if lot >= f64::from(share) {
+            continue;
+        }
+
+        let run = (travelled - number as f64 * spacing) as f32;
+        let mut left = if backward { total - run } else { run };
+
+        for (piece, &length) in pieces.iter().zip(&lengths) {
+            if left <= length {
+                d.dot(along(piece, left), 2).tone(tone);
+                break;
+            }
+            left -= length;
+        }
+    }
 }
 
 /// A size in bytes as memory and caches are sold: `32 GiB`, `24 MiB`,
@@ -166,6 +244,6 @@ mod tests {
 
     #[test]
     fn the_fixture_has_every_sheet() {
-        assert_eq!(sheets(&Machine::fixture()).len(), 2);
+        assert_eq!(sheets(&Machine::fixture()).len(), 3);
     }
 }

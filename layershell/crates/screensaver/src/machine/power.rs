@@ -21,7 +21,6 @@ pub struct Battery {
 
 impl Battery {
     /// What it holds full as a share of what it held new.
-    #[allow(dead_code, reason = "the cooling sheet reads it, to come")]
     pub fn health(&self) -> Option<f32> {
         Some(self.full_wh? / self.design_wh?).filter(|health| health.is_finite())
     }

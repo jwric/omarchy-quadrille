@@ -11,7 +11,7 @@ use crate::machine::{Connector, ConnectorKind, Machine, Panel, SensorKind, Site}
 
 use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
 use super::layout::short;
-use super::{counted, fit, lettered};
+use super::{SPEC_ROOM, counted, fit, lettered};
 
 /// The room the drawing leaves round and between the displays, in units of
 /// the row's length over `UNIT`: room for the dimensions and their values.
@@ -39,10 +39,6 @@ const GRID: f32 = 4.0;
 
 /// How many times slower than the display refreshes its scan line runs.
 const SLOWED: f32 = 240.0;
-
-/// The specification's rows hold this many characters on the laptop's
-/// column, name and value with room between them.
-const SPEC_ROOM: usize = 33;
 
 pub struct Displays {
     card: Card,
