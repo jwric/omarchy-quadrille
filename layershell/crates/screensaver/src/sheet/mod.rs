@@ -1217,6 +1217,7 @@ mod tests {
     use super::*;
     use crate::draft::{Pass, Placement};
     use crate::headless::Output;
+    use crate::machine::Machine;
     use crate::subjects;
     use schedule::Schedule;
 
@@ -1273,7 +1274,7 @@ mod tests {
     /// both displays, for every subject, while it runs.
     #[test]
     fn placed_annotations_are_in_the_view_and_clear_of_other_lettering() {
-        let subjects = subjects::all();
+        let subjects = subjects::all(&Machine::fixture());
 
         for output in [Output::LAPTOP, Output::ULTRAWIDE] {
             let (width, height) = output.virtual_size();
@@ -1363,7 +1364,7 @@ mod tests {
     /// the front view.
     #[test]
     fn views_are_framed_apart_and_lined_up() {
-        let subjects = subjects::all();
+        let subjects = subjects::all(&Machine::fixture());
 
         for output in [Output::LAPTOP, Output::ULTRAWIDE] {
             let (width, height) = output.virtual_size();
@@ -1422,7 +1423,7 @@ mod tests {
     /// displays, for every subject: a cut value reads as a different value.
     #[test]
     fn the_title_block_never_cuts_a_value() {
-        let subjects = subjects::all();
+        let subjects = subjects::all(&Machine::fixture());
 
         for output in [Output::LAPTOP, Output::ULTRAWIDE] {
             let (width, height) = output.virtual_size();

@@ -16,6 +16,7 @@ use iced_widget::{Widget as _, canvas};
 use quadrille::Theme;
 
 use crate::display;
+use crate::machine::Machine;
 use crate::sheet::{Display, Sheet, schedule::Schedule};
 use crate::subjects::{self, Subject};
 
@@ -33,6 +34,8 @@ pub struct Options {
     pub grace: Duration,
     pub theme: Theme,
     pub date: String,
+    /// The computer the sheets of this computer draw.
+    pub machine: Machine,
 }
 
 pub struct Saver {
@@ -63,7 +66,7 @@ const STILL: f32 = 3.0;
 impl Saver {
     pub fn new(options: Options) -> (Self, Task<Message>) {
         let now = Instant::now();
-        let subjects = subjects::all();
+        let subjects = subjects::all(&options.machine);
         let schedule = Schedule::new(
             subjects.iter().map(|s| s.card().parts.len()).collect(),
             options.seed,

@@ -236,6 +236,7 @@ pub fn inset(bounds: Rectangle<i32>, by: i32) -> Rectangle<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::Machine;
     use crate::subjects;
 
     fn inside(inner: Rectangle<i32>, outer: Rectangle<i32>) -> bool {
@@ -257,7 +258,7 @@ mod tests {
         // The laptop (2560 × 1600 at 3 pixels per virtual pixel) and the
         // ultrawide (3440 × 1440 at 2).
         for (width, height) in [(853, 533), (1720, 720)] {
-            for subject in subjects::all() {
+            for subject in subjects::all(&Machine::fixture()) {
                 let layout = Layout::new(width, height, subject.card());
                 let regions = [
                     layout.readings,

@@ -9,6 +9,7 @@
 //! it to [`all`]. `quadrille-screensaver render --subject NAME` draws it
 //! headless at any moment, to look at while it is designed.
 use crate::draft::{Draft, Extent, V2};
+use crate::machine::Machine;
 
 mod aerofoil;
 mod engine;
@@ -19,8 +20,9 @@ mod orbit;
 mod schematic;
 mod timer;
 
-/// Every subject, in sheet order.
-pub fn all() -> Vec<Box<dyn Subject>> {
+/// Every subject, in sheet order: the designed ones, and the sheets of
+/// `machine`, the computer they are drawn on (to come).
+pub fn all(_machine: &Machine) -> Vec<Box<dyn Subject>> {
     vec![
         Box::new(gears::Gears::new()),
         Box::new(engine::Engine::new()),
@@ -265,12 +267,9 @@ impl Reading {
     }
 }
 
-/// The subject called `name`.
-pub fn find(name: &str) -> Option<(usize, Box<dyn Subject>)> {
-    all()
-        .into_iter()
-        .enumerate()
-        .find(|(_, subject)| subject.name() == name)
+/// The index of the subject called `name`.
+pub fn find(subjects: &[Box<dyn Subject>], name: &str) -> Option<usize> {
+    subjects.iter().position(|subject| subject.name() == name)
 }
 
 #[cfg(test)]
@@ -281,7 +280,7 @@ mod tests {
 
     #[test]
     fn every_subject_is_named_once_and_documents_its_parts() {
-        let subjects = all();
+        let subjects = all(&Machine::fixture());
         let mut names: Vec<_> = subjects.iter().map(|s| s.name()).collect();
         names.sort();
         names.dedup();
@@ -337,7 +336,7 @@ mod tests {
 
     #[test]
     fn every_subject_draws_at_any_moment() {
-        for subject in all() {
+        for subject in all(&Machine::fixture()) {
             // The extent fitted to a laptop-sized view.
             let extent = subject.extent();
             let scale = (560.0 / extent.width()).min(400.0 / extent.height());

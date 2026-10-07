@@ -4,6 +4,7 @@
 mod display;
 mod draft;
 mod headless;
+mod machine;
 mod saver;
 mod sheet;
 mod subjects;
@@ -16,13 +17,19 @@ use iced_core::Backend;
 use quadrille_desktop::theme;
 
 use headless::{Output, Stage, Studio};
+use machine::Machine;
 use saver::{Options, Saver};
+use subjects::Subject;
 
 #[derive(Parser)]
 #[command(about = "Technical drawings that plot themselves while the desktop is idle")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+
+    /// The computer the sheets of this computer draw.
+    #[arg(long, global = true, value_enum, default_value_t = Source::Live)]
+    machine: Source,
 
     #[command(flatten)]
     run: Run,
@@ -54,8 +61,8 @@ struct Run {
     #[arg(long, default_value = "quadrille-screensaver")]
     namespace: String,
     /// The subject to start with.
-    #[arg(long, value_parser = subject)]
-    subject: Option<usize>,
+    #[arg(long)]
+    subject: Option<String>,
     /// Frames a second.
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=240))]
     fps: u32,
@@ -76,8 +83,8 @@ struct Run {
 #[derive(Args)]
 struct Render {
     /// One subject (default: each in turn).
-    #[arg(long, value_parser = subject)]
-    subject: Option<usize>,
+    #[arg(long)]
+    subject: Option<String>,
     /// Moments into the sheet, in seconds.
     #[arg(long, value_delimiter = ',', default_value = "4,12,16")]
     at: Vec<f32>,
@@ -102,10 +109,19 @@ enum Desk {
     Ultrawide,
 }
 
+/// Which computer the sheets of this computer draw.
+#[derive(Clone, Copy, ValueEnum)]
+enum Source {
+    /// This one.
+    Live,
+    /// A made-up laptop, the same every time: what committed images show.
+    Fixture,
+}
+
 /// A subject's index from its name.
-fn subject(name: &str) -> Result<usize, String> {
-    subjects::find(name).map(|(index, _)| index).ok_or_else(|| {
-        let names: Vec<_> = subjects::all().iter().map(|s| s.name()).collect();
+fn subject(subjects: &[Box<dyn Subject>], name: &str) -> Result<usize, String> {
+    subjects::find(subjects, name).ok_or_else(|| {
+        let names: Vec<_> = subjects.iter().map(|s| s.name()).collect();
         format!("no subject {name:?} (have: {})", names.join(", "))
     })
 }
@@ -114,22 +130,15 @@ fn main() {
     env_logger::init();
 
     let cli = Cli::parse();
-
-    match cli.command {
-        Some(Command::Render(render)) => {
-            if let Err(error) = draw(render) {
-                eprintln!("quadrille-screensaver: {error}");
-                std::process::exit(1);
-            }
-        }
-        Some(Command::Bench(bench)) => {
-            if let Err(error) = time(bench) {
-                eprintln!("quadrille-screensaver: {error}");
-                std::process::exit(1);
-            }
-        }
+    let machine = match cli.machine {
+        Source::Live => Machine::live(),
+        Source::Fixture => Machine::fixture(),
+    };
+    let result = match cli.command {
+        Some(Command::Render(render)) => draw(render, &machine),
+        Some(Command::Bench(bench)) => time(bench, &machine),
         Some(Command::List) => {
-            for subject in subjects::all() {
+            for subject in subjects::all(&machine) {
                 let card = subject.card();
                 println!(
                     "{:<10} {:<28} {}",
@@ -138,25 +147,36 @@ fn main() {
                     card.domain.label()
                 );
             }
+            Ok(())
         }
-        None => run(cli.run),
+        None => run(cli.run, machine),
+    };
+
+    if let Err(error) = result {
+        eprintln!("quadrille-screensaver: {error}");
+        std::process::exit(1);
     }
 }
 
-fn run(run: Run) {
+fn run(run: Run, machine: Machine) -> Result<(), String> {
+    let first = match &run.subject {
+        Some(name) => Some(subject(&subjects::all(&machine), name)?),
+        None => None,
+    };
+
     // One screensaver at a time: a second one started while the first runs
     // (by the idle service and a key, say) leaves quietly.
     let _lock = match single_instance(&run.namespace) {
         Ok(lock) => lock,
         Err(error) => {
             log::info!("{error}");
-            return;
+            return Ok(());
         }
     };
 
     let options = Options {
         namespace: run.namespace,
-        first: run.subject,
+        first,
         seed: run.seed.unwrap_or_else(|| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -166,6 +186,7 @@ fn run(run: Run) {
         grace: Duration::from_millis(run.grace),
         theme: theme::current(&run.theme_dir),
         date: today(),
+        machine,
     };
 
     let mut settings = quadrille_desktop::graphics::settings();
@@ -185,13 +206,10 @@ fn run(run: Run) {
     .theme(|saver: &Saver, _| saver.theme())
     .run();
 
-    if let Err(error) = result {
-        eprintln!("quadrille-screensaver: {error}");
-        std::process::exit(1);
-    }
+    result.map_err(|error| error.to_string())
 }
 
-fn draw(render: Render) -> Result<(), String> {
+fn draw(render: Render, machine: &Machine) -> Result<(), String> {
     let (output, desk) = match render.output {
         Desk::Laptop => (Output::LAPTOP, "laptop"),
         Desk::Ultrawide => (Output::ULTRAWIDE, "ultrawide"),
@@ -207,9 +225,9 @@ fn draw(render: Render) -> Result<(), String> {
         .map_err(|error| format!("{}: {error}", render.out.display()))?;
     headless::load_fonts();
 
-    let subjects = subjects::all();
-    let indices: Vec<usize> = match render.subject {
-        Some(index) => vec![index],
+    let subjects = subjects::all(machine);
+    let indices: Vec<usize> = match &render.subject {
+        Some(name) => vec![subject(&subjects, name)?],
         None => (0..subjects.len()).collect(),
     };
     let date = today();
@@ -230,13 +248,13 @@ fn draw(render: Render) -> Result<(), String> {
     Ok(())
 }
 
-fn time(bench: Bench) -> Result<(), String> {
+fn time(bench: Bench, machine: &Machine) -> Result<(), String> {
     let output = match bench.output {
         Desk::Laptop => Output::LAPTOP,
         Desk::Ultrawide => Output::ULTRAWIDE,
     };
     let theme = theme::current(&theme::default_dir());
-    let subjects = subjects::all();
+    let subjects = subjects::all(machine);
     let date = today();
 
     headless::load_fonts();

@@ -362,6 +362,7 @@ impl<'a> Studio<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::Machine;
 
     /// What a surface keeps from one frame to the next never leaks from one
     /// sheet into another: a studio that drew other subjects first draws a
@@ -370,7 +371,7 @@ mod tests {
     fn a_kept_drawing_belongs_to_its_sheet() {
         load_fonts();
 
-        let subjects = crate::subjects::all();
+        let subjects = crate::subjects::all(&Machine::fixture());
         let theme = Theme::TERMINAL;
         let mut busy = Studio::new(&subjects, Output::LAPTOP, &theme, "2026-10-07").unwrap();
 
@@ -415,7 +416,7 @@ mod tests {
     fn repaints_as_drawn(first: usize, output: Output, seconds: std::ops::Range<f32>, fps: f32) {
         load_fonts();
 
-        let subjects = crate::subjects::all();
+        let subjects = crate::subjects::all(&Machine::fixture());
         let theme = Theme::TERMINAL;
         let mut studio = Studio::new(&subjects, output, &theme, "2026-10-07").unwrap();
         let frames = ((seconds.end - seconds.start) * fps) as usize;
@@ -453,7 +454,7 @@ mod tests {
     #[test]
     #[ignore = "minutes: run with --release --ignored"]
     fn every_sheet_repaints_as_drawn() {
-        for first in 0..crate::subjects::all().len() {
+        for first in 0..crate::subjects::all(&Machine::fixture()).len() {
             for output in [Output::LAPTOP, Output::ULTRAWIDE] {
                 repaints_as_drawn(first, output, 0.0..80.0, 30.0);
             }
