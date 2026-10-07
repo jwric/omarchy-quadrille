@@ -181,6 +181,22 @@ it; the cursor is hidden only over its own surfaces.
 
 ![The gears and their section A–A on the ultrawide, in the paper theme: the key in detail](plugins/screenshots/screensaver-gears-section-paper-ultrawide.png)
 
+After the seven come the sheets of the machine the screensaver runs on,
+drawn from what it reads of `/sys` and `/proc`, without root and without
+running anything: its topology as a block diagram (the processor's cores by
+kind, the memory, the PCIe tree with its bridges, graphics with the displays
+on their connectors, drives, network adapters and the USB tree), its displays
+side by side at their true sizes down to the pixel pitch, and its cooling as
+a plan whose fans turn at their measured speeds. What moves is what the
+machine is doing, sampled in the background: traffic along the buses at the
+measured I/O rates, temperatures, fan speeds, the battery. Serial numbers,
+hardware addresses, UUIDs, host and user names, Wi-Fi network names and
+mount points are never read, and a sheet the machine says too little for is
+left out. `render --machine fixture` draws a made-up laptop instead, the one
+shown here.
+
+![The topology of the made-up laptop on the ultrawide, in the paper theme: the processor in detail](plugins/screenshots/screensaver-computer-topology-paper-ultrawide.png)
+
 The sheets keep a drawing office's conventions. Views line up as first-angle
 projection places them: the gears and the Geneva drive are sectioned through
 their shafts under the front view, behind a cutting plane, with bodies lined,

@@ -205,22 +205,30 @@ pointer enter (it was never hidden). `plugins/quadrille.idle` (opt-in,
   automatic placement in detail views, more sections (the engine's crank
   through its axis, if the chart moves), and dimensions placed automatically
   too.
-- **"This computer"** (the user's idea, 2026-10-07): a subject drawn from the
-  machine it runs on, so every user's sheets are their own hardware. Sketch:
-  - Inventory, read once at start, no root needed: `/sys/class/dmi/id`
-    (vendor, product, chassis type), `/proc/cpuinfo` and
-    `/sys/devices/system/cpu` (cores, caches, frequencies), `/proc/meminfo`,
-    `/sys/block` (drives, partitions), `/sys/bus/pci` and `/sys/bus/usb`
-    (devices, with `pci.ids`/`usb.ids` names), `/sys/class/drm` and EDID
-    (`crates/desktop` already parses it: every display at its true size),
-    `/sys/class/power_supply` (battery design and current capacity, cycles),
-    `/sys/class/hwmon` (temperatures, fan speeds), `/sys/class/net`.
-  - Sheets: the bus topology as a block diagram (CPU, memory, PCIe, USB tree,
-    storage, GPU and its connectors to the real monitors); the displays drawn
-    to scale side by side; the drives' partition maps; a thermal sheet whose
-    fans turn at their measured rpm, with live temperatures as the readings.
-    Mechanical parts (fans, heatsink, chassis outline by chassis type) as
-    parametric drawings sized from the inventory.
-  - The parts list is the real components and models. Never draw serial
-    numbers, MAC addresses or UUIDs; screenshots for the README come from a
-    fixture inventory, not this machine.
+- **"This computer"** (the user's idea, 2026-10-07; built): sheets drawn from
+  the machine the screensaver runs on, so every user's sheets are their own
+  hardware. `machine/` reads the inventory and its live values from `/sys` and
+  `/proc` without root (a background thread samples once a second, drive
+  temperatures once a minute), and `subjects/computer/` draws three sheets
+  after the designed seven: the topology (QD-C-0001), the displays to scale
+  (QD-C-0002) and the cooling (QD-C-0003). `--machine fixture` draws a made-up
+  laptop, which is what tests and committed images use; nothing that
+  identifies a machine is read, and a test checks no sheet letters it.
+  `docs/this-computer.md` has the design, the rules and every step's status.
+  What remains:
+  - A storage sheet (each drive's partitions as a proportional bar,
+    filesystems by type), the design's "later, if there is room".
+  - Details: on the ultrawide the diagram sheets' details magnify 3 to 3.7
+    times the view, their lettering far apart (a cap is a sheet-wide rule
+    and would change the timer's); a topology drawn more than about 1.15
+    times the laptop's view crops the die in the laptop's detail.
+  - The displays sheet uses preferred ratios only, so a row wider than about
+    a metre is small on the laptop (1:10); the room for its dimensions is a
+    share of the row, so at a ratio well under what fits their values
+    crowd the edges (a test checks the fixture on both outputs). Displays
+    are drawn landscape, as the inventory knows nothing of rotation.
+  - The inventory finds no filesystem on a whole disk or a ZFS dataset, reads
+    no battery temperature, and cannot tell a stopped fan from an empty
+    header (the cooling sheet draws one not yet seen turning in phantom).
+  - A one-shot `render --machine live` shows no I/O rates or drive
+    temperatures: they come from the second sample on.
