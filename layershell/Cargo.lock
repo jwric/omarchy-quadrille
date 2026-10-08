@@ -1995,7 +1995,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 [[package]]
 name = "quadrille"
 version = "0.1.0"
-source = "git+https://github.com/jwric/quadrille#3e9e848f74ed6e42caf3fb1c13f9e2404dc96371"
+source = "git+https://github.com/jwric/quadrille#d8b29ac2843d7ed17742e290cbf0ed088768ed7c"
 dependencies = [
  "iced_core",
  "iced_widget",
