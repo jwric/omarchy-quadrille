@@ -2095,9 +2095,14 @@ impl Cooling {
                     .tone(Tone::Faint);
             }
 
-            d.label(v(plot.min.x - 4.0, y), format!("{celsius:.0}"))
-                .anchor(Anchor::RIGHT)
-                .tone(Tone::Muted);
+            // Numbered every other line, as the rpm are, which a chart as
+            // short as the laptop's has room for.
+            if (celsius - COLDEST) % (2.0 * CHART_STEP) == 0.0 {
+                d.label(v(plot.min.x - 4.0, y), format!("{celsius:.0}"))
+                    .anchor(Anchor::RIGHT)
+                    .tone(Tone::Muted);
+            }
+
             celsius += CHART_STEP;
         }
 
@@ -2228,7 +2233,9 @@ impl Cooling {
             }
         }
 
-        let mut key = plot.min.x;
+        // The key along the top, a whole number of pixels apart whatever
+        // the scale.
+        let mut key = 0;
 
         for Trace {
             name,
@@ -2262,10 +2269,11 @@ impl Cooling {
 
             let text = format!("{name} {value}");
 
-            d.label(v(key, plot.max.y + 7.0), text.as_str())
+            d.label(v(plot.min.x, plot.max.y + 7.0), text.as_str())
                 .anchor(Anchor::LEFT)
+                .nudge(key, 0)
                 .tone(tone);
-            key += letters(text.chars().count() + 3);
+            key += letters(text.chars().count() + 3) as i32;
         }
     }
 
