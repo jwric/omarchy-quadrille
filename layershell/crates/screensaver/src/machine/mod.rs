@@ -564,6 +564,35 @@ pub(crate) mod tests {
         assert_eq!(ChassisKind::Mini.label(), "MINI PC");
     }
 
+    /// `machine` with a display `mm` across and down, of `pixels`, on a
+    /// further output `name` of the graphics its first display is on: a
+    /// desk the fixtures do not have, to try a sheet on.
+    pub fn plugged(
+        mut machine: Machine,
+        name: &str,
+        mm: (f64, f64),
+        pixels: (u32, u32),
+    ) -> Machine {
+        let mut connector = machine
+            .connectors
+            .iter()
+            .find(|connector| connector.panel.is_some())
+            .cloned()
+            .expect("A display to copy");
+        let panel = connector.panel.as_mut().expect("A display");
+
+        connector.name = name.into();
+        connector.kind = ConnectorKind::of(name);
+        panel.pixels = pixels;
+        panel.size.width_mm = mm.0;
+        panel.size.height_mm = mm.1;
+        panel.size.diagonal_mm = mm.0.hypot(mm.1);
+        panel.size.mm_per_pixel_x = mm.0 / f64::from(pixels.0);
+        panel.size.mm_per_pixel_y = mm.1 / f64::from(pixels.1);
+        machine.connectors.push(connector);
+        machine
+    }
+
     /// What identifies a machine or its owner, planted in a tree by
     /// [`plant`]; the EDID's serial number and serial string are in its
     /// displays' EDIDs already.

@@ -8,6 +8,8 @@
 //! To add one, write a module with a type that implements [`Subject`] and add
 //! it to [`all`]. `quadrille-screensaver render --subject NAME` draws it
 //! headless at any moment, to look at while it is designed.
+use std::rc::Rc;
+
 use crate::draft::{Draft, Extent, V2};
 use crate::machine::Machine;
 
@@ -74,6 +76,24 @@ pub trait Subject {
     fn readings(&self, _t: f32) -> Vec<Reading> {
         Vec::new()
     }
+
+    /// The subject laid out for the room its front view has on an output,
+    /// if it lays itself out for that rather than once for every output: a
+    /// drawing to scale whose lettering takes room in pixels round what it
+    /// draws is drawn larger with that room taken in the output's pixels.
+    /// What it returns is drawn instead of it, and its card says the same
+    /// but where its details are.
+    fn fitted(&self, _room: Room) -> Option<Rc<dyn Subject>> {
+        None
+    }
+}
+
+/// The room a subject's front view has on an output: its size in virtual
+/// pixels, and the size of a virtual pixel on the glass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Room {
+    pub view: V2,
+    pub mm_per_vpx: f64,
 }
 
 /// A view of a subject besides its front view.

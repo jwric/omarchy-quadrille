@@ -29,7 +29,7 @@ use crate::draft::raster::{self, Head, Inked, LETTERING, Projection, colour, rec
 use crate::draft::scale::Ratio;
 use crate::draft::v;
 use crate::draft::{Draft, Extent, Ink, Line, Mark, Tone};
-use crate::subjects::{Card, Detail, Place, Subject};
+use crate::subjects::{Card, Detail, Place, Room, Subject};
 
 use layout::{CAPTION, LINE, Layout};
 use plates::Typist;
@@ -361,7 +361,9 @@ where
 /// the moment, and where the views put them.
 struct Scene<'a> {
     sheet: &'a Sheet<'a>,
-    card: &'a Card,
+    /// The subject laid out for its view's room, if it lays itself out
+    /// (see [`Subject::fitted`]): what the scene draws.
+    fitted: Option<Rc<dyn Subject>>,
     layout: Layout,
     draft: Draft,
     /// The front view's projection...
@@ -485,12 +487,12 @@ fn letter(index: usize) -> char {
 /// A view beside the front view or under it goes in if there is room for
 /// it: on a wide display at whatever scale fits them all, on a narrow one
 /// only at the scale the front view has alone.
-fn arrange(sheet: &Sheet<'_>, layout: &Layout) -> (Vec<Pane>, Option<Ratio>) {
-    let card = sheet.subject.card();
+fn arrange(subject: &dyn Subject, display: Display, layout: &Layout) -> (Vec<Pane>, Option<Ratio>) {
+    let card = subject.card();
     let area = layout.view;
-    let front = sheet.subject.extent();
-    let views = sheet.subject.views();
-    let alone = fit(card, front, area, sheet.display);
+    let front = subject.extent();
+    let views = subject.views();
+    let alone = fit(card, front, area, display);
     let only = |scale: f32| {
         vec![Pane {
             view: None,
@@ -541,7 +543,7 @@ fn arrange(sheet: &Sheet<'_>, layout: &Layout) -> (Vec<Pane>, Option<Ratio>) {
             if beside.is_some() { BETWEEN } else { 0 },
             if under.is_some() { BETWEEN } else { 0 } + CAPTION,
         );
-        let (scale, ratio) = fit_span(card, (across, down), gaps, area, sheet.display);
+        let (scale, ratio) = fit_span(card, (across, down), gaps, area, display);
 
         // On a narrow display, never smaller than the front view alone.
         if !layout.wide && scale < alone.0 * 0.999 {
@@ -631,15 +633,28 @@ fn arrange(sheet: &Sheet<'_>, layout: &Layout) -> (Vec<Pane>, Option<Ratio>) {
     (only(alone.0), alone.1)
 }
 
+/// The subject of `sheet` laid out for the main view of `layout`, if it
+/// lays itself out (see [`Subject::fitted`]).
+fn fitted(sheet: &Sheet<'_>, layout: &Layout) -> Option<Rc<dyn Subject>> {
+    sheet.subject.fitted(Room {
+        view: v(layout.view.width as f32, layout.view.height as f32),
+        mm_per_vpx: sheet.display.mm_per_vpx,
+    })
+}
+
 impl<'a> Scene<'a> {
     fn new(sheet: &'a Sheet<'a>, width: i32, height: i32, planned: &Planned) -> Self {
-        let card = sheet.subject.card();
-        let layout = Layout::new(width, height, card);
-        let (mut panes, main_ratio) = arrange(sheet, &layout);
+        // The subject's card lays the sheet out, and says the same laid
+        // out for any room.
+        let layout = Layout::new(width, height, sheet.subject.card());
+        let fitted = fitted(sheet, &layout);
+        let subject = fitted.as_deref().unwrap_or(sheet.subject);
+        let card = subject.card();
+        let (mut panes, main_ratio) = arrange(subject, sheet.display, &layout);
         let main = panes[0].projection;
 
         let mut draft = Draft::new();
-        sheet.subject.draw(&mut draft, sheet.showing.moment.run);
+        subject.draw(&mut draft, sheet.showing.moment.run);
 
         // Where the automatic annotations go in each view, from where the
         // subject's parts go over its run: the same on every frame.
@@ -654,13 +669,13 @@ impl<'a> Scene<'a> {
                     let mut sample = Draft::new();
                     let t = running * (k as f32 * 0.618_034).fract();
 
-                    sheet.subject.draw(&mut sample, t);
+                    subject.draw(&mut sample, t);
                     drawn.push(sample.marks().len());
 
                     // The circles the sheet marks details with, and their
                     // letters, which annotations keep clear of too.
                     for index in 0..card.parts.len() {
-                        if let Some(detail) = sheet.subject.detail(index, t) {
+                        if let Some(detail) = subject.detail(index, t) {
                             let corner = main.length(detail.radius).max(4) * 7 / 10;
                             let marker = |d: &mut Draft| {
                                 d.circle(detail.centre, detail.radius, Line::Phantom);
@@ -713,7 +728,7 @@ impl<'a> Scene<'a> {
         }
 
         let detail = sheet.showing.moment.focus().and_then(|focus| {
-            let detail = sheet.subject.detail(focus.part, sheet.showing.moment.run)?;
+            let detail = subject.detail(focus.part, sheet.showing.moment.run)?;
             let window = layout::inset(layout.detail_window(), 2);
             // The circle and a margin round it, magnified at least to the
             // next preferred scale past the view's.
@@ -753,7 +768,7 @@ impl<'a> Scene<'a> {
 
         Self {
             sheet,
-            card,
+            fitted,
             layout,
             draft,
             main,
@@ -761,6 +776,16 @@ impl<'a> Scene<'a> {
             panes,
             detail,
         }
+    }
+
+    /// What the scene draws: the sheet's subject, or it laid out for its
+    /// view's room.
+    fn subject(&self) -> &dyn Subject {
+        self.fitted.as_deref().unwrap_or(self.sheet.subject)
+    }
+
+    fn card(&self) -> &Card {
+        self.subject().card()
     }
 
     /// The marks every view shows, each with its view's projection; a
@@ -895,7 +920,7 @@ impl<'a> Scene<'a> {
 
     /// The title block, parts list, notes and the view's caption.
     fn plates<Renderer: geometry::Renderer>(&self, pen: &mut Pen<'_, Renderer>, palette: &Palette) {
-        let (layout, card, sheet) = (&self.layout, self.card, self.sheet);
+        let (layout, card, sheet) = (&self.layout, self.card(), self.sheet);
         let mut typist = Typist::rate(sheet.showing.moment.local, TYPING_RATE);
 
         let scale = self.scale_label(self.main_ratio);
@@ -978,14 +1003,14 @@ impl<'a> Scene<'a> {
 
         typist.text(
             pen,
-            &self.card.title,
+            &self.card().title,
             Point::new(x, bounds.y),
             Anchor::TOP_LEFT,
             palette.accent,
         );
-        x += (self.card.title.chars().count() as i32 + 4) * advance;
+        x += (self.card().title.chars().count() as i32 + 4) * advance;
 
-        for reading in self.sheet.subject.readings(self.sheet.showing.moment.run) {
+        for reading in self.subject().readings(self.sheet.showing.moment.run) {
             let width =
                 (reading.name.chars().count() + reading.value.chars().count() + 1) as i32 * advance;
 
@@ -1092,7 +1117,7 @@ impl<'a> Scene<'a> {
         let window = self.layout.detail_window();
         let plotted = view.focus.plotted();
         let since = view.focus.time - MARK;
-        let part = &self.card.parts[view.focus.part];
+        let part = &self.card().parts[view.focus.part];
 
         if layer.takes(false) {
             let mut pen = Pen::new(frame);
@@ -1497,7 +1522,7 @@ fn plot<'m, Renderer: geometry::Renderer>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draft::{Pass, Placement, Scope};
+    use crate::draft::{Measure, Pass, Placement, Scope};
     use crate::headless::Output;
     use crate::machine::Machine;
     use crate::subjects;
@@ -1556,7 +1581,9 @@ mod tests {
     /// its leader across it.
     fn placed_faults(sheet: &Sheet<'_>, scene: &Scene<'_>) -> Vec<String> {
         let mut recorded = Draft::new();
-        sheet.subject.draw(&mut recorded, sheet.showing.moment.run);
+        scene
+            .subject()
+            .draw(&mut recorded, sheet.showing.moment.run);
 
         let annotations: Vec<(bool, &Mark)> = recorded
             .marks()
@@ -2009,8 +2036,10 @@ mod tests {
             for index in 0..subjects.len() {
                 let sheet = sheet(&subjects, index, output, 30.0);
                 let layout = Layout::new(width as i32, height as i32, sheet.subject.card());
-                let (panes, _) = arrange(&sheet, &layout);
-                let views = sheet.subject.views();
+                let fitted = fitted(&sheet, &layout);
+                let subject = fitted.as_deref().unwrap_or(sheet.subject);
+                let (panes, _) = arrange(subject, sheet.display, &layout);
+                let views = subject.views();
                 let drawing = layout.drawing();
                 let name = subjects[index].name();
 
@@ -2018,7 +2047,7 @@ mod tests {
 
                 for (i, pane) in panes.iter().enumerate() {
                     let extent = match pane.view {
-                        None => sheet.subject.extent(),
+                        None => subject.extent(),
                         Some(view) => views[view].extent,
                     };
                     let corner = pane.projection.px(v(extent.min.x, extent.max.y));
@@ -2238,5 +2267,147 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The displays sheet reads well whatever displays a machine has and
+    /// wherever it is drawn: a laptop beside a monitor larger than itself,
+    /// three monitors and four, on the laptop and the ultrawide, on common
+    /// monitors, on a small laptop's screen and on a monitor on its side.
+    /// At each display's detail its lettering is clear, its dimensions'
+    /// values are off the edges, and a diagonal's value lettered in its
+    /// display is a line clear of the display's edges.
+    #[test]
+    fn the_displays_read_well_on_any_desk() {
+        use crate::machine::tests::plugged;
+        use crate::machine::{ConnectorKind, Fixture};
+
+        let laptop_and_monitor = {
+            let mut machine = Fixture::Laptop.machine();
+
+            for connector in &mut machine.connectors {
+                if connector.kind != ConnectorKind::Internal {
+                    connector.panel = None;
+                }
+            }
+
+            plugged(machine, "HDMI-A-1", (797.2, 333.7), (3440, 1440))
+        };
+        let three = plugged(
+            Fixture::Desktop.machine(),
+            "DP-2",
+            (597.7, 336.2),
+            (3840, 2160),
+        );
+        let four = plugged(three.clone(), "DP-3", (527.0, 296.5), (2560, 1440));
+        let monitor = |width, height, mm_per_vpx| Output {
+            width,
+            height,
+            scale: 1.0,
+            display: Display {
+                mm_per_vpx,
+                estimated: false,
+            },
+        };
+        let mut wrong = Vec::new();
+
+        for (desk, machine) in [
+            ("laptop", Fixture::Laptop.machine()),
+            ("desktop", Fixture::Desktop.machine()),
+            ("laptop and monitor", laptop_and_monitor),
+            ("three monitors", three),
+            ("four monitors", four),
+        ] {
+            let subjects = subjects::all(&machine);
+            let index = subjects::find(&subjects, "displays").expect("A displays sheet");
+
+            for (screen, output) in [
+                ("laptop", Output::LAPTOP),
+                ("ultrawide", Output::ULTRAWIDE),
+                ("1920 × 1080", monitor(1920, 1080, 0.553)),
+                ("2560 × 1440", monitor(2560, 1440, 0.467)),
+                ("1366 × 768", monitor(1366, 768, 0.504)),
+                ("1080 × 1920", monitor(1080, 1920, 0.553)),
+            ] {
+                let (width, height) = output.virtual_size();
+                let planned = Planned::default();
+
+                for part in 0..subjects[index].card().parts.len() {
+                    let local = timeline::PLOT_START
+                        + timeline::PLOT
+                        + timeline::SETTLE
+                        + timeline::DETAIL * part as f32
+                        + MARK
+                        + timeline::DETAIL_PLOT
+                        + 1.0;
+                    let sheet = sheet(&subjects, index, output, local);
+                    let scene = Scene::new(&sheet, width as i32, height as i32, &planned);
+                    let faults: Vec<String> = placed_faults(&sheet, &scene)
+                        .into_iter()
+                        .chain(lettering_faults(&scene))
+                        .chain(broken_outlines(&scene))
+                        .chain(dimension_faults(&scene))
+                        .collect();
+
+                    if !faults.is_empty() {
+                        wrong.push(format!(
+                            "{desk} on {screen} at {local:.1} s: {}",
+                            faults[..faults.len().min(4)].join("; ")
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+    }
+
+    /// Where a dimension's value is lettered over an edge, or a diagonal's,
+    /// lettered in its display, less than a line from one.
+    fn dimension_faults(scene: &Scene<'_>) -> Vec<String> {
+        let mut values = Vec::new();
+        let mut edges = Vec::new();
+
+        for (mark, projection) in scene.shown() {
+            let mut pieces = Vec::new();
+            raster::rasterize(mark, projection, &mut pieces);
+
+            for inked in pieces {
+                match (&mark.ink, inked.piece) {
+                    (Ink::Dimension { measure, text }, raster::Piece::Knockout(area)) => {
+                        values.push((
+                            text.clone(),
+                            matches!(measure, Measure::Diagonal { .. }),
+                            area,
+                        ));
+                    }
+                    (
+                        Ink::Stroke {
+                            line: Line::Outline,
+                            ..
+                        },
+                        raster::Piece::Path { pixels, .. },
+                    ) => edges.extend(pixels),
+                    _ => {}
+                }
+            }
+        }
+
+        values
+            .into_iter()
+            .filter_map(|(text, diagonal, area)| {
+                let clear = if diagonal { LINE - 1 } else { 0 };
+                let gap = |pixel: &Point<i32>| {
+                    let across = (area.x - pixel.x).max(pixel.x - (area.x + area.width - 1));
+                    let down = (area.y - pixel.y).max(pixel.y - (area.y + area.height - 1));
+
+                    across.max(down)
+                };
+
+                edges
+                    .iter()
+                    .find(|pixel| gap(pixel) <= clear)
+                    .map(|pixel| format!("{text:?} is within {clear} of an edge at {pixel:?}"))
+            })
+            .collect()
     }
 }

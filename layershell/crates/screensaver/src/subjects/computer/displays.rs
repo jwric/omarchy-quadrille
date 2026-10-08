@@ -1,36 +1,52 @@
-//! The displays, side by side at their true sizes: each one's active area
-//! as its EDID measures it, dimensioned in millimetres with its diagonal in
-//! inches. A detail magnifies its top left corner, where pixel (0, 0) is,
-//! far enough to show the pixel grid at the display's pitch.
+//! The displays at their true sizes: each one's active area as its EDID
+//! measures it, dimensioned in millimetres with its diagonal in inches,
+//! and named under its width by its connector and resolution. A detail
+//! magnifies its top left corner, where pixel (0, 0) is, far enough to show
+//! the pixel grid at the display's pitch.
+//!
+//! The displays stand side by side on one baseline, or in rows where rows
+//! let the view draw them larger: a laptop's own panel over a large monitor
+//! is drawn twice the size it would be beside it. Their lettering is a
+//! whole number of pixels at any scale, so they are laid out for the view
+//! they are drawn in (see [`Subject::fitted`]), the room round them in its
+//! pixels at the scale it draws them at; until a sheet says which view, for
+//! the laptop's.
 //!
 //! What moves is each display's scan line, running down it at its refresh
 //! rate slowed down enough to follow, so a faster display sweeps more often.
-use crate::draft::Placement::Auto;
+use std::cell::RefCell;
+use std::iter::successors;
+use std::rc::Rc;
+
+use crate::draft::Placement::{self, Auto};
+use crate::draft::raster::{BALLOON, LETTERING};
+use crate::draft::scale::Ratio;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, number, v};
 use crate::machine::{Connector, ConnectorKind, Machine, Panel, SensorKind, Site};
 
-use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
-use super::layout::short;
+use super::super::{Card, Domain, Part, Reading, Revision, Room, Subject, Unit};
+use super::layout::{BUDGET, LINE, short};
 use super::{SPEC_ROOM, chain, counted, fit, lettered};
 
-/// The room the drawing leaves round and between the displays, in units of
-/// the row's length over `UNIT`: room for the dimensions and their values.
-const UNIT: f32 = 36.0;
-/// A width's dimension line's distance from what it measures, and a
-/// height's: its value is lettered across its line, and clears the edge it
-/// measures at the scales the sheet draws the row at...
-const OFFSET: f32 = 1.0;
-const HEIGHT: f32 = 2.5;
-/// ...the gap between two displays, which holds the height of the second
-/// clear of the first...
-const GAP: f32 = 5.0;
-/// ...and the margins round the row.
-const LEFT: f32 = 4.5;
-const RIGHT: f32 = 1.0;
-const BELOW: f32 = 2.0;
-const ABOVE: f32 = 1.0;
-/// How far a centre line runs past its display.
-const OVERRUN: f32 = 0.4;
+/// The room the displays are laid out for until a sheet says which: the
+/// laptop's view, [`BUDGET`] virtual pixels of 0.404 mm on its glass.
+const LAPTOP: Room = Room {
+    view: BUDGET,
+    mm_per_vpx: 0.404,
+};
+
+/// The room round the displays, in pixels of the view: between lettering
+/// and the lines it keeps clear of...
+const CLEAR: f32 = 3.0;
+/// ...how far a centre line runs past its display...
+const OVERRUN: f32 = 4.0;
+/// ...a width's dimension line's distance under its display, its value
+/// lettered across the line clear of the centre line's end...
+const UNDER: f32 = 13.0;
+/// ...the room over a row, for its balloons...
+const OVER: f32 = 32.0;
+/// ...and how far a balloon beside a display is from its edge.
+const ASIDE: f32 = 18.0;
 
 /// The radius of the circle a detail magnifies, in pixels of its display,
 /// and how far in from the corner its centre is, in radii: the corner and a
@@ -49,18 +65,31 @@ pub struct Displays {
     machine: Machine,
     screens: Vec<Screen>,
     extent: Extent,
-    /// The unit of the room round the drawing, in millimetres.
-    room: f32,
+    /// A pixel of the view they are laid out for at the scale it draws
+    /// them at, in millimetres: the unit of the room round them.
+    pixel: f32,
     /// The sensor the graphics' temperature is read from.
     temperature: Option<usize>,
+    /// The displays laid out for each room a sheet has asked for.
+    fitted: RefCell<Vec<(Room, Rc<Displays>)>>,
 }
 
 /// A display as the sheet draws it.
 struct Screen {
     connector: Connector,
     panel: Panel,
-    /// Its active area in millimetres, on the baseline.
+    /// Its active area in millimetres, standing on its row's baseline.
     area: Extent,
+    /// What is lettered under its width: its connector and resolution, on
+    /// one line, or on two if one is wider than the display.
+    caption: Vec<String>,
+    /// How far left of it its height is dimensioned, in millimetres.
+    height: f32,
+    /// Whether its diagonal's value is lettered off it on a leader, as it
+    /// would not clear its edges by a line inside it.
+    leader: bool,
+    /// What its balloon points at, and where the balloon goes.
+    balloon: (V2, Placement),
 }
 
 impl Screen {
@@ -83,16 +112,284 @@ impl Screen {
 
         (self.origin() + v(INSET, -INSET) * radius, radius)
     }
+}
 
-    /// The diagonal as a display is sold by: `14.0"`.
-    fn inches(&self) -> String {
-        format!("{:.1}\"", self.panel.inches())
+/// The diagonal as a display is sold by: `14.0"`.
+fn inches(panel: &Panel) -> String {
+    format!("{:.1}\"", panel.inches())
+}
+
+/// What a display is lettered with, which the room round it is for.
+struct Letters {
+    /// Its active area's width and height, in millimetres.
+    size: V2,
+    /// Its height's value, its width's and its diagonal's...
+    height: String,
+    width: String,
+    diagonal: String,
+    /// ...and its connector and resolution.
+    name: String,
+    pixels: String,
+}
+
+impl Letters {
+    /// What `panel`, on `connector`, is lettered with.
+    fn of(connector: &Connector, panel: &Panel) -> Self {
+        let size = v(panel.size.width_mm as f32, panel.size.height_mm as f32);
+
+        Self {
+            size,
+            height: number(size.y),
+            width: number(size.x),
+            diagonal: inches(panel),
+            name: connector.name.clone(),
+            pixels: format!("{} × {}", panel.pixels.0, panel.pixels.1),
+        }
+    }
+}
+
+/// Where a display goes, and how it is lettered there.
+struct Spot {
+    area: Extent,
+    caption: Vec<String>,
+    height: f32,
+    leader: bool,
+    balloon: (V2, Placement),
+}
+
+/// The displays laid out for a view at one scale.
+struct Laid {
+    ratio: f64,
+    /// The view, in its pixels, and its pixel at that scale in
+    /// millimetres.
+    view: V2,
+    pixel: f32,
+    rows: usize,
+    spots: Vec<Spot>,
+    extent: Extent,
+}
+
+impl Laid {
+    /// How much of the view it takes, across or down, whichever is more:
+    /// no more than all of it if it fits.
+    fn fill(&self) -> f32 {
+        let size = v(self.extent.width(), self.extent.height()) / self.pixel;
+
+        (size.x / self.view.x).max(size.y / self.view.y)
+    }
+}
+
+/// `displays` laid out in the rows that let a view of `room` draw them at
+/// the largest preferred scale, and in as few as do: side by side, unless
+/// rows draw them larger.
+fn arranged(displays: &[Letters], room: Room) -> Laid {
+    let ratios: Vec<f64> = successors(Ratio::preferred_at_most(10.0), |ratio| {
+        Ratio::preferred_at_most(ratio.0 * (1.0 - 1e-6))
+    })
+    .map(|ratio| ratio.0)
+    .take_while(|&ratio| ratio >= 1e-4)
+    .collect();
+    let rowings = rowings(displays.len());
+
+    rowings
+        .iter()
+        .filter_map(|rows| {
+            ratios
+                .iter()
+                .map(|&ratio| laid_out(displays, rows, ratio, room))
+                .find(|laid| laid.fill() <= 1.0)
+        })
+        .max_by(|a, b| {
+            a.ratio
+                .total_cmp(&b.ratio)
+                .then(b.rows.cmp(&a.rows))
+                .then(b.fill().total_cmp(&a.fill()))
+        })
+        .unwrap_or_else(|| {
+            // None fits: as small as the sheet draws them, the rows that
+            // overflow the view least.
+            let smallest = ratios[ratios.len() - 1];
+
+            rowings
+                .iter()
+                .map(|rows| laid_out(displays, rows, smallest, room))
+                .min_by(|a, b| a.fill().total_cmp(&b.fill()))
+                .expect("A display")
+        })
+}
+
+/// Every way of putting `n` displays in rows in their order, as how many
+/// each row holds; past a dozen displays, rows that hold alike only.
+fn rowings(n: usize) -> Vec<Vec<usize>> {
+    if n > 12 {
+        return (1..=n)
+            .map(|rows| {
+                (0..rows)
+                    .map(|row| n * (row + 1) / rows - n * row / rows)
+                    .collect()
+            })
+            .collect();
+    }
+
+    (0..1_u32 << (n - 1))
+        .map(|breaks| {
+            let mut rows = vec![1];
+
+            for after in 0..n - 1 {
+                if breaks >> after & 1 == 1 {
+                    rows.push(1);
+                } else {
+                    *rows.last_mut().expect("A row") += 1;
+                }
+            }
+
+            rows
+        })
+        .collect()
+}
+
+/// `displays` in `rows` (how many each holds, in order), left-aligned, the
+/// first row at the top, each on its baseline, with the room their
+/// lettering takes in a view of `room` drawing them at `ratio`.
+fn laid_out(displays: &[Letters], rows: &[usize], ratio: f64, room: Room) -> Laid {
+    let pixel = (room.mm_per_vpx / ratio) as f32;
+    let wide = |text: &str| f32::from(LETTERING.width(text));
+    let cap = f32::from(LETTERING.cap());
+    // Of several rows, the last display of each has its balloon beside its
+    // right edge, where the paper is open by every row; any other over its
+    // top edge, in the room over its row.
+    let beside = rows.len() > 1;
+    let aside = if beside {
+        ASIDE + BALLOON as f32 + 1.0 + CLEAR
+    } else {
+        0.0
+    };
+
+    // What each display takes round it, in pixels: its height's value
+    // lettered across its dimension line, the line clear of the centre
+    // line's end; its caption, and how far that or its width's value, past
+    // the end of its dimension if the display is too narrow to hold it,
+    // spills past its sides.
+    struct Needs {
+        caption: Vec<String>,
+        offset: f32,
+        left: f32,
+        spill: f32,
+        past: f32,
+        leader: bool,
+    }
+
+    let needs: Vec<Needs> = displays
+        .iter()
+        .map(|display| {
+            let size = display.size / pixel;
+            let half = wide(&display.height) / 2.0;
+            let offset = half + 1.0 + OVERRUN + CLEAR;
+            let one = format!("{}  {}", display.name, display.pixels);
+            let caption = if wide(&one) <= size.x {
+                vec![one]
+            } else {
+                vec![display.name.clone(), display.pixels.clone()]
+            };
+            let widest = caption.iter().map(|line| wide(line)).fold(0.0, f32::max);
+            let width = wide(&display.width);
+
+            Needs {
+                offset,
+                left: offset + half + 2.0,
+                spill: ((widest + 3.0 - size.x) / 2.0).max(0.0),
+                past: if size.x >= width + 12.0 {
+                    0.0
+                } else {
+                    width + 6.0
+                },
+                leader: size.x < wide(&display.diagonal) + 3.0 + 2.0 * LINE
+                    || size.y < cap + 4.0 + 2.0 * LINE,
+                caption,
+            }
+        })
+        .collect();
+    let gap = |a: &Needs, b: &Needs| {
+        (OVERRUN + CLEAR + b.left)
+            .max(a.spill + b.spill + CLEAR)
+            .max(a.past + CLEAR)
+    };
+
+    let mut spots = Vec::with_capacity(displays.len());
+    let (mut left, mut right) = (0.0_f32, 0.0_f32);
+    // The top of the next row's room, from the top of the drawing down.
+    let mut top = 0.0;
+    let mut start = 0;
+
+    for &count in rows {
+        let row = start..start + count;
+        let tallest = row.clone().map(|i| displays[i].size.y).fold(0.0, f32::max);
+        let over = if beside && count == 1 {
+            LINE / 2.0
+        } else {
+            OVER
+        };
+        let baseline = top - over * pixel - tallest;
+        let mut x = 0.0;
+        let mut lines = 1;
+
+        for i in row.clone() {
+            if i > start {
+                x += gap(&needs[i - 1], &needs[i]) * pixel;
+            }
+
+            let size = displays[i].size;
+            // Over its top edge on the right, unless its diagonal's value
+            // goes there on a leader.
+            let along = if needs[i].leader { 0.2 } else { 0.8 };
+            let balloon = if beside && i == row.end - 1 {
+                (
+                    v(x + size.x, baseline + size.y * 0.75),
+                    Placement::Offset(ASIDE as i32, 0),
+                )
+            } else {
+                (v(x + size.x * along, baseline + size.y), Auto)
+            };
+
+            spots.push(Spot {
+                area: Extent::new(v(x, baseline), v(x + size.x, baseline + size.y)),
+                caption: needs[i].caption.clone(),
+                height: needs[i].offset * pixel,
+                leader: needs[i].leader,
+                balloon,
+            });
+            x += size.x;
+            lines = lines.max(needs[i].caption.len());
+        }
+
+        let (first, last) = (&needs[start], &needs[row.end - 1]);
+
+        left = left.max(first.left.max(first.spill) + CLEAR);
+        right = right.max(x + (OVERRUN.max(last.spill).max(last.past) + CLEAR).max(aside) * pixel);
+        top = baseline - (UNDER + LINE * lines as f32 + LINE / 2.0) * pixel;
+        start = row.end;
+    }
+
+    Laid {
+        ratio,
+        view: room.view,
+        pixel,
+        rows: rows.len(),
+        spots,
+        extent: Extent::new(v(-left * pixel, top), v(right, 0.0)),
     }
 }
 
 impl Displays {
-    /// The displays of `machine` whose sizes are known, if any are.
+    /// The displays of `machine` whose sizes are known, if any are, laid
+    /// out for the laptop's view.
     pub fn new(machine: &Machine) -> Option<Self> {
+        Self::for_room(machine, LAPTOP)
+    }
+
+    /// The displays of `machine` whose sizes are known laid out for a view
+    /// of `room`.
+    fn for_room(machine: &Machine, room: Room) -> Option<Self> {
         let measured: Vec<(&Connector, &Panel)> = machine
             .displays()
             .filter(|(_, panel)| !panel.size.estimated)
@@ -102,36 +399,24 @@ impl Displays {
             return None;
         }
 
-        let row: f32 = measured
+        let letters: Vec<Letters> = measured
             .iter()
-            .map(|(_, panel)| panel.size.width_mm as f32)
-            .sum();
-        let room = row / UNIT;
-        let mut x = 0.0;
+            .map(|&(connector, panel)| Letters::of(connector, panel))
+            .collect();
+        let laid = arranged(&letters, room);
         let screens: Vec<Screen> = measured
             .iter()
-            .map(|&(connector, panel)| {
-                let size = v(panel.size.width_mm as f32, panel.size.height_mm as f32);
-                let screen = Screen {
-                    connector: connector.clone(),
-                    panel: panel.clone(),
-                    area: Extent::new(v(x, 0.0), v(x + size.x, size.y)),
-                };
-
-                x += size.x + GAP * room;
-                screen
+            .zip(laid.spots)
+            .map(|(&(connector, panel), spot)| Screen {
+                connector: connector.clone(),
+                panel: panel.clone(),
+                area: spot.area,
+                caption: spot.caption,
+                height: spot.height,
+                leader: spot.leader,
+                balloon: spot.balloon,
             })
             .collect();
-
-        let right = screens.last().map_or(0.0, |screen| screen.area.max.x);
-        let tallest = screens
-            .iter()
-            .map(|screen| screen.area.max.y)
-            .fold(0.0, f32::max);
-        let extent = Extent::new(
-            v(-LEFT * room, -BELOW * room),
-            v(right + RIGHT * room, tallest + ABOVE * room),
-        );
 
         let sources: Vec<&str> = screens
             .iter()
@@ -183,18 +468,20 @@ impl Displays {
             card,
             machine: machine.clone(),
             screens,
-            extent,
-            room,
+            extent: laid.extent,
+            pixel: laid.pixel,
             temperature,
+            fitted: RefCell::default(),
         })
     }
 
-    /// A display's active area, its dimensions and what is lettered on it.
+    /// A display's active area, its dimensions and its name.
     fn screen(&self, d: &mut Draft, screen: &Screen) {
         let area = screen.area;
         let (low, high) = (area.min, area.max);
         let middle = area.centre();
-        let overrun = OVERRUN * self.room;
+        let overrun = OVERRUN * self.pixel;
+        let under = UNDER * self.pixel;
 
         // Its edges and centre lines are hundreds of times longer than its
         // detail is wide: the detail draws its corner itself.
@@ -212,8 +499,34 @@ impl Displays {
             );
         });
 
-        d.dim_h(low, v(high.x, low.y), -OFFSET * self.room);
-        d.dim_v(low, v(low.x, high.y), -HEIGHT * self.room);
+        d.dim_h(low, v(high.x, low.y), -under);
+        d.dim_v(low, v(low.x, high.y), -screen.height);
+
+        // Under its width's value, as a view's name is under the view.
+        for (line, text) in screen.caption.iter().enumerate() {
+            d.label(v(middle.x, low.y - under), text.as_str())
+                .nudge(0, LINE as i32 * (line as i32 + 1));
+        }
+
+        // From the diagonal toward its top corner, where it is clear of
+        // the dimensions and the balloon keeps to the other side.
+        if screen.leader {
+            d.note(low.lerp(high, 0.7), Auto, inches(&screen.panel))
+                .tone(Tone::Ink);
+        }
+    }
+
+    /// The diagonal, dimensioned corner to corner with its value in its
+    /// middle, or there without it if that is lettered on a leader. Drawn
+    /// with what moves, after the scan line, so the line passes behind it.
+    fn diagonal(&self, d: &mut Draft, screen: &Screen) {
+        let text = if screen.leader {
+            String::new()
+        } else {
+            inches(&screen.panel)
+        };
+
+        d.dim_diagonal(screen.area.min, screen.area.max).text(text);
     }
 
     /// What the detail of `screen` shows: its corner, the frame beyond it,
@@ -301,22 +614,6 @@ impl Displays {
                 });
             });
         });
-    }
-
-    /// What is lettered at a display's centre: its diagonal, dimensioned
-    /// corner to corner with its value in its middle, its connector over it
-    /// and its resolution under it. Drawn with what moves, after the scan
-    /// line, so the line passes behind it.
-    fn lettering(&self, d: &mut Draft, screen: &Screen) {
-        let middle = screen.area.centre();
-        let pixels = screen.panel.pixels;
-
-        d.dim_diagonal(screen.area.min, screen.area.max)
-            .text(screen.inches());
-        d.label(middle, format!("{} × {}", pixels.0, pixels.1))
-            .nudge(0, 12);
-        d.label(middle, screen.connector.name.as_str())
-            .nudge(0, -12);
     }
 
     /// The scan line of `screen` at `t`: down the display at its refresh
@@ -447,6 +744,25 @@ impl Subject for Displays {
         self.extent
     }
 
+    fn fitted(&self, room: Room) -> Option<Rc<dyn Subject>> {
+        let mut fitted = self.fitted.borrow_mut();
+
+        if let Some((_, displays)) = fitted.iter().find(|(made, _)| *made == room) {
+            return Some(displays.clone());
+        }
+
+        let displays = Rc::new(Self::for_room(&self.machine, room)?);
+
+        // A room for each output the sheet is drawn on, and a few more for
+        // one that changes size.
+        if fitted.len() >= 8 {
+            fitted.remove(0);
+        }
+
+        fitted.push((room, displays.clone()));
+        Some(displays)
+    }
+
     fn draw(&self, d: &mut Draft, t: f32) {
         for (index, screen) in self.screens.iter().enumerate() {
             d.part(index, |d| self.screen(d, screen));
@@ -454,16 +770,14 @@ impl Subject for Displays {
             d.moving(|d| {
                 d.part(index, |d| {
                     self.scan(d, screen, t);
-                    self.lettering(d, screen);
+                    self.diagonal(d, screen);
                 });
             });
         }
 
         for (index, screen) in self.screens.iter().enumerate() {
-            let area = screen.area;
-
             d.part(index, |d| {
-                d.balloon(index, v(area.min.x + area.width() * 0.8, area.max.y), Auto);
+                d.balloon(index, screen.balloon.0, screen.balloon.1);
             });
         }
     }
@@ -519,7 +833,7 @@ mod tests {
 
         assert!((own.area.width() - 301.6).abs() < 0.1, "{:?}", own.area);
         assert!((monitor.area.height() - 336.2).abs() < 0.1);
-        assert_eq!((own.area.min.y, monitor.area.min.y), (0.0, 0.0));
+        assert_eq!(own.area.min.y, monitor.area.min.y);
         assert!(monitor.area.min.x > own.area.max.x);
     }
 
@@ -685,6 +999,84 @@ mod tests {
         // 60 Hz: a sweep every 4 s.
         let monitor = &displays.screens[1].area;
         assert!((line(1, 2.0) - monitor.centre().y).abs() < 1e-3);
+    }
+
+    /// The displays are drawn as large as the view they are laid out for
+    /// lets them be: side by side where rows would not draw them larger, in
+    /// rows where they would, and never smaller for want of room for their
+    /// lettering, which takes the view's pixels, not a share of the row.
+    #[test]
+    fn displays_are_put_in_rows_where_rows_draw_them_larger() {
+        use crate::headless::Output;
+        use crate::machine::Fixture;
+        use crate::machine::tests::plugged;
+        use crate::sheet::layout::Layout;
+
+        let laid = |machine: &Machine, output: Output| {
+            let (width, height) = output.virtual_size();
+            let displays = Displays::new(machine).expect("Displays");
+            let view = Layout::new(width as i32, height as i32, displays.card()).view;
+            let room = Room {
+                view: v(view.width as f32, view.height as f32),
+                mm_per_vpx: output.display.mm_per_vpx,
+            };
+            let letters: Vec<Letters> = machine
+                .displays()
+                .map(|(connector, panel)| Letters::of(connector, panel))
+                .collect();
+            let laid = arranged(&letters, room);
+
+            (laid.rows, Ratio(laid.ratio).label())
+        };
+        let mut beside = Fixture::Laptop.machine();
+
+        for connector in &mut beside.connectors {
+            if connector.kind != ConnectorKind::Internal {
+                connector.panel = None;
+            }
+        }
+
+        let beside = plugged(beside, "HDMI-A-1", (797.2, 333.7), (3440, 1440));
+        let three = plugged(
+            Fixture::Desktop.machine(),
+            "DP-2",
+            (597.7, 336.2),
+            (3840, 2160),
+        );
+        let (laptop, ultrawide) = (Output::LAPTOP, Output::ULTRAWIDE);
+
+        // A laptop beside a monitor twice its width: side by side on the
+        // laptop, over it in two rows twice as large on the ultrawide.
+        assert_eq!(laid(&Machine::fixture(), laptop), (1, "1:5".into()));
+        assert_eq!(laid(&Machine::fixture(), ultrawide), (2, "1:2.5".into()));
+        // Beside one wider still, or two monitors: rows draw them twice as
+        // large as a row would on the laptop.
+        assert_eq!(laid(&beside, laptop), (2, "1:5".into()));
+        assert_eq!(laid(&Fixture::Desktop.machine(), laptop), (2, "1:5".into()));
+        assert_eq!(
+            laid(&Fixture::Desktop.machine(), ultrawide),
+            (2, "1:2.5".into())
+        );
+        // Three monitors side by side, as large as rows would draw them;
+        // room for their lettering as a share of the row had made it 1:20.
+        assert_eq!(laid(&three, laptop), (1, "1:10".into()));
+    }
+
+    /// Displays can be put in rows every way that keeps them in order, and
+    /// past a dozen in rows that hold alike.
+    #[test]
+    fn displays_are_put_in_rows_every_way() {
+        let mut ways = rowings(3);
+        ways.sort();
+
+        assert_eq!(ways, [vec![1, 1, 1], vec![1, 2], vec![2, 1], vec![3]]);
+        assert_eq!(rowings(1), [vec![1]]);
+        assert_eq!(rowings(14).len(), 14);
+        assert!(
+            rowings(14)
+                .iter()
+                .all(|rows| rows.iter().sum::<usize>() == 14)
+        );
     }
 
     /// The detail's pixel grid is set a pixel of the display at a time: at
