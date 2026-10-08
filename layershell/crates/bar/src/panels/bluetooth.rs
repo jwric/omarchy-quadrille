@@ -701,7 +701,7 @@ Device 44:44:44:44:44:44 Keyboard K1
         assert_eq!(icon_of("MOMENTUM 4"), icons::HEADPHONES);
         assert_eq!(icon_of("Logi K250"), icons::KEYBOARD);
         assert_eq!(icon_of("BluetoothMouse3600"), icons::MOUSE);
-        assert_eq!(icon_of("Jonathan's Buds3 Pro"), icons::HEADPHONES);
+        assert_eq!(icon_of("Alex's Buds3 Pro"), icons::HEADPHONES);
         assert_eq!(icon_of("MEGABOOM 3"), icons::SPEAKER);
         assert_eq!(icon_of("Mystery"), icons::BLUETOOTH);
     }

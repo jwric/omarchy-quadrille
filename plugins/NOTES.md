@@ -694,8 +694,8 @@ ShaderEffect.
   handout), committed as a minimal hunk.
 
 **In progress / not started**
-- No half-done clone is enabled. `plugins/tools/popup-brief.md` is the brief written for
-  sub-agents (rules, grid, kit, deploy loop, shared-file rules): hand it to each one.
+- No half-done clone is enabled. The brief for sub-agents (rules, grid, kit, deploy loop,
+  shared-file rules) is not kept in the repo: this file and the kit headers say the same.
 - Not started: bluetooth, network, monitor, tailscale, agents, weather, clock clones;
   `plugins/install.sh` / `stock.sh` still list only the old plugins (add the new ids:
   quadrille.audio quadrille.power ...; enable a clone only if its stock widget is in the

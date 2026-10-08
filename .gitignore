@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# Notes written for the agents that work on this repo: kept on disk, not published
+docs/RESUME.md
+plugins/tools/popup-brief.md
