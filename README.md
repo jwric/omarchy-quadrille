@@ -29,7 +29,11 @@ It is four layers, each useful without the next:
 
 Needs an Omarchy 4 desktop (Hyprland, Quickshell) and a checkout of
 [quadrille](https://github.com/jwric/quadrille) beside this one (or
-`QUADRILLE=/path`): the fonts and the palettes come from it.
+`QUADRILLE=/path`): the fonts and the palettes come from it. Building the panel
+host and the screensaver (layers 3 and 4) also takes a Rust toolchain (`cargo`)
+and libxkbcommon, the one system library they link (Hyprland needs it too); the
+first build downloads its dependencies, among them quadrille and the iced fork,
+from GitHub.
 
 ```sh
 tools/install.sh                           # link the themes, install Departure Mono and its fontconfig rule
@@ -80,9 +84,10 @@ pixels (`tools/gen_themes.py --unit`).
 ## Display calibration and cursor overlay
 
 Centimetre-rounded EDID is snapped to a nominal panel family, then width and
-height follow the native pixel aspect. This machine resolves to 344.6 × 215.4 mm
-and 796.6 × 333.5 mm; these are inferred sizes. A mark rounds to the nearest vpx:
-0.404 mm on the laptop, 0.463 mm on the Dell. The sheet's mark-error bound is
+height follow the native pixel aspect. The author's laptop and its Dell
+ultrawide resolve to 344.6 × 215.4 mm and 796.6 × 333.5 mm; these are inferred
+sizes. A mark rounds to the nearest vpx: 0.404 mm on the laptop, 0.463 mm on the
+Dell. The sheet's mark-error bound is
 half a vpx, conservatively rounded upward; it is not a calibration guarantee.
 Missing EDID uses an explicitly estimated density and `~` labels.
 
@@ -212,7 +217,7 @@ moving part steps out of the way of lettering it would cover. Lettering is
 drawn whole or not at all.
 
 Drawings to scale use a preferred scale (ISO 5455, with DIN 823's 2.5) that
-is true on the display's calibration: the engine is 1:1 on both monitors here
+is true on the display's calibration: the engine is 1:1 on both of the author's monitors
 and the gears 2:1 (on the ultrawide, with room for their section under them);
 on an estimated size the scale reads `~2:1`. Lettering,
 patterns and line types are whole virtual pixels, in the Omarchy theme's

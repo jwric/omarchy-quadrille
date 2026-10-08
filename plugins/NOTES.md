@@ -31,7 +31,7 @@ hover edge ink muted faint line accent on_accent highlight live caution alarm`,
 plus `unit`). The shell's own tokens name only about seven of them (there is no
 `live`, `caution`, `line`, `faint`, `hover` or `highlight`), so without the table
 the kit derives them (see `Q/Role.qml`). And the user's
-`~/.config/omarchy/shell.toml` is merged on top of the theme's: on this machine it
+`~/.config/omarchy/shell.toml` is merged on top of the theme's: on the author's machine it
 holds `[font] base-size = 12`. The theme's pinned per-token sizes outrank it for
 fonts, but it sets `Style.fontScale`, and so how `Style.space()` scales: at the
 theme's own `base-size = 22` every `space(n)` would be multiplied by 1.83 and land
@@ -351,7 +351,7 @@ and not fixable from a plugin, so the clone does not depend on it:
 If a later Omarchy fixes the facade the fallback is simply not used. Any other
 third-party menu clone will hit the same thing.
 
-## Popup panels (agent P)
+## Popup panels
 
 ### Why spacing, not only type: the theme tokens
 
@@ -430,9 +430,9 @@ entry shell). The facade's `shell` still has `summon`, `updateEntryInline`,
 `firstPartyServiceFor` (null) and `pluginCloneMaySummon` allows an audio clone
 to summon the OSD and a network clone the speedtest and wifiqr.
 
-## Status at pause (agent B: the bar and the kit)
+## The bar and the kit: state at the first pause
 
-(Superseded in part by "Agent B, resumed" at the end: the tray is on, the flicker is
+(Superseded in part by "The size flicker, the mixel rule, the tray hang" at the end: the tray is on, the flicker is
 fixed, the hang was not reproduced.)
 
 **Done and verified** (both monitors, `crisp.py`-style: colour transitions only on
@@ -500,10 +500,10 @@ reads as an invader.
   seconds, without touching the live shell; `QSTEST_SCREEN=eDP-2` picks the screen.
 * A scratch Quickshell that crashes posts a persistent "Process crashed: quickshell"
   critical toast: `omarchy-shell notifications dismissAll`.
-* Agent P's popup clones (`quadrille.audio`, `quadrille.power`, ...) replace the
+* The popup clones (`quadrille.audio`, `quadrille.power`, ...) replace the
   layout ids; `Bar.qml`'s `popupClones` map makes them wear the original's skin.
 
-## Menu, OSD, notifications, overlays, app icons (agent O)
+## Menu, OSD, notifications, overlays, app icons
 
 ### The pixel rule these follow: one pixel size per surface, no mixels
 
@@ -517,8 +517,8 @@ bar...), drawn at one vpx a pixel next to the 1 x readout and the 1 x gauge; the
 toast icon is a 16 x 16 `AppIcon`; the menu's is 11 x 11; the emoji are 14 x 14;
 the app placeholder is a native 11 x 11 box with the initial. `Pictograms.qml`
 (7 x 7) is for a place one text row tall. A new size gets its own file
-(`Pictograms21.qml`...), never a `unit: 2 * ...`. (Not mine, and still mixed:
-`BigText`, PixelText at 2x or 3x, in the popup panels.)
+(`Pictograms21.qml`...), never a `unit: 2 * ...`. (Still mixed, outside
+this section's surfaces: `BigText`, PixelText at 2x or 3x, in the popup panels.)
 
 ### What is done (checked offscreen at both scales, and live on the laptop's output)
 
@@ -672,7 +672,7 @@ ShaderEffect.
 * The offscreen harness's output must stay outside the Quickshell config directory
   it runs from, or the change reloads the shell under test.
 
-## Status at the pause (agent P; superseded by the final state below)
+## Popup panels: state at the pause (superseded by the final state below)
 
 **Done and verified**
 - Theme tokens (`tools/gen_themes.py`, themes regenerated, committed, applied with
@@ -694,8 +694,8 @@ ShaderEffect.
   handout), committed as a minimal hunk.
 
 **In progress / not started**
-- No half-done clone is enabled. The brief for sub-agents (rules, grid, kit, deploy loop,
-  shared-file rules) is not kept in the repo: this file and the kit headers say the same.
+- No half-done clone is enabled. The rules for writing a clone (the grid, the kit, the deploy
+  loop) are in this file and in the kit's headers.
 - Not started: bluetooth, network, monitor, tailscale, agents, weather, clock clones;
   `plugins/install.sh` / `stock.sh` still list only the old plugins (add the new ids:
   quadrille.audio quadrille.power ...; enable a clone only if its stock widget is in the
@@ -727,9 +727,9 @@ ShaderEffect.
 - `qmldir`, `Bar.qml`, `Sprites.qml` are edited by several agents: stage only your
   hunks (HEAD content plus your replacement) rather than the whole file.
 
-## One pixel size to a surface: native sprites, no mixels (agent P)
+## One pixel size to a surface: native sprites, no mixels
 
-The user's rule: no mixels, a mixed pixel size. A 7 x 7 sprite drawn at 2x or 3x
+The rule here: no mixels, a mixed pixel size. A 7 x 7 sprite drawn at 2x or 3x
 beside text and 1x icons is a mixel, so an icon that spans more than a text row is
 **its own sprite at its own native size**, with the detail those pixels allow (an
 outline in `#`, a fill in a second tone, inner shapes), and it must read as the
@@ -753,9 +753,9 @@ percentage, the temperature, the date) is `BigText`. It is drawn at the surface'
 pixel from a large face designed for these sizes (`tools/hero_face.py`, "The large
 face" below), not the small face scaled.
 
-## Agent B, resumed: the size flicker, the mixel rule, the tray hang
+## The size flicker, the mixel rule, the tray hang (the bar and the kit, resumed)
 
-### The size flicker on open (the user's top bug), measured
+### The size flicker on open, measured
 
 "An odd size flickering when opening hovers and some of the widget windows, and
 opening between them", on the laptop (1.666667). It was not eyeballed: every
@@ -826,7 +826,7 @@ only be cloned. H4 (the host's `PanelToolTip`) sizes itself from its text after 
 is shown, inside the panel's own window, and draws in the distance-field renderer:
 the kit's `QTip` and the bar's tooltip size from bitmap metrics before they show.
 
-What O and P still have to do for their surfaces (not done here, not mine):
+What the overlay and popup surfaces still have to do (not done in the kit):
 
 * every `PanelWindow` that appears on "whatever has the focus" (the OSD, the menu,
   the clipboard, emojis, the image picker, reminders, a toast) is created with no
@@ -896,7 +896,7 @@ is allowed), not the live one.
   for every skin, a polish of the sysmon gauges, the 9 x 7 weather sprites redrawn
   (cloud with sun or moon are still lumpy).
 
-## Popup panels: the final state (agent P)
+## Popup panels: the final state
 
 Nine clones of the host's panels, each the stock plugin's logic verbatim with the view
 redrawn by the popup kit: `quadrille.audio`, `.power`, `.clock`, `.weather`,
@@ -919,7 +919,7 @@ offscreen runs of the clone authors, not from the real ultrawide; eDP-2 (1.66666
 `layershell/tools/crisp.py` on every card: 4 to 11 colours, every transition on the grid
 (mod 3 on eDP-2, mod 2 at scale 1). Re-run `plugins/tools/popup-shots.sh` on HDMI-A-1 when it is back.
 
-**One size from the first frame** (the user's flicker bug; the kit part is agent B's:
+**One size from the first frame** (the size-flicker bug; the kit part is
 `Px`, `Settle`, `SizeGate`, `SurfaceProbe`). What the clones add, measured with
 `plugins/tools/surfaces/popups.sh QA|QB "cases"` (one popup at a time, and `switch/A/B`:
 popup A then B 300 ms later; read with `analyse.py`):
@@ -946,8 +946,8 @@ popup A then B 300 ms later; read with `analyse.py`):
   /tmp/quadrille-live.lock) " /proc/locks` and `fuser` for non-`flock` holders.
 
 **No mixels.** Heroes are native sprites (see "One pixel size to a surface" above); the
-hero numbers are `BigText`, drawn from a face of its own at the surface's pixel (agent B,
-"The large face" below; the Scale2x/Scale3x expansion that was here rounded every corner
+hero numbers are `BigText`, drawn from a face of its own at the surface's pixel
+("The large face" below; the Scale2x/Scale3x expansion that was here rounded every corner
 and is gone).
 
 **Per clone** (what is not obvious from the code):
@@ -991,7 +991,7 @@ sizes; they can only be cloned. QRow's trailing items were centred on a half pix
 ellipsis, and a machine's DNS name is dropped when it does not fit beside its IP:
 the "drop, never cut" rule applied to a secondary field.
 
-### The large face (agent B): hero text drawn, not scaled
+### The large face: hero text drawn, not scaled
 
 "Too rounded" was right. `BigText` (the temperature, the battery percentage, the
 date in the weather, power and clock popups) had been made by expanding the small
@@ -1034,7 +1034,7 @@ the hero strings), and live on eDP-2 (1.666667) the clock, weather and power pop
 draw it with two colours and every colour change on a multiple of 3 device pixels from
 the region's origin (`crisp.py`), as the rest of the popup does.
 
-## Why the Wi-Fi popup took a second to appear, and the time to card of every popup (agent P)
+## Why the Wi-Fi popup took a second to appear, and the time to card of every popup
 
 **Measured**, not guessed: the nested harness (`plugins/tools/surfaces/popups.sh QA "network"`
 with `FRAMES=45`, read with `frames.py`, `analyse.py` and the new `timeline.py`), real
@@ -1083,8 +1083,8 @@ frames are about 33 ms apart, so each figure is good to about 35 ms; machine qui
 The floor of about 150 ms is the window's: visible at +50, its own scale after the compositor
 answers (+100, `Settle`), then three polls of 16 ms of `SizeGate`. The live laptop showed
 about 2.4 s for the network card before, the same stall on slower silicon with the real
-access-point list. (The laptop was not re-timed live after the change: the user is at
-the machine, and the popup harness moves workspaces. The nested run uses the same
+access-point list. (The laptop was not re-timed live after the change: the popup harness moves
+workspaces, so it is not run on a desktop in use. The nested run uses the same
 NetworkManager, the same panel and the same kit.)
 
 **What a "pixel text is slow" bench says** (300 lines of 35 characters, make / then the next event):
