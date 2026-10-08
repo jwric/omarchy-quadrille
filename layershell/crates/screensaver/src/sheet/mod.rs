@@ -388,6 +388,10 @@ struct Pane {
 /// The room between views lined up on a sheet.
 const BETWEEN: i32 = 2 * LINE;
 
+/// How far past a whole number of pixels to a unit a diagram may fill its
+/// area and be drawn at the whole number all the same.
+const WHOLE: f64 = 1.15;
+
 struct DetailView {
     focus: Focus,
     detail: Detail,
@@ -419,7 +423,7 @@ impl DetailView {
 
 /// The pixels per model unit that frame `extent` in `area`: at the largest
 /// preferred scale for a drawing to scale, filling it for a diagram.
-fn fit(
+pub(crate) fn fit(
     card: &Card,
     extent: Extent,
     area: Rectangle<i32>,
@@ -446,6 +450,18 @@ fn fit_span(
     let unit = card.unit.millimetres();
     let filling = (f64::from(area.width - gaps.0) / f64::from(span.0))
         .min(f64::from(area.height - gaps.1) / f64::from(span.1));
+
+    if !card.scaled {
+        // A diagram that would fill the area at a little more than a whole
+        // number of pixels to a unit is drawn at the whole number: every
+        // point of its layout on a pixel, every block as large as another
+        // of its size, for a little of the area.
+        let whole = filling.floor();
+
+        if whole >= 1.0 && filling < whole * WHOLE {
+            return (whole as f32, None);
+        }
+    }
 
     if card.scaled {
         let limit = filling * display.mm_per_vpx / unit;
