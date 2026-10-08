@@ -2391,22 +2391,30 @@ impl Cooling {
                     ));
                 }
 
-                // Every sensor but a package's is a core's, drawn or not.
-                let cores: usize = sources
+                // Every sensor but a package's is a core's or a die's, drawn
+                // or not, as the monitor names them.
+                let others: Vec<String> = sources
                     .iter()
-                    .map(|source| {
-                        source
-                            .sensors
-                            .iter()
-                            .filter(|&&index| {
-                                !machine.sensors[index].label.as_deref().is_some_and(package)
-                            })
-                            .count()
+                    .flat_map(|source| &source.sensors)
+                    .map(|&index| {
+                        machine.sensors[index]
+                            .label
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase()
                     })
-                    .sum();
+                    .filter(|label| !package(label))
+                    .collect();
+                let what = if others.iter().all(|label| label.starts_with("core")) {
+                    "CORES"
+                } else if others.iter().all(|label| label.starts_with("tccd")) {
+                    "DIES"
+                } else {
+                    "SENSORS"
+                };
 
-                if sources.iter().any(|source| !source.cores.is_empty()) {
-                    spec.push(("CORES".into(), format!("{cores} MEASURED")));
+                if !others.is_empty() {
+                    spec.push((what.into(), format!("{} MEASURED", others.len())));
                 }
 
                 if let Some(source) = sources.first() {
@@ -3426,6 +3434,12 @@ mod tests {
             ["CPU", "GPU", "MEMORY", "NVMe", "SSD", "HDD", "BOARD"]
         );
         assert!(cooling.plan.pipe.is_none());
+        // Its processor's other sensor is a die's, not a core's.
+        assert!(
+            cooling.card().parts[0]
+                .spec
+                .contains(&("DIES".into(), "1 MEASURED".into()))
+        );
 
         let extent = cooling.extent();
         assert!(extent.width() <= BUDGET.x && extent.height() <= BUDGET.y);
