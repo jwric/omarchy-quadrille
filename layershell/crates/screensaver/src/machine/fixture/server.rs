@@ -192,6 +192,7 @@ pub(super) fn spec() -> Spec {
             Site::Module(n.into()),
         )
         .temp(1, 38_000 + 250 * i64::from(n), None)
+        .max(75_000)
     }));
     chips.extend((0..8).map(|n| {
         Chip::new("nvme", On::Drive(n), Site::Drive(n))

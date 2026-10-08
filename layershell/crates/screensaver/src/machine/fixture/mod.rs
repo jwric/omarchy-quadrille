@@ -333,6 +333,8 @@ struct Channel {
     value: i64,
     label: Option<String>,
     read: bool,
+    /// A temperature's high limit, in millidegrees.
+    max: Option<i64>,
 }
 
 impl Chip {
@@ -362,7 +364,16 @@ impl Chip {
             value,
             label: label.map(Into::into),
             read,
+            max: None,
         });
+        self
+    }
+
+    /// The last channel's high limit, in millidegrees.
+    fn max(mut self, millidegrees: i64) -> Self {
+        if let Some(channel) = self.channels.last_mut() {
+            channel.max = Some(millidegrees);
+        }
         self
     }
 
@@ -465,6 +476,7 @@ impl Spec {
                             chip: chip.name.into(),
                             channel,
                             label: read.label.clone(),
+                            limit: read.max.map(|max| max as f32 / 1000.0),
                             site,
                         })
                 })
@@ -1282,6 +1294,9 @@ impl Spec {
                         &format!("{at}/{}_label", channel.name),
                         format!("{label}\n"),
                     );
+                }
+                if let Some(max) = channel.max {
+                    fake.file(&format!("{at}/{}_max", channel.name), format!("{max}\n"));
                 }
             }
         }

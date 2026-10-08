@@ -182,8 +182,8 @@ pub(super) fn spec() -> Spec {
             Chip::new("k10temp", On::Pci((0, 0x18, 3)), Site::Processor(0))
                 .temp(1, 48_750, Some("Tctl"))
                 .temp(3, 46_500, Some("Tccd1")),
-            module(0x51, 0).temp(1, 41_000, None),
-            module(0x53, 1).temp(1, 42_250, None),
+            module(0x51, 0).temp(1, 41_000, None).max(55_000),
+            module(0x53, 1).temp(1, 42_250, None).max(55_000),
             Chip::new("nvme", On::Drive(0), Site::Drive(0))
                 .temp(1, 44_850, Some("Composite"))
                 .temp(2, 44_850, Some("Sensor 1"))

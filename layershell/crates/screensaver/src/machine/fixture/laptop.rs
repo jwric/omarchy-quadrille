@@ -157,8 +157,13 @@ fn spec() -> Spec {
             )
             .temp(1, 52_000, Some("Package")),
             Chip::new("nvme", On::Drive(0), Site::Drive(0)).temp(1, 41_850, Some("Composite")),
-            module(0x50, Site::Module(0)).temp(1, 45_500, None),
-            module(0x51, Site::Module(1)).temp(1, 46_250, None),
+            // DDR5 modules' monitors warn from 55 °C.
+            module(0x50, Site::Module(0))
+                .temp(1, 45_500, None)
+                .max(55_000),
+            module(0x51, Site::Module(1))
+                .temp(1, 46_250, None)
+                .max(55_000),
             Chip::new("ec", On::Ec(LPC), Site::Board)
                 .fan(1, 2200, Some("CPU Fan"))
                 .fan(2, 1870, Some("System Fan")),

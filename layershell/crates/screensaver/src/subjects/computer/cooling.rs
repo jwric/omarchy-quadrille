@@ -63,6 +63,8 @@ const TUBE: f32 = 60.0;
 const GLASS: f32 = 2.0;
 const COLDEST: f32 = 20.0;
 const HOTTEST: f32 = 100.0;
+/// The tick over a tube at the limit its chip gives.
+const LIMIT: f32 = 2.0;
 /// Between thermometers one under another, bulb to bulb: a bulb and room
 /// for a pixel or more between bulbs at any scale the view is drawn at.
 const GAUGE: f32 = 9.0;
@@ -991,6 +993,11 @@ fn rpm(snapshot: &Snapshot, index: usize) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// Whether a temperature is on the thermometers' scale, short of its ends.
+fn on_scale(celsius: f32) -> bool {
+    celsius > COLDEST && celsius < HOTTEST
+}
+
 /// A temperature as a sheet letters it.
 fn degrees(celsius: Option<f32>) -> String {
     match celsius {
@@ -1351,6 +1358,14 @@ impl Cooling {
 
         notes.push(format!("THERMOMETERS {COLDEST} TO {HOTTEST} °C"));
 
+        if sources
+            .iter()
+            .flat_map(|source| &source.gauges)
+            .any(|&gauge| machine.sensors[gauge].limit.is_some_and(on_scale))
+        {
+            notes.push("TICK OVER A TUBE: ITS HIGH LIMIT".into());
+        }
+
         if listed.len() > fans.len() {
             notes.push(format!(
                 "{} MORE NOT SHOWN",
@@ -1651,9 +1666,20 @@ impl Cooling {
                 });
             });
         } else {
-            for k in 0..source.gauges.len() {
+            for (k, &sensor) in source.gauges.iter().enumerate() {
+                let limit = self.limit(sensor);
+
                 source.set_gauge(d, k, |d, at| {
                     d.keyhole(at, BULB_RADIUS, GLASS, BULB_RADIUS + TUBE, Line::Outline);
+
+                    // Where its chip says it should stay under, ticked over
+                    // the tube.
+                    if let Some(limit) = limit {
+                        let x = at.x + BULB_RADIUS + TUBE * (limit - COLDEST) / (HOTTEST - COLDEST);
+
+                        d.line(v(x, at.y + GLASS), v(x, at.y + GLASS + LIMIT), Line::Thin)
+                            .tone(Tone::Caution);
+                    }
 
                     // The scale, every 20 °C, where a detail has room for it.
                     d.in_detail(|d| {
@@ -2275,6 +2301,14 @@ impl Cooling {
                 .tone(tone);
             key += letters(text.chars().count() + 3) as i32;
         }
+    }
+
+    /// Sensor `index`'s limit, if its chip gives one on the thermometers'
+    /// scale.
+    fn limit(&self, index: usize) -> Option<f32> {
+        self.machine.sensors[index]
+            .limit
+            .filter(|&limit| on_scale(limit))
     }
 
     /// Where fan `fan` is in the case, in words: `LEFT`, `TOP RIGHT`.

@@ -29,6 +29,10 @@ pub struct Sensor {
     pub channel: u32,
     /// What the chip calls it: `Package id 0`, `Composite`.
     pub label: Option<String>,
+    /// For a temperature, the most its part should run at as its chip
+    /// says, in °C: its high limit, or else its critical one. A drive's is
+    /// not read, as asking is a command to the drive.
+    pub limit: Option<f32>,
     /// What it is on.
     pub site: Site,
 }
@@ -256,11 +260,21 @@ pub(super) fn hwmon(tree: &Tree, pci: &[PciDevice], drives: &[String]) -> Hwmon 
                     continue;
                 }
 
+                let limit = ["max", "crit"]
+                    .iter()
+                    .filter(|_| kind == SensorKind::Temperature && !slow)
+                    .find_map(|limit| {
+                        tree.number::<f64>(format!("{DIR}/{entry}/{prefix}{n}_{limit}"))
+                    })
+                    .map(|value| (value / per_unit) as f32)
+                    .filter(|&value| kind.plausible(value));
+
                 sensors.push(Sensor {
                     kind,
                     chip: chip.clone(),
                     channel: n,
                     label: tree.text(format!("{DIR}/{entry}/{prefix}{n}_label")),
+                    limit,
                     site,
                 });
                 sources.push((source, per_unit, kind));
@@ -674,6 +688,46 @@ mod tests {
         fake.file(&format!("{at}/temp5_input"), "-128000\n");
 
         assert_eq!(gauges.sample(None, None).0.sensors, [Some(32.0), None]);
+    }
+
+    /// A temperature's limit is its chip's high one, or else its critical
+    /// one, in °C; none is asked of a drive's monitor, nor kept when it is
+    /// nonsense.
+    #[test]
+    fn a_temperature_keeps_its_chips_limit() {
+        let fake = Fake::new();
+
+        for (at, chip) in [("hwmon0", "spd5118"), ("hwmon1", "drivetemp")] {
+            let at = format!("sys/class/hwmon/{at}");
+
+            fake.file(&format!("{at}/name"), format!("{chip}\n"));
+            fake.file(&format!("{at}/temp1_input"), "41000\n");
+            fake.file(&format!("{at}/temp1_max"), "55000\n");
+            fake.file(&format!("{at}/temp1_crit"), "85000\n");
+            fake.file(&format!("{at}/temp2_input"), "42000\n");
+            fake.file(&format!("{at}/temp2_crit"), "85000\n");
+            fake.file(&format!("{at}/temp3_input"), "43000\n");
+            fake.file(&format!("{at}/temp3_max"), "255000\n");
+        }
+
+        let machine = fake.read();
+        let limits: Vec<(&str, Option<f32>)> = machine
+            .sensors
+            .iter()
+            .map(|sensor| (sensor.chip.as_str(), sensor.limit))
+            .collect();
+
+        assert_eq!(
+            limits,
+            [
+                ("spd5118", Some(55.0)),
+                ("spd5118", Some(85.0)),
+                ("spd5118", None),
+                ("drivetemp", None),
+                ("drivetemp", None),
+                ("drivetemp", None),
+            ]
+        );
     }
 
     /// Only temperatures and fan speeds are read: no sheet draws a
