@@ -2350,13 +2350,13 @@ mod tests {
         };
 
         assert_eq!(
-            called_as("Generic 200 Series Processors USB 3.2 xHCI Host Controller"),
+            called_as("Generic 9 Series Processors USB 3.2 xHCI Host Controller"),
             "USB 3.2 XHCI HOST"
         );
-        assert_eq!(called_as("Ethernet Controller I225-V"), "ETHERNET I225-V");
+        assert_eq!(called_as("Ethernet Controller X100-V"), "ETHERNET X100-V");
         assert_eq!(
-            called_as("Wi-Fi 7(802.11be) WX1775*/WX1790* 2x2"),
-            "WI-FI 7 WX1775 2X2"
+            called_as("Wi-Fi 7(802.11be) WX700*/WX710* 2x2"),
+            "WI-FI 7 WX700 2X2"
         );
         assert_eq!(called_as("SATA Controller"), "SATA");
     }

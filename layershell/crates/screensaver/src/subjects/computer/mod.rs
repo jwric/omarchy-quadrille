@@ -257,7 +257,7 @@ fn lettered(name: &str) -> String {
 ///   [Generic RTX 400]`, is the marketing name; a name of its own followed
 ///   by a code name in brackets, `Wi-Fi 6E WX210 2x2 [Generic Peak]`, is
 ///   the name;
-/// - a list of the models that share the device's id, `WX1775*/WX1790*`,
+/// - a list of the models that share the device's id, `WX700*/WX710*`,
 ///   is the first of them, and a model's wildcard star is dropped;
 /// - `PCI Express` is `PCIe`.
 fn cleaned(name: &str) -> String {
@@ -395,16 +395,16 @@ mod tests {
                 "WI-FI 6E(802.11AX) WX210 2X2",
             ),
             (
-                "Wi-Fi 7(802.11be) WX1775*/WX1790*/BE20*/BE401/BE1750* 2x2",
-                "WI-FI 7(802.11BE) WX1775 2X2",
+                "Wi-Fi 7(802.11be) WX700*/WX710*/WB20*/WB40 2x2",
+                "WI-FI 7(802.11BE) WX700 2X2",
             ),
             (
-                "NVMe SSD Controller SM981/PM981/PM983",
-                "NVMe SSD CONTROLLER SM981",
+                "NVMe SSD Controller SX100/PX100/PX200",
+                "NVMe SSD CONTROLLER SX100",
             ),
             (
-                "RTL8111/8168/8211/8411 PCI Express Gigabit Ethernet Controller",
-                "RTL8111 PCIe GIGABIT ETHERNET CONTROLLER",
+                "GX8100/8200/8300 PCI Express Gigabit Ethernet Controller",
+                "GX8100 PCIe GIGABIT ETHERNET CONTROLLER",
             ),
             // Not lists of models: speeds, standards, code names.
             (
@@ -416,7 +416,7 @@ mod tests {
                 "802.11A/B/G/N WIRELESS ADAPTER",
             ),
             ("Generic Lake-P/U/H Audio", "GENERIC LAKE-P/U/H AUDIO"),
-            ("Ethernet Controller I225-V", "ETHERNET CONTROLLER I225-V"),
+            ("Ethernet Controller X100-V", "ETHERNET CONTROLLER X100-V"),
         ] {
             assert_eq!(cleaned(name), cleaned_as, "{name}");
         }
