@@ -41,7 +41,7 @@ pub const BUDGET: V2 = v(581.0, 445.0);
 /// Room round the drawing for the balloons to line up in.
 const MARGIN: f32 = 22.0;
 /// A line of lettering.
-const LINE: f32 = 12.0;
+pub const LINE: f32 = 12.0;
 /// Between a block's sides and its lettering.
 const PAD: f32 = 6.0;
 /// From a block's top to where its wires meet it: the middle of its first
@@ -76,24 +76,32 @@ const COLUMNS: usize = 3;
 /// The squares a die has of each kind of core, at most, and to a row.
 const MOST_SQUARES: u32 = 32;
 const ACROSS: u32 = 8;
-/// The last cache's band across a die: a line of lettering with a little
-/// room over and under it.
-const BAND: f32 = 12.0;
+/// The last cache's band across a die: a line of lettering with the
+/// ground it clears and room over and under that, so it never breaks the
+/// band's edges.
+const BAND: f32 = 14.0;
 /// The memory modules drawn, at most.
 const MOST_MODULES: usize = 16;
 /// In a detail, lettering is at least twice its size in the view: a line
 /// every half line, half a character's advance for every character.
-const DETAIL_LINE: f32 = LINE / 2.0;
+pub const DETAIL_LINE: f32 = LINE / 2.0;
+/// What a detail draws in a block, at the least width it takes: a graphics
+/// card's outputs, a drive's partitions, a network adapter's jack or
+/// antenna beside its lettering, a USB host's ports.
+pub const PORTS: f32 = 72.0;
+pub const PARTITIONS: f32 = 72.0;
+pub const LINK: f32 = letters(DETAIL_ROOM) / 2.0 + 18.0;
+pub const PLUGS: f32 = 84.0;
 /// What a network adapter whose link is down is lettered.
 const NO_LINK: &str = "NO LINK";
-/// The characters of a detail's line: a block is made wide enough for
-/// them, so they are fewer than a name may have (the specification has the
-/// whole of it).
+/// The characters of a detail's line a block is made wide enough for, at
+/// the least: a line is cut to what the detail has room for, fewer than a
+/// name may have (the specification has the whole of it).
 const DETAIL_ROOM: usize = 22;
 
 /// A run of `n` characters' width at the laptop's scale.
-fn letters(n: usize) -> f32 {
-    n as f32 * f32::from(LETTERING.advance())
+const fn letters(n: usize) -> f32 {
+    n as f32 * LETTERING.advance() as f32
 }
 
 /// The widest of `lines`, in characters.
@@ -157,8 +165,11 @@ pub struct Node {
     pub merged: Vec<Source>,
     /// Lettered in it in the view...
     pub lines: Vec<String>,
-    /// ...and in a detail, where there is room for more.
+    /// ...and in a detail, where there is room for more, over what the
+    /// detail draws of it...
     pub more: Vec<String>,
+    /// ...which takes this much of its width at the least.
+    pub drawing: f32,
     /// The connector the wire to it is, lettered on the wire.
     pub via: Option<String>,
     /// What measures the traffic to it: more than one for devices merged.
@@ -179,6 +190,7 @@ impl Node {
             merged: Vec::new(),
             lines,
             more: Vec::new(),
+            drawing: 0.0,
             via: None,
             gauges: Vec::new(),
             count: 1,
@@ -189,6 +201,11 @@ impl Node {
 
     fn more(mut self, more: Vec<String>) -> Self {
         self.more = more.into_iter().filter(|line| !line.is_empty()).collect();
+        self
+    }
+
+    fn drawing(mut self, width: f32) -> Self {
+        self.drawing = width;
         self
     }
 
@@ -220,7 +237,8 @@ impl Node {
             Form::Terminal => 9.0 + letters(widest(&self.lines)) + 2.0,
             _ => {
                 (letters(widest(&self.lines)) + balloon)
-                    .max(letters(widest(&self.more)) / 2.0 + 2.0)
+                    .max(letters(widest(&self.more).min(DETAIL_ROOM)) / 2.0 + 2.0)
+                    .max(self.drawing)
                     .max(48.0)
                     + 2.0 * PAD
             }
@@ -341,10 +359,10 @@ pub fn named(device: &PciDevice) -> String {
     }
 }
 
-/// What a PCI device is, as much as a detail's line holds: without the
-/// platform it is a part of (`… SERIES PROCESSORS`) or the word
-/// `CONTROLLER`, which every device is, and where it is too long without
-/// the standard it keeps in brackets, so its model is kept.
+/// What a PCI device is, for a detail's line: without the platform it is a
+/// part of (`… SERIES PROCESSORS`) or the word `CONTROLLER`, which every
+/// device is, and where it is longer than a line without the standard it
+/// keeps in brackets, so its model is kept.
 fn called(device: &PciDevice) -> String {
     let name = named(device);
     let mut words: Vec<&str> = name.split_whitespace().collect();
@@ -378,7 +396,7 @@ fn called(device: &PciDevice) -> String {
         name = name.split_whitespace().collect::<Vec<_>>().join(" ");
     }
 
-    fit(&name, DETAIL_ROOM)
+    name
 }
 
 /// What a bridge on the root bus is, by where it is rather than by the
@@ -405,10 +423,7 @@ pub fn bridged(device: &PciDevice) -> String {
 /// Its address and driver, for a detail.
 fn bound(device: &PciDevice) -> String {
     match &device.driver {
-        Some(driver) => fit(
-            &format!("PCI {} {driver}", short(device.address)),
-            DETAIL_ROOM,
-        ),
+        Some(driver) => format!("PCI {} {driver}", short(device.address)),
         None => format!("PCI {}", short(device.address)),
     }
 }
@@ -435,7 +450,7 @@ fn graphics(machine: &Machine, device: &PciDevice) -> Node {
                 };
                 let name = match (&panel.name, internal) {
                     (_, true) => "BUILT-IN PANEL".to_owned(),
-                    (Some(name), false) => fit(&lettered(name), DETAIL_ROOM),
+                    (Some(name), false) => lettered(name),
                     (None, false) => "MONITOR".to_owned(),
                 };
                 let refresh = panel
@@ -453,8 +468,11 @@ fn graphics(machine: &Machine, device: &PciDevice) -> Node {
                     )
                     .more(vec![
                         name,
-                        format!("{inches} {pixels}"),
-                        refresh,
+                        [inches, refresh]
+                            .into_iter()
+                            .filter(|what| !what.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(", "),
                         pitch,
                     ])
                 }
@@ -478,12 +496,8 @@ fn graphics(machine: &Machine, device: &PciDevice) -> Node {
             Source::Pci(device.address),
             vec!["GRAPHICS".into(), outputs.clone()],
         )
-        .more(vec![
-            "GRAPHICS".into(),
-            called(device),
-            bound(device),
-            outputs,
-        ])
+        .more(vec![called(device), bound(device)])
+        .drawing(PORTS)
     }
 }
 
@@ -502,19 +516,6 @@ fn drive_kind(drive: &Drive) -> &'static str {
 
 fn drive(index: usize, drive: &Drive) -> Node {
     let size = decimal(drive.bytes);
-    let filesystems: Vec<String> = drive
-        .partitions
-        .iter()
-        .filter_map(|partition| {
-            let filesystem = partition.filesystem.as_deref()?.to_uppercase();
-
-            Some(if partition.mapped {
-                format!("{filesystem} ON DM")
-            } else {
-                filesystem
-            })
-        })
-        .collect();
 
     Node {
         gauges: vec![Gauge::Drive(index)],
@@ -525,17 +526,13 @@ fn drive(index: usize, drive: &Drive) -> Node {
             vec![drive_kind(drive).into(), size.clone()],
         )
         .more(vec![
-            fit(
-                &lettered(drive.model.as_deref().unwrap_or(drive_kind(drive))),
-                DETAIL_ROOM,
-            ),
+            lettered(drive.model.as_deref().unwrap_or(drive_kind(drive))),
             format!(
                 "{size}, {}",
                 counted(drive.partitions.len(), "PARTITION", "PARTITIONS")
             ),
-            fit(&filesystems.join(", "), DETAIL_ROOM),
-            drive.name.clone(),
         ])
+        .drawing(PARTITIONS)
     }
 }
 
@@ -546,15 +543,7 @@ fn storage(device: &PciDevice, drives: &[(usize, &Drive)]) -> Node {
     if let [(index, only)] = drives
         && only.kind == DriveKind::Nvme
     {
-        let mut node = drive(*index, only);
-
-        // The detail's lines are fewer when nothing on the drive is
-        // mounted, so the last is found, not counted to.
-        if let Some(last) = node.more.last_mut() {
-            *last = bound(device);
-        }
-
-        return node;
+        return drive(*index, only);
     }
 
     let label = if (device.class >> 8) & 0xff == 0x06 {
@@ -572,7 +561,11 @@ fn storage(device: &PciDevice, drives: &[(usize, &Drive)]) -> Node {
             Source::Pci(device.address),
             vec![label.into(), count.clone()],
         )
-        .more(vec![label.into(), called(device), bound(device), count])
+        .more(vec![
+            format!("{label}, {count}"),
+            called(device),
+            bound(device),
+        ])
     }
 }
 
@@ -622,11 +615,11 @@ fn network(machine: &Machine, device: &PciDevice) -> Node {
             lines,
         )
         .more(vec![
-            name.into(),
             called(device),
             bound(device),
             state.unwrap_or_default(),
         ])
+        .drawing(LINK)
     }
 }
 
@@ -652,7 +645,6 @@ fn usb(machine: &Machine, device: &PciDevice) -> Option<Node> {
     let label = fastest.map_or("USB".into(), |(major, minor)| {
         format!("USB {major}.{minor}")
     });
-    let ports: u32 = hubs.iter().map(|hub| hub.ports).sum();
     let mut children: Vec<Node> = hubs
         .iter()
         .flat_map(|hub| machine.usb_on(Some(&hub.port)))
@@ -669,16 +661,8 @@ fn usb(machine: &Machine, device: &PciDevice) -> Option<Node> {
             Source::Pci(device.address),
             vec!["USB HOST".into(), label.clone()],
         )
-        .more(vec![
-            format!("USB HOST, {label}"),
-            called(device),
-            bound(device),
-            format!(
-                "{}, {}",
-                counted(hubs.len(), "BUS", "BUSES"),
-                counted(ports as usize, "PORT", "PORTS")
-            ),
-        ])
+        .more(vec![called(device), bound(device)])
+        .drawing(PLUGS)
     })
 }
 
@@ -731,10 +715,7 @@ fn usb_device(machine: &Machine, device: &UsbDevice, column: usize) -> Node {
             vec![class.into()],
         )
         .more(vec![
-            fit(
-                &lettered(device.product.as_deref().unwrap_or(class)),
-                DETAIL_ROOM,
-            ),
+            lettered(device.product.as_deref().unwrap_or(class)),
             format!("PORT {} {speed}", device.port),
         ])
     };
@@ -809,12 +790,28 @@ fn bridge(machine: &Machine, root: PciAddress, nodes: impl Iterator<Item = Node>
 }
 
 /// Marks the first block of each part, in the order they are drawn, as
-/// the one its balloon points at: an open terminal never.
+/// the one its balloon points at and its detail is of: an open terminal
+/// never, and of the drives a drive before its controller, so the detail
+/// shows a drive's partitions.
 fn mark_balloons(tree: &mut [Node]) {
+    let preferred = |node: &Node| match node.group {
+        Group::Drive => matches!(node.source, Source::Drive(_)),
+        _ => true,
+    };
+    let mut first: Vec<Group> = Vec::new();
+
+    walk(tree, 0, &mut |node, _| {
+        if node.form != Form::Terminal && preferred(node) && !first.contains(&node.group) {
+            first.push(node.group);
+        }
+    });
+
     let mut seen = Vec::new();
 
     walk(tree, 0, &mut |node, _| {
-        node.balloon = node.form != Form::Terminal && !seen.contains(&node.group);
+        node.balloon = node.form != Form::Terminal
+            && !seen.contains(&node.group)
+            && (preferred(node) || !first.contains(&node.group));
 
         if node.balloon {
             seen.push(node.group);
@@ -939,10 +936,19 @@ fn combined(mut alike: Vec<Node>) -> Node {
 
             node.lines.truncate(1);
             node.lines.push(format!("{up} OF {count} UP"));
+
+            if let Some(state) = node.more.get_mut(2) {
+                *state = node.lines[1].clone();
+            }
         }
         Group::Drive => {
             if let Some(size) = node.lines.get_mut(1) {
                 size.push_str(" EACH");
+
+                // Its detail draws the first one's partitions.
+                if let Some(drives) = node.more.get_mut(1) {
+                    *drives = format!("{count} DRIVES, {size}");
+                }
             }
         }
         _ => {}
@@ -1235,17 +1241,20 @@ impl Diagram {
         loop {
             mark_balloons(&mut tree);
 
-            let diagram = Self::of(machine, cpu, &tree, shown);
+            let mut diagram = Self::of(machine, cpu, &tree, shown);
             let size = v(diagram.extent.width(), diagram.extent.height());
-
-            if size.x <= BUDGET.x && size.y <= BUDGET.y {
-                return Some(diagram);
-            }
-
             let folded = (size.x > BUDGET.x && fold(&mut tree, true))
                 || (size.y > BUDGET.y && fold(&mut tree, false));
 
             if !folded {
+                // A diagram smaller than the budget is given the room of
+                // one as large, so the laptop draws it at a pixel to a unit
+                // as its lettering is sized for, and what its details show
+                // is the same however much is on its buses.
+                let room = (BUDGET - size).max(V2::ZERO) / 2.0;
+
+                diagram.extent.min -= room.floor();
+                diagram.extent.max += room.ceil();
                 return Some(diagram);
             }
         }
@@ -1736,7 +1745,8 @@ fn package(cpu: &Cpu) -> (V2, impl Fn(V2, f32) -> Package) {
     let across = across as f32;
     let needed = (cores_width + 8.0).max(match (&cache, packages) {
         (_, 1) => 0.0,
-        (Some(cache), _) => letters(cache.chars().count()) + 12.0,
+        // The cache's lettering and the ground it clears inside its band.
+        (Some(cache), _) => letters(cache.chars().count()) + 16.0,
         (None, _) => 0.0,
     });
     let die_width = needed
@@ -1920,7 +1930,7 @@ mod tests {
                     block.lines
                 );
                 assert!(
-                    letters(widest(&block.more)) / 2.0 + 2.0 <= frame.width(),
+                    letters(widest(&block.more).min(DETAIL_ROOM)) / 2.0 + 2.0 <= frame.width(),
                     "{:?}",
                     block.more
                 );
@@ -2227,7 +2237,7 @@ mod tests {
     }
 
     /// An NVMe drive with nothing on it mounted (a second system's, a
-    /// spare) has a line fewer in its detail, and is drawn all the same.
+    /// spare) is drawn all the same.
     #[test]
     fn a_drive_with_nothing_mounted_is_drawn() {
         let mut machine = Machine::fixture();
@@ -2243,8 +2253,7 @@ mod tests {
             .find(|block| block.source == Source::Drive(0))
             .expect("The drive");
 
-        assert_eq!(drive.more.len(), 3);
-        assert!(drive.more[2].starts_with("PCI 01:00.0"), "{:?}", drive.more);
+        assert_eq!(drive.more, ["NVMe SSD 1TB", "1 TB, 2 PARTITIONS"]);
     }
 
     /// A detail's line names a device by what tells it from another: not

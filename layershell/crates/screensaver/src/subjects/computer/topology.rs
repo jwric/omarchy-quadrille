@@ -3,19 +3,22 @@
 //! adapters), the USB tree and the displays on the graphics card's
 //! connectors. Traffic runs along the wires as dots, at the rates the
 //! machine measures its drives and network adapters at.
+use std::f32::consts::PI;
+
 use quadrille::draw::Anchor;
 
 use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, v};
 use crate::machine::{
-    CoreKind, Drive, DriveKind, Interface, Link, Machine, Panel, PciAddress, PciDevice, SensorKind,
-    Site, UsbDevice,
+    Connector, ConnectorKind, CoreKind, Drive, DriveKind, Interface, Link, Machine, Panel,
+    Partition, PciAddress, PciDevice, SensorKind, Site, UsbDevice,
 };
 
 use super::super::schematic::Schematic;
 use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
 use super::layout::{
-    Bank, Diagram, Form, Gauge, Group, Package, Placed, Source, bridged, named, short, version,
+    Bank, DETAIL_LINE, Diagram, Form, Gauge, Group, LINE, Package, Placed, Source, bridged, named,
+    short, version,
 };
 use super::{SPEC_ROWS, binary, bits, counted, decimal, fit, flow, lettered, rate, rows};
 
@@ -328,19 +331,124 @@ impl Topology {
             .tone(if k == 0 { Tone::Ink } else { Tone::Muted });
         }
 
+        self.in_its_detail(d, block, |d| self.detail(d, block));
+    }
+
+    /// What the detail of `block` shows that the view has no room for: its
+    /// lettering in full and, for what has more to it, a drawing of that
+    /// under it.
+    fn detail(&self, d: &mut Draft, block: &Placed) {
+        let frame = block.frame;
+        let plate = plate(frame);
         // A screen's lettering clears its glass.
         let first = match block.form {
             Form::Screen { .. } => frame.max.y - 7.0,
             _ => frame.max.y - 5.0,
         };
 
-        self.in_its_detail(d, block, |d| {
-            for (k, line) in block.more.iter().enumerate() {
-                d.label(v(frame.min.x + 4.0, first - 6.0 * k as f32), line.as_str())
-                    .anchor(Anchor::LEFT)
-                    .tone(if k == 0 { Tone::Ink } else { Tone::Muted });
+        let outputs: Vec<&Connector> = match (block.group, block.source) {
+            (Group::Graphics, Source::Pci(address)) => self
+                .machine
+                .connectors
+                .iter()
+                .filter(|c| c.gpu == Some(address))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let symbol = block.group == Group::Network && frame.height() >= 2.0 * LINE + 8.0;
+        // As many characters as the plate has room for at twice the view's
+        // scale, three units each: a screen's short of the dimension down
+        // its glass, an adapter's of its jack or antenna.
+        let right = match block.form {
+            Form::Screen { .. } => across(frame) - 6.0,
+            _ if symbol => plate.max.x - 14.0,
+            _ => plate.max.x,
+        };
+        let room = ((right - plate.min.x) / 3.0).floor() as usize;
+        // A graphics card whose outputs' names take two rows under them
+        // has its name alone over them.
+        let lines = if ports_in_one_row(plate, &outputs) {
+            block.more.len()
+        } else {
+            1
+        };
+
+        for (k, line) in block.more.iter().take(lines).enumerate() {
+            d.label(
+                v(plate.min.x, first - DETAIL_LINE * k as f32),
+                fit(line, room),
+            )
+            .anchor(Anchor::LEFT)
+            .tone(if k == 0 { Tone::Ink } else { Tone::Muted });
+        }
+
+        // Under its lines of lettering.
+        let under = first - DETAIL_LINE * (lines as f32 - 0.5) - 1.0;
+
+        match (block.form, block.source) {
+            (Form::Screen { .. }, Source::Connector(index)) => {
+                if let Some(panel) = self
+                    .machine
+                    .connectors
+                    .get(index)
+                    .and_then(|c| c.panel.as_ref())
+                {
+                    screen(d, frame, panel);
+                }
             }
-        });
+            (Form::Block, Source::Drive(index)) => {
+                if let Some(drive) = self.machine.drives.get(index) {
+                    partitions(
+                        d,
+                        Extent::new(
+                            v(plate.min.x, frame.min.y + 4.0),
+                            v(plate.max.x, under.min(frame.min.y + 13.0)),
+                        ),
+                        drive,
+                    );
+                }
+            }
+            (Form::Block, Source::Pci(address)) => match block.group {
+                Group::Graphics => {
+                    ports(
+                        d,
+                        Extent::new(v(plate.min.x, frame.min.y + 2.0), v(plate.max.x, under)),
+                        &outputs,
+                    );
+                }
+                Group::Usb => {
+                    let hubs: Vec<&UsbDevice> = self
+                        .machine
+                        .usb_on(None)
+                        .filter(|hub| hub.controller == Some(address))
+                        .collect();
+
+                    plugs(
+                        d,
+                        &self.machine,
+                        Extent::new(v(plate.min.x, frame.min.y + 2.0), v(plate.max.x, under)),
+                        &hubs,
+                    );
+                }
+                Group::Network if symbol => {
+                    let wireless = self
+                        .machine
+                        .interfaces
+                        .iter()
+                        .find(|i| i.pci == Some(address) && !i.usb)
+                        .is_some_and(|i| i.link == Link::Wireless);
+                    let side = v(plate.max.x - 7.0, frame.centre().y);
+
+                    if wireless {
+                        antenna(d, side);
+                    } else {
+                        jack(d, side);
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
     }
 
     /// Records what `draw` makes for the detail of `block`'s part, if that
@@ -352,6 +460,51 @@ impl Topology {
         if block.balloon {
             d.in_own_detail(draw);
         }
+    }
+
+    /// In the network adapter's detail, under its lettering, what it
+    /// receives and sends at `t`.
+    fn rates(&self, d: &mut Draft, t: f32) {
+        let Some(block) = self
+            .diagram
+            .blocks
+            .iter()
+            .find(|block| block.group == Group::Network && block.balloon)
+            .filter(|block| block.frame.height() >= 2.0 * LINE + 8.0)
+        else {
+            return;
+        };
+        let snapshot = self.machine.sample(t);
+        let (received, sent) = std::iter::once(&block.source)
+            .chain(&block.merged)
+            .filter_map(|source| match source {
+                Source::Pci(address) => Some(*address),
+                _ => None,
+            })
+            .flat_map(|address| {
+                self.machine
+                    .interfaces
+                    .iter()
+                    .enumerate()
+                    .filter(move |(_, i)| i.pci == Some(address) && !i.usb)
+                    .map(|(index, _)| index)
+            })
+            .filter_map(|index| snapshot.interfaces.get(index).copied().flatten())
+            .fold((0.0, 0.0), |(received, sent), traffic| {
+                (received + traffic.received, sent + traffic.sent)
+            });
+        let line = block.frame.max.y - 5.0 - DETAIL_LINE * block.more.len() as f32;
+
+        d.part(self.index(Item::Blocks(Group::Network)), |d| {
+            d.in_own_detail(|d| {
+                d.label(
+                    v(plate(block.frame).min.x, line),
+                    format!("RX {:.1} TX {}", received.max(0.0) / 1e6, megabytes(sent)),
+                )
+                .anchor(Anchor::LEFT)
+                .tone(Tone::Live);
+            });
+        });
     }
 
     /// The traffic on every route, at the rates measured at `t`.
@@ -384,6 +537,333 @@ impl Topology {
             dots(d, &route.pieces, outward, false, t, Tone::Accent);
         }
     }
+}
+
+/// The widest a detail's drawing and lettering are: what the laptop's
+/// detail window shows of a block at twice the view's scale, the least a
+/// detail magnifies, with a little to spare.
+const PLATE: f32 = 100.0;
+
+/// Where a detail of a block framed by `frame` draws: inside it, across its
+/// middle, no wider than [`PLATE`].
+fn plate(frame: Extent) -> Extent {
+    let half = ((frame.width() - 8.0) / 2.0).min(PLATE / 2.0);
+    let middle = frame.centre().x;
+
+    Extent::new(
+        v((middle - half).round(), frame.min.y + 2.0),
+        v((middle + half).round(), frame.max.y - 2.0),
+    )
+}
+
+/// Where the dimension down a display's glass runs, in the detail of a
+/// screen framed by `frame`: clear of the glass's edge by its value.
+fn across(frame: Extent) -> f32 {
+    plate(frame).max.x - 8.0
+}
+
+/// A display's glass in its detail, framed by `frame`: its pixels
+/// dimensioned across it and down it.
+fn screen(d: &mut Draft, frame: Extent, panel: &Panel) {
+    let glass = Extent::new(frame.min + v(2.0, 2.0), frame.max - v(2.0, 2.0));
+    let low = glass.min.y + 4.0;
+    let x = across(frame);
+
+    d.dim_h(v(glass.min.x, low), v(glass.max.x, low), 0.0)
+        .text(format!("{} PX", panel.pixels.0));
+    d.dim_v(v(x, glass.min.y), v(x, glass.max.y), 0.0)
+        .text(panel.pixels.1.to_string());
+}
+
+/// The least a partition is drawn across, however small: room for its
+/// number and the ground it clears at twice the view's scale.
+const SLIVER: f32 = 7.0;
+
+/// A drive's partitions as a bar across `bar`, in their order on it: each
+/// as long as its share of the drive, a sliver at the least, lettered with
+/// its number and filesystem as far as there is room; the space no
+/// partition takes hatched.
+fn partitions(d: &mut Draft, bar: Extent, drive: &Drive) {
+    let total = drive.bytes.max(1);
+    let mut parts: Vec<&Partition> = drive.partitions.iter().collect();
+    let mut pieces: Vec<(Option<&Partition>, u64)> = Vec::new();
+    let mut end = 0;
+
+    parts.sort_by_key(|part| part.start);
+
+    // Space between partitions, past the alignment they leave.
+    for part in parts {
+        if part.start > end + total / 100 {
+            pieces.push((None, part.start - end));
+        }
+
+        pieces.push((Some(part), part.bytes));
+        end = end.max(part.start + part.bytes);
+    }
+
+    if total > end + total / 100 {
+        pieces.push((None, total - end));
+    }
+
+    let width = bar.width();
+    let mut lengths: Vec<f32> = pieces
+        .iter()
+        .map(|&(part, bytes)| {
+            let share = (bytes as f64 / total as f64) as f32 * width;
+
+            match part {
+                Some(_) => share.max(SLIVER),
+                None => share,
+            }
+        })
+        .collect();
+
+    // What the slivers take, from the longest.
+    let over: f32 = lengths.iter().sum::<f32>() - width;
+
+    if let Some(longest) = lengths.iter_mut().max_by(|a, b| a.total_cmp(b)) {
+        *longest -= over;
+    }
+
+    d.rect(bar.min, bar.max, Line::Outline);
+
+    let mut left = bar.min.x;
+
+    for (k, ((part, _), length)) in pieces.iter().zip(&lengths).enumerate() {
+        let right = if k + 1 == pieces.len() {
+            bar.max.x
+        } else {
+            (left + length).round()
+        };
+
+        if k > 0 {
+            d.line(v(left, bar.min.y), v(left, bar.max.y), Line::Outline);
+        }
+
+        match part {
+            None => {
+                d.hatch(&corners(Extent::new(
+                    v(left, bar.min.y),
+                    v(right, bar.max.y),
+                )));
+            }
+            Some(part) => {
+                let number = part.number.to_string();
+                let filesystem = part.filesystem.as_deref().map(str::to_uppercase);
+                let mut names = Vec::new();
+
+                if let Some(filesystem) = &filesystem {
+                    if part.mapped {
+                        names.push(format!("{number} {filesystem} ON DM"));
+                    }
+                    names.push(format!("{number} {filesystem}"));
+                }
+                names.push(number);
+
+                // A character is three units across at twice the view's
+                // scale, and its ground a little more.
+                if let Some(name) = names
+                    .into_iter()
+                    .find(|name| name.chars().count() as f32 * 3.0 + 4.0 <= right - left)
+                {
+                    d.label(v((left + right) / 2.0, bar.centre().y), name);
+                }
+            }
+        }
+
+        left = right;
+    }
+
+    if pieces.is_empty() {
+        d.label(bar.centre(), "NO PARTITIONS");
+    }
+}
+
+/// The outline of a graphics card's socket of `kind`, ten units across
+/// and six high round `at`: DisplayPort's with a corner cut, HDMI's
+/// narrowing at the foot, DVI's and VGA's tapered, the machine's own
+/// panel's flat ribbon.
+fn socket(kind: ConnectorKind, at: V2, scale: f32) -> Vec<V2> {
+    let points: &[(f32, f32)] = match kind {
+        ConnectorKind::DisplayPort => &[
+            (-5.0, 3.0),
+            (5.0, 3.0),
+            (5.0, -3.0),
+            (-3.0, -3.0),
+            (-5.0, -1.0),
+        ],
+        ConnectorKind::Hdmi => &[
+            (-5.0, 3.0),
+            (5.0, 3.0),
+            (5.0, 0.0),
+            (3.5, -3.0),
+            (-3.5, -3.0),
+            (-5.0, 0.0),
+        ],
+        ConnectorKind::Dvi => &[
+            (-5.0, 3.0),
+            (5.0, 3.0),
+            (5.0, -1.0),
+            (4.0, -3.0),
+            (-4.0, -3.0),
+            (-5.0, -1.0),
+        ],
+        ConnectorKind::Vga => &[(-5.0, 3.0), (5.0, 3.0), (4.0, -3.0), (-4.0, -3.0)],
+        ConnectorKind::Internal => &[(-5.0, 1.5), (5.0, 1.5), (5.0, -1.5), (-5.0, -1.5)],
+        ConnectorKind::Other => &[(-5.0, 3.0), (5.0, 3.0), (5.0, -3.0), (-5.0, -3.0)],
+    };
+
+    points.iter().map(|&(x, y)| at + v(x, y) * scale).collect()
+}
+
+/// How far apart a graphics card's outputs are across `room`.
+fn port_pitch(room: Extent, outputs: &[&Connector]) -> f32 {
+    (room.width() / outputs.len().max(1) as f32)
+        .min(40.0)
+        .floor()
+}
+
+/// Whether the names of a graphics card's outputs each fit under its
+/// socket, across the plate of its detail, at twice the view's scale: three
+/// units a character, and the ground each clears.
+fn ports_in_one_row(plate: Extent, outputs: &[&Connector]) -> bool {
+    let pitch = port_pitch(plate, outputs);
+
+    outputs
+        .iter()
+        .all(|connector| connector.name.chars().count() as f32 * 3.0 + 4.0 <= pitch)
+}
+
+/// A graphics card's outputs across `room`, as the sockets on its bracket:
+/// each by its kind, filled where a display is on it, its name under it,
+/// the names in two rows where one has no room for them.
+fn ports(d: &mut Draft, room: Extent, outputs: &[&Connector]) {
+    if outputs.is_empty() {
+        return;
+    }
+
+    let n = outputs.len() as f32;
+    let pitch = port_pitch(room, outputs);
+    let left = (room.centre().x - pitch * n / 2.0).round();
+    // A name's ground reaches three units over and under it at twice the
+    // view's scale, so a socket stands that far and half a unit over it.
+    let (sockets, names) = if ports_in_one_row(room, outputs) {
+        (room.min.y + 9.5, [room.min.y + 3.0; 2])
+    } else {
+        (room.min.y + 15.5, [room.min.y + 9.0, room.min.y + 3.0])
+    };
+    let scale = ((pitch - 2.0) / 10.0).min(1.0);
+
+    for (k, connector) in outputs.iter().enumerate() {
+        let x = left + pitch * (k as f32 + 0.5);
+        let outline = socket(connector.kind, v(x, sockets), scale);
+
+        if connector.panel.is_some() {
+            d.area(&outline, Fill::Tint(8));
+        }
+
+        d.polygon(&outline, Line::Outline);
+        d.label(v(x, names[k % 2]), connector.name.as_str());
+    }
+}
+
+/// A USB device's port on the hub it is on: `1-4` is the fourth.
+fn root_port(device: &UsbDevice) -> Option<u32> {
+    device
+        .port
+        .rsplit('-')
+        .next()?
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// A USB host's root hubs across `room`, a row each: the bus's version and
+/// a socket for each of its ports, filled where a device is on it.
+fn plugs(d: &mut Draft, machine: &Machine, room: Extent, hubs: &[&UsbDevice]) {
+    let rows: Vec<&&UsbDevice> = hubs.iter().take(2).collect();
+    let label = 3.0 * "USB 0.0".len() as f32 + 3.0;
+    let most = rows.iter().map(|hub| hub.ports).max().unwrap_or(0).max(1) as f32;
+    let pitch = ((room.width() - label) / most).min(6.0);
+    let middle = room.centre().y.round();
+
+    for (k, hub) in rows.iter().enumerate() {
+        let y = middle + (rows.len() as f32 - 1.0) * 3.5 - 7.0 * k as f32;
+        let used: Vec<u32> = machine
+            .usb_on(Some(&hub.port))
+            .filter_map(root_port)
+            .collect();
+        let name = version(hub).map_or("USB".into(), |(major, minor)| {
+            format!("USB {major}.{minor}")
+        });
+
+        d.label(v(room.min.x, y), name).anchor(Anchor::LEFT);
+
+        for port in 0..hub.ports {
+            let x = room.min.x + label + pitch * port as f32;
+            let socket = Extent::new(v(x, y - 1.5), v(x + pitch - 1.5, y + 1.5));
+
+            if used.contains(&(port + 1)) {
+                d.area(&corners(socket), Fill::Tint(8));
+            }
+
+            d.rect(socket.min, socket.max, Line::Outline);
+        }
+    }
+}
+
+/// A wireless adapter's antenna standing on `at`: a mast on its foot, the
+/// waves either side of its tip.
+fn antenna(d: &mut Draft, at: V2) {
+    let tip = at + v(0.0, 2.0);
+
+    d.line(at - v(0.0, 4.0), tip, Line::Outline);
+    d.polygon(
+        &[at - v(2.5, 5.0), at + v(2.5, -5.0), at - v(0.0, 2.5)],
+        Line::Outline,
+    );
+
+    for radius in [2.5, 4.5] {
+        for start in [-0.7, PI - 0.7] {
+            d.arc(tip, radius, start, 1.4, Line::Outline);
+        }
+    }
+}
+
+/// An Ethernet adapter's jack, seen from the front, round `at`: the socket
+/// with the notch its plug's latch goes in, and its contacts.
+fn jack(d: &mut Draft, at: V2) {
+    let outline: Vec<V2> = [
+        (-5.0, 4.0),
+        (5.0, 4.0),
+        (5.0, -2.0),
+        (2.0, -2.0),
+        (2.0, -4.0),
+        (-2.0, -4.0),
+        (-2.0, -2.0),
+        (-5.0, -2.0),
+    ]
+    .iter()
+    .map(|&(x, y)| at + v(x, y))
+    .collect();
+
+    d.polygon(&outline, Line::Outline);
+
+    for x in [-3.0, -1.0, 1.0, 3.0] {
+        d.line(at + v(x, 4.0), at + v(x, 2.0), Line::Thin);
+    }
+}
+
+/// Bytes a second in megabytes, to a tenth.
+fn megabytes(bytes: f32) -> String {
+    let bytes = if bytes.is_finite() {
+        bytes.max(0.0)
+    } else {
+        0.0
+    };
+
+    format!("{:.1} MB/s", bytes / 1e6)
 }
 
 /// The corners of `extent`, round it.
@@ -909,7 +1389,10 @@ impl Subject for Topology {
             });
         }
 
-        d.moving(|d| self.traffic(d, t));
+        d.moving(|d| {
+            self.traffic(d, t);
+            self.rates(d, t);
+        });
 
         // A balloon for each item, on the first of its blocks.
         let package = diagram.package.frame;
@@ -1146,9 +1629,9 @@ mod tests {
             .map(|core| &core.square)
             .chain(die.cache.as_ref().map(|(band, _)| band))
         {
-            // A unit to spare for the outlines' pixels.
+            // Half a unit to spare, a pixel, for the outlines.
             for corner in [extent.min, extent.max] {
-                let off = (corner - centre).abs() + 1.0;
+                let off = (corner - centre).abs() + 0.5;
                 assert!(off.x <= half.x && off.y <= half.y, "{corner} of {half}");
             }
         }

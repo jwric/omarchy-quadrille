@@ -1688,6 +1688,75 @@ mod tests {
         faults
     }
 
+    /// Where lettering breaks an outline: the ground a label clears under
+    /// itself taking pixels of a visible edge, in the view or in the
+    /// detail, which leaves a gap in the edge.
+    fn broken_outlines(scene: &Scene<'_>) -> Vec<String> {
+        let mut faults = Vec::new();
+        let mut check =
+            |marks: Vec<&Mark>, projection: &Projection, clip: Rectangle<i32>, at: &str| {
+                let mut edges = Vec::new();
+                let mut grounds = Vec::new();
+
+                for mark in marks {
+                    let mut pieces = Vec::new();
+                    raster::rasterize(mark, projection, &mut pieces);
+
+                    for inked in pieces {
+                        match (&mark.ink, inked.piece) {
+                            (
+                                Ink::Stroke {
+                                    line: Line::Outline,
+                                    ..
+                                },
+                                raster::Piece::Path { pixels, .. },
+                            ) => edges
+                                .extend(pixels.into_iter().filter(|p| raster::contains(clip, *p))),
+                            (Ink::Label { text, .. }, raster::Piece::Knockout(area)) => {
+                                grounds.push((text.clone(), area));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                for (text, area) in grounds {
+                    if let Some(pixel) = edges.iter().find(|pixel| raster::contains(area, **pixel))
+                    {
+                        faults.push(format!("{at}: {text:?} breaks an outline at {pixel:?}"));
+                    }
+                }
+            };
+
+        check(
+            scene
+                .draft
+                .marks()
+                .iter()
+                .filter(|mark| mark.shown_in(None))
+                .collect(),
+            &scene.main,
+            scene.layout.drawing(),
+            "view",
+        );
+
+        if let Some(view) = &scene.detail {
+            check(
+                scene
+                    .draft
+                    .marks()
+                    .iter()
+                    .filter(|mark| mark.magnified_for(view.focus.part))
+                    .collect(),
+                &view.projection,
+                layout::inset(scene.layout.detail_window(), 1),
+                &format!("detail {}", letter(view.focus.part)),
+            );
+        }
+
+        faults
+    }
+
     /// Every annotation the sheet places itself is inside the view, and
     /// neither it nor its leader covers another annotation's lettering, on
     /// both displays, for every subject, while it runs.
@@ -1767,6 +1836,7 @@ mod tests {
                             placed_faults(&sheet, &scene)
                                 .into_iter()
                                 .chain(lettering_faults(&scene))
+                                .chain(broken_outlines(&scene))
                                 .map(|fault| format!("at {local:.1} s, {fault}")),
                         );
                     }
