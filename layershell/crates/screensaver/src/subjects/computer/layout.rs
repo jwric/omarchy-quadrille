@@ -1153,11 +1153,34 @@ pub struct Placed {
     pub more: Vec<String>,
     /// Whether it carries its part's balloon.
     pub balloon: bool,
+    /// The points it is set on the pixel grid by, outermost first (see
+    /// [`Draft::snapped`](crate::draft::Draft::snapped)): the block it
+    /// hangs off's and its own top left corner. So every block is as many
+    /// pixels across as another as many units across, and the wires drawn
+    /// from a block (set as it is) meet what hangs off it exactly.
+    pub snaps: Vec<V2>,
 }
 
-/// Lettering along the wires: a connector's name, a bridge's address.
+/// A wire, set on the grid as the block it is drawn from is (see
+/// [`Placed::snaps`]): none for the spine's.
+#[derive(Debug, Clone)]
+pub struct Wire {
+    pub snaps: Vec<V2>,
+    pub points: Vec<V2>,
+}
+
+/// Where three wires join, set on the grid as they are.
+#[derive(Debug, Clone)]
+pub struct Junction {
+    pub snaps: Vec<V2>,
+    pub at: V2,
+}
+
+/// Lettering along the wires: a connector's name, a bridge's address; set
+/// on the grid as the wire it names is.
 #[derive(Debug, Clone)]
 pub struct Legend {
+    pub snaps: Vec<V2>,
     pub at: V2,
     pub text: String,
     pub anchor: Anchor,
@@ -1170,6 +1193,8 @@ pub struct Route {
     /// What measures it: the traffic is theirs together.
     pub gauges: Vec<Gauge>,
     pub pieces: Vec<Vec<V2>>,
+    /// What each piece is set on the grid by, as its wire is.
+    pub snaps: Vec<Vec<V2>>,
 }
 
 /// A square on a die: a core, or where a package has more cores of a kind
@@ -1219,8 +1244,8 @@ pub struct Diagram {
     pub package: Package,
     pub bank: Option<Bank>,
     pub blocks: Vec<Placed>,
-    pub wires: Vec<Vec<V2>>,
-    pub junctions: Vec<V2>,
+    pub wires: Vec<Wire>,
+    pub junctions: Vec<Junction>,
     pub legends: Vec<Legend>,
     pub routes: Vec<Route>,
     /// How many of the machine's PCI functions it shows.
@@ -1321,14 +1346,18 @@ impl Diagram {
         // The spine, the package's wire to it, and the processor's end of
         // every route.
         let package_port = package.port;
-        grid.trunk(spine, &[middle], &ports);
-        grid.wires.push(vec![package_port, v(spine, middle)]);
+        grid.trunk(spine, &[middle], &ports, &[]);
+        grid.wires.push(Wire {
+            snaps: Vec::new(),
+            points: vec![package_port, v(spine, middle)],
+        });
 
         for route in &mut grid.routes {
             route.pieces[0].splice(0..0, [package_port, v(spine, middle)]);
         }
 
         grid.legends.push(Legend {
+            snaps: Vec::new(),
             at: v((package_port.x + spine) / 2.0, middle + 3.0),
             text: "PCIe".into(),
             anchor: Anchor::new(Horizontal::Centre, Vertical::Baseline),
@@ -1440,22 +1469,37 @@ struct Grid {
     columns: Vec<(f32, f32)>,
     spine: f32,
     blocks: Vec<Placed>,
-    wires: Vec<Vec<V2>>,
-    junctions: Vec<V2>,
+    wires: Vec<Wire>,
+    junctions: Vec<Junction>,
     legends: Vec<Legend>,
     routes: Vec<Route>,
 }
 
+/// The route to a block: its pieces, each with what it is set on the grid
+/// by.
+type Incoming = Vec<(Vec<V2>, Vec<V2>)>;
+
 impl Grid {
+    /// A wire through `points`, set on the grid by `snaps`.
+    fn wire(&mut self, snaps: &[V2], points: Vec<V2>) {
+        self.wires.push(Wire {
+            snaps: snaps.to_vec(),
+            points,
+        });
+    }
+
     /// Places what hangs off the spine with its wire leaving at `port`;
-    /// the bottom of all it takes.
+    /// the bottom of all it takes. The spine and its wires are set on the
+    /// grid as the sheet's origin is.
     fn attach(&mut self, node: &Node, port: f32) -> f32 {
         let spine = self.spine;
         let column = self.columns[0].0;
 
         if node.form != Form::Bridge {
-            self.wires.push(vec![v(spine, port), v(column, port)]);
-            return self.place(node, 0, port, vec![vec![v(spine, port), v(column, port)]]);
+            let piece = vec![v(spine, port), v(column, port)];
+
+            self.wire(&[], piece.clone());
+            return self.place(node, 0, port, vec![(Vec::new(), piece)], &[]);
         }
 
         // A bridge on the wire, its address over it, and a trunk to what is
@@ -1463,6 +1507,8 @@ impl Grid {
         let x = spine + BRIDGE_AT;
         let half = BRIDGE / 2.0;
         let frame = Extent::new(v(x - half, port - half), v(x + half, port + half));
+        let snaps = vec![v(frame.min.x, frame.max.y)];
+        let piece = vec![v(spine, port), v(x - half, port)];
 
         self.blocks.push(Placed {
             group: node.group,
@@ -1474,22 +1520,37 @@ impl Grid {
             lines: node.lines.clone(),
             more: node.more.clone(),
             balloon: node.balloon,
+            snaps: snaps.clone(),
         });
         self.legends.push(Legend {
+            snaps: snaps.clone(),
             at: v(x, port + half + 1.0),
             text: node.lines[0].clone(),
             anchor: Anchor::new(Horizontal::Centre, Vertical::Bottom),
         });
-        self.wires.push(vec![v(spine, port), v(x - half, port)]);
+        self.wire(&[], piece.clone());
 
-        let incoming = vec![vec![v(spine, port), v(x - half, port)]];
-
-        self.children(node, -1, v(x + half, port), column - 8.0, incoming)
+        self.children(
+            node,
+            -1,
+            v(x + half, port),
+            column - 8.0,
+            vec![(Vec::new(), piece)],
+            &snaps,
+        )
     }
 
     /// Places `node` in column `column` with its port at `port`, reached by
-    /// `incoming`; the bottom of it and all that hangs off it.
-    fn place(&mut self, node: &Node, column: usize, port: f32, incoming: Vec<Vec<V2>>) -> f32 {
+    /// `incoming`, set on the grid inside what `within` sets; the bottom of
+    /// it and all that hangs off it.
+    fn place(
+        &mut self,
+        node: &Node,
+        column: usize,
+        port: f32,
+        incoming: Incoming,
+        within: &[V2],
+    ) -> f32 {
         let (x, width) = self.columns[column];
         let top = port + node.port();
         let width = match node.form {
@@ -1508,6 +1569,9 @@ impl Grid {
             ),
             v(x + width, top),
         );
+        let mut snaps = within.to_vec();
+
+        snaps.push(v(x, top));
 
         // A detail letters a line every half line, inside the frame.
         let room = ((frame.height() - 4.0) / DETAIL_LINE).floor() as usize;
@@ -1522,12 +1586,16 @@ impl Grid {
             lines: node.lines.clone(),
             more: node.more.iter().take(room).cloned().collect(),
             balloon: node.balloon,
+            snaps: snaps.clone(),
         });
 
         if !node.gauges.is_empty() {
+            let (snaps, pieces) = incoming.iter().cloned().unzip();
+
             self.routes.push(Route {
                 gauges: node.gauges.clone(),
-                pieces: incoming.clone(),
+                pieces,
+                snaps,
             });
         }
 
@@ -1540,20 +1608,29 @@ impl Grid {
         let right = x + self.columns[column].1;
         let trunk = right + TRUNK;
 
-        self.children(node, column as isize, v(right, port), trunk, incoming)
-            .min(bottom)
+        self.children(
+            node,
+            column as isize,
+            v(right, port),
+            trunk,
+            incoming,
+            &snaps,
+        )
+        .min(bottom)
     }
 
     /// Places `node`'s children in the column after `column`, the first
-    /// level with `out`, the rest under it on a trunk at `trunk`; the bottom
-    /// of them all.
+    /// level with `out`, the rest under it on a trunk at `trunk`, the wires
+    /// to them set on the grid by `snaps`, as `node` is, and they inside
+    /// it; the bottom of them all.
     fn children(
         &mut self,
         node: &Node,
         column: isize,
         out: V2,
         trunk: f32,
-        incoming: Vec<Vec<V2>>,
+        incoming: Incoming,
+        snaps: &[V2],
     ) -> f32 {
         let next = (column + 1) as usize;
         let x = self.columns[next].0;
@@ -1579,13 +1656,14 @@ impl Grid {
             };
 
             if index == 0 {
-                self.wires.push(piece.clone());
+                self.wire(snaps, piece.clone());
             } else {
-                self.wires.push(vec![v(trunk, port), v(end, port)]);
+                self.wire(snaps, vec![v(trunk, port), v(end, port)]);
             }
 
             if let Some(via) = &child.via {
                 self.legends.push(Legend {
+                    snaps: snaps.to_vec(),
                     at: v(trunk + 4.0, port + 3.0),
                     text: via.clone(),
                     anchor: Anchor::new(Horizontal::Left, Vertical::Baseline),
@@ -1593,23 +1671,24 @@ impl Grid {
             }
 
             let mut route = incoming.clone();
-            route.push(piece);
+            route.push((snaps.to_vec(), piece));
 
-            cursor = self.place(child, next, port, route);
+            cursor = self.place(child, next, port, route, snaps);
             ports.push(port);
         }
 
         // The first child's wire runs straight through the trunk's top.
         if ports.len() > 1 {
-            self.trunk(trunk, &[out.y], &ports);
+            self.trunk(trunk, &[out.y], &ports, snaps);
         }
 
         cursor
     }
 
     /// A trunk at `x` joining wires from the left at `left` and to the right
-    /// at `right`, with a junction wherever three or more meet.
-    fn trunk(&mut self, x: f32, left: &[f32], right: &[f32]) {
+    /// at `right`, with a junction wherever three or more meet, set on the
+    /// grid by `snaps`.
+    fn trunk(&mut self, x: f32, left: &[f32], right: &[f32], snaps: &[V2]) {
         let ys: Vec<f32> = left.iter().chain(right).copied().collect();
         let (high, low) = ys.iter().fold((f32::MIN, f32::MAX), |(high, low), &y| {
             (high.max(y), low.min(y))
@@ -1619,7 +1698,7 @@ impl Grid {
             return;
         }
 
-        self.wires.push(vec![v(x, high), v(x, low)]);
+        self.wire(snaps, vec![v(x, high), v(x, low)]);
 
         let mut joins: Vec<f32> = ys.clone();
         joins.sort_by(|a, b| b.total_cmp(a));
@@ -1630,7 +1709,10 @@ impl Grid {
             let meeting = along + ys.iter().filter(|&&other| other == y).count();
 
             if meeting >= 3 {
-                self.junctions.push(v(x, y));
+                self.junctions.push(Junction {
+                    snaps: snaps.to_vec(),
+                    at: v(x, y),
+                });
             }
         }
     }

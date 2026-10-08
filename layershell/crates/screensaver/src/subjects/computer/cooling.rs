@@ -43,7 +43,7 @@ use crate::machine::{
 
 use super::super::{Card, Domain, Part, Place, Reading, Revision, Subject, Unit, View};
 use super::layout::{BUDGET, named, short};
-use super::{SPEC_ROWS, binary, counted, decimal, fit, flow, lettered, rows};
+use super::{SPEC_ROWS, binary, chain, counted, decimal, fit, flow, lettered, rows, set};
 
 /// A heat source's block: wide enough for its name and a temperature...
 const BLOCK: f32 = 108.0;
@@ -432,24 +432,6 @@ fn in_its_detail(d: &mut Draft, source: &Source, draw: impl FnOnce(&mut Draft)) 
     if source.detailed {
         d.in_own_detail(draw);
     }
-}
-
-/// Draws `draw` set on the grid by each of `snaps` in turn, the outermost
-/// first.
-fn set(d: &mut Draft, snaps: &[V2], draw: impl FnOnce(&mut Draft)) {
-    match snaps.split_first() {
-        Some((&at, rest)) => d.snapped(at, |d| set(d, rest, draw)),
-        None => draw(d),
-    }
-}
-
-/// Draws `draw` set on the grid by `at`, then `steps` times on by `step`,
-/// each by the one before: so each step is the same number of pixels.
-fn chain(d: &mut Draft, at: V2, step: V2, steps: usize, draw: impl FnOnce(&mut Draft)) {
-    d.snapped(at, |d| match steps {
-        0 => draw(d),
-        _ => chain(d, at + step, step, steps - 1, draw),
-    });
 }
 
 /// A fan, as the sheet draws it.

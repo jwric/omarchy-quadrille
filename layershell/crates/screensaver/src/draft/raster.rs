@@ -521,13 +521,18 @@ fn lettering(text: &str, top_left: Point<i32>, tone: Tone, out: &mut Vec<Inked>)
     });
 }
 
+/// `projection` as `mark` is drawn through it: set on the grid by the
+/// points its figure is set by (see [`Draft::snapped`](super::Draft::snapped)).
+pub fn through(mark: &Mark, projection: &Projection) -> Projection {
+    mark.snaps
+        .iter()
+        .fold(*projection, |projection, &at| projection.snapped(at))
+}
+
 /// The pieces of `mark` under `projection`.
 pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
     let tone = mark.tone;
-    let snapped = mark
-        .snaps
-        .iter()
-        .fold(*projection, |projection, &at| projection.snapped(at));
+    let snapped = through(mark, projection);
     let projection = &snapped;
 
     match &mark.ink {

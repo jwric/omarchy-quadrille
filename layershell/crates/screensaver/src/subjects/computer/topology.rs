@@ -17,10 +17,10 @@ use crate::machine::{
 use super::super::schematic::Schematic;
 use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
 use super::layout::{
-    Bank, DETAIL_LINE, Diagram, Form, Gauge, Group, LINE, Package, Placed, Source, bridged, named,
-    short, version,
+    Bank, DETAIL_LINE, Diagram, Die, Form, Gauge, Group, LINE, Package, Placed, Route, Source,
+    bridged, named, short, version,
 };
-use super::{SPEC_ROWS, binary, bits, counted, decimal, fit, flow, lettered, rate, rows};
+use super::{SPEC_ROWS, binary, bits, counted, decimal, fit, flow_by, lettered, rate, rows, set};
 
 /// A dot of traffic every so many units along a wire, running so fast.
 const SPACING: f64 = 8.0;
@@ -123,73 +123,87 @@ impl Topology {
     }
 
     /// The processor: a die for each package, with its cores and last
-    /// cache.
+    /// cache. It is set on the grid by its top right corner, where its wire
+    /// leaves for the spine; each die by its top left corner inside it, and
+    /// its cores a row at a time (see [`in_rows`]).
     fn package(&self, d: &mut Draft) {
         let package = &self.diagram.package;
         let cpu = self.machine.cpu.as_ref().expect("A diagram has a CPU");
         let frame = package.frame;
         let title = frame.max.y - 10.0;
 
-        d.rect(frame.min, frame.max, Line::Outline);
-        d.label(v(frame.min.x + 6.0, title), "CPU")
-            .anchor(Anchor::LEFT)
-            .tone(Tone::Ink);
-        d.label(
-            v(frame.max.x - 6.0, title),
-            counted(cpu.cores as usize, "CORE", "CORES"),
-        )
-        .anchor(Anchor::RIGHT);
+        d.snapped(frame.max, |d| {
+            d.rect(frame.min, frame.max, Line::Outline);
+            d.label(v(frame.min.x + 6.0, title), "CPU")
+                .anchor(Anchor::LEFT)
+                .tone(Tone::Ink);
+            d.label(
+                v(frame.max.x - 6.0, title),
+                counted(cpu.cores as usize, "CORE", "CORES"),
+            )
+            .anchor(Anchor::RIGHT);
 
-        for (n, die) in package.dies.iter().enumerate() {
-            d.rect(die.frame.min, die.frame.max, Line::Thin);
-
-            for core in &die.cores {
-                d.rect(core.square.min, core.square.max, Line::Outline);
-
-                // The efficient cores tinted on the view; a detail letters
-                // each core's kind, and a tint would show only round the
-                // letter.
-                if core.kind == Some(CoreKind::Efficient) {
-                    d.in_main(|d| {
-                        d.area(&corners(core.square), Fill::Tint(4));
-                    });
-                }
+            for (n, die) in package.dies.iter().enumerate() {
+                d.snapped(top_left(die.frame), |d| self.die(d, die, n == 0));
             }
-
-            if let Some((band, text)) = &die.cache {
-                d.rect(band.min, band.max, Line::Thin);
-                d.label(band.centre(), text.as_str());
-            }
-
-            // What the detail of the first die has room to say: the kind of
-            // every core where there are two kinds, or how many cores a
-            // square stands for, and the cache. The laptop's window holds
-            // the cores and cache alone, so the processor in full is the
-            // specification's.
-            if n > 0 {
-                continue;
-            }
-
-            d.in_own_detail(|d| {
-                for core in &die.cores {
-                    let letter = match (core.kind, core.cores) {
-                        (_, cores) if cores > 1 => cores.to_string(),
-                        (Some(CoreKind::Performance), _) => "P".into(),
-                        (Some(CoreKind::Efficient), _) => "E".into(),
-                        (None, _) => continue,
-                    };
-
-                    d.label(core.square.centre(), letter).tone(Tone::Faint);
-                }
-
-                if let Some((band, text)) = &die.cache {
-                    d.label(band.centre(), format!("{text} CACHE"));
-                }
-            });
-        }
+        });
     }
 
-    /// The memory: its modules as sticks, and its bus to the package.
+    /// A die of the processor, the first of them lettered for its detail.
+    fn die(&self, d: &mut Draft, die: &Die, first: bool) {
+        let squares: Vec<Extent> = die.cores.iter().map(|core| core.square).collect();
+
+        d.rect(die.frame.min, die.frame.max, Line::Thin);
+
+        centred_rows(d, &squares, &mut |d, k| {
+            let core = &die.cores[k];
+
+            d.rect(core.square.min, core.square.max, Line::Outline);
+
+            // The efficient cores tinted on the view; a detail letters each
+            // core's kind, and a tint would show only round the letter.
+            if core.kind == Some(CoreKind::Efficient) {
+                d.in_main(|d| {
+                    d.area(&corners(core.square), Fill::Tint(4));
+                });
+            }
+        });
+
+        if let Some((band, text)) = &die.cache {
+            d.rect(band.min, band.max, Line::Thin);
+            d.label(band.centre(), text.as_str());
+        }
+
+        // What the detail of the first die has room to say: the kind of
+        // every core where there are two kinds, or how many cores a square
+        // stands for, and the cache. The laptop's window holds the cores
+        // and cache alone, so the processor in full is the specification's.
+        if !first {
+            return;
+        }
+
+        d.in_own_detail(|d| {
+            centred_rows(d, &squares, &mut |d, k| {
+                let core = &die.cores[k];
+                let letter = match (core.kind, core.cores) {
+                    (_, cores) if cores > 1 => cores.to_string(),
+                    (Some(CoreKind::Performance), _) => "P".into(),
+                    (Some(CoreKind::Efficient), _) => "E".into(),
+                    (None, _) => return,
+                };
+
+                d.label(core.square.centre(), letter).tone(Tone::Faint);
+            });
+
+            if let Some((band, text)) = &die.cache {
+                d.label(band.centre(), format!("{text} CACHE"));
+            }
+        });
+    }
+
+    /// The memory: its modules as sticks, and its bus to the package. The
+    /// bank is set on the grid by its bottom left corner, where the bus
+    /// leaves it, and its sticks a row at a time.
     fn memory(&self, d: &mut Draft) {
         let Some(bank) = &self.diagram.bank else {
             return;
@@ -202,16 +216,55 @@ impl Topology {
         let frame = bank.frame;
         let title = frame.max.y - 10.0;
 
-        d.rect(frame.min, frame.max, Line::Outline);
-        d.label(v(frame.min.x + 6.0, title), "MEMORY")
-            .anchor(Anchor::LEFT)
-            .tone(Tone::Ink);
-        d.label(v(frame.max.x - 6.0, title), size.as_str())
-            .anchor(Anchor::RIGHT);
+        d.snapped(frame.min, |d| {
+            d.rect(frame.min, frame.max, Line::Outline);
+            d.label(v(frame.min.x + 6.0, title), "MEMORY")
+                .anchor(Anchor::LEFT)
+                .tone(Tone::Ink);
+            d.label(v(frame.max.x - 6.0, title), size.as_str())
+                .anchor(Anchor::RIGHT);
 
-        for stick in &bank.sticks {
-            d.rect(stick.min, stick.max, Line::Outline);
-        }
+            // Each stick, and the memory chips on it in a detail, as many
+            // as it has room for.
+            centred_rows(d, &bank.sticks, &mut |d, k| {
+                let stick = bank.sticks[k];
+
+                d.rect(stick.min, stick.max, Line::Outline);
+                d.in_detail(|d| {
+                    let chips = ((stick.width() - 2.0) / 9.0).floor();
+                    let left = stick.min.x + (stick.width() - (chips * 9.0 - 2.0)) / 2.0;
+
+                    for chip in 0..chips as usize {
+                        let x = left + chip as f32 * 9.0;
+
+                        d.rect(
+                            v(x, stick.min.y + 2.0),
+                            v(x + 7.0, stick.max.y - 2.0),
+                            Line::Thin,
+                        );
+                    }
+                });
+            });
+
+            // In its own detail, the bank in full: over its sticks, or in
+            // its middle where the kernel shows no module.
+            d.in_own_detail(|d| match &bank.generation {
+                _ if bank.sticks.is_empty() => {
+                    d.label(frame.centre(), format!("MEMORY {size}, MODULES NOT SHOWN"))
+                        .tone(Tone::Ink);
+                }
+                generation => {
+                    let what: Vec<&str> = ["MEMORY", &size]
+                        .into_iter()
+                        .chain(generation.as_deref())
+                        .collect();
+
+                    d.label(v(frame.min.x + 3.0, title), what.join(" "))
+                        .anchor(Anchor::LEFT)
+                        .tone(Tone::Ink);
+                }
+            });
+        });
 
         let (from, to) = bank.bus;
 
@@ -223,42 +276,6 @@ impl Topology {
             d.label(from.lerp(to, 0.5) + v(6.0, 0.0), generation.as_str())
                 .anchor(Anchor::LEFT);
         }
-
-        // The memory chips on the sticks, as many as a stick has room for;
-        // and in its own detail the bank in full, over its sticks or in its
-        // middle where the kernel shows no module.
-        d.in_detail(|d| {
-            for stick in &bank.sticks {
-                let chips = ((stick.width() - 2.0) / 9.0).floor();
-                let left = stick.min.x + (stick.width() - (chips * 9.0 - 2.0)) / 2.0;
-
-                for chip in 0..chips as usize {
-                    let x = left + chip as f32 * 9.0;
-                    d.rect(
-                        v(x, stick.min.y + 2.0),
-                        v(x + 7.0, stick.max.y - 2.0),
-                        Line::Thin,
-                    );
-                }
-            }
-        });
-
-        d.in_own_detail(|d| match &bank.generation {
-            _ if bank.sticks.is_empty() => {
-                d.label(frame.centre(), format!("MEMORY {size}, MODULES NOT SHOWN"))
-                    .tone(Tone::Ink);
-            }
-            generation => {
-                let what: Vec<&str> = ["MEMORY", &size]
-                    .into_iter()
-                    .chain(generation.as_deref())
-                    .collect();
-
-                d.label(v(frame.min.x + 3.0, title), what.join(" "))
-                    .anchor(Anchor::LEFT)
-                    .tone(Tone::Ink);
-            }
-        });
     }
 
     /// A block of the diagram, by its form.
@@ -266,7 +283,9 @@ impl Topology {
         let frame = block.frame;
 
         match block.form {
-            Form::Block => d.rect(frame.min, frame.max, Line::Outline),
+            Form::Block => {
+                d.rect(frame.min, frame.max, Line::Outline);
+            }
             Form::Screen { internal } => {
                 d.rect(frame.min, frame.max, Line::Outline);
                 d.rect(frame.min + v(2.0, 2.0), frame.max - v(2.0, 2.0), Line::Thin);
@@ -283,16 +302,16 @@ impl Topology {
                             v(left - 3.0, foot - 5.0),
                         ],
                         Line::Outline,
-                    )
+                    );
                 } else {
-                    let middle = frame.centre().x.round();
+                    // The stand set on the grid by the top of its neck, so
+                    // its foot is as long either side of it.
+                    let neck = v(frame.centre().x.round(), foot);
 
-                    d.line(v(middle, foot), v(middle, foot - 4.0), Line::Outline);
-                    d.line(
-                        v(middle - 12.0, foot - 5.0),
-                        v(middle + 12.0, foot - 5.0),
-                        Line::Outline,
-                    )
+                    d.snapped(neck, |d| {
+                        d.line(neck, neck - v(0.0, 4.0), Line::Outline);
+                        d.line(neck - v(12.0, 5.0), neck + v(12.0, -5.0), Line::Outline);
+                    });
                 }
             }
             Form::Terminal => {
@@ -496,13 +515,15 @@ impl Topology {
         let line = block.frame.max.y - 5.0 - DETAIL_LINE * block.more.len() as f32;
 
         d.part(self.index(Item::Blocks(Group::Network)), |d| {
-            d.in_own_detail(|d| {
-                d.label(
-                    v(plate(block.frame).min.x, line),
-                    format!("RX {:.1} TX {}", received.max(0.0) / 1e6, megabytes(sent)),
-                )
-                .anchor(Anchor::LEFT)
-                .tone(Tone::Live);
+            set(d, &block.snaps, |d| {
+                d.in_own_detail(|d| {
+                    d.label(
+                        v(plate(block.frame).min.x, line),
+                        format!("RX {:.1} TX {}", received.max(0.0) / 1e6, megabytes(sent)),
+                    )
+                    .anchor(Anchor::LEFT)
+                    .tone(Tone::Live);
+                });
             });
         });
     }
@@ -533,8 +554,8 @@ impl Topology {
                     (inward + into, outward + out)
                 });
 
-            dots(d, &route.pieces, inward, true, t, Tone::Live);
-            dots(d, &route.pieces, outward, false, t, Tone::Accent);
+            dots(d, route, inward, true, t, Tone::Live);
+            dots(d, route, outward, false, t, Tone::Accent);
         }
     }
 }
@@ -754,17 +775,24 @@ fn ports(d: &mut Draft, room: Extent, outputs: &[&Connector]) {
     };
     let scale = ((pitch - 2.0) / 10.0).min(1.0);
 
-    for (k, connector) in outputs.iter().enumerate() {
-        let x = left + pitch * (k as f32 + 0.5);
-        let outline = socket(connector.kind, v(x, sockets), scale);
+    let middles: Vec<V2> = (0..outputs.len())
+        .map(|k| v(left + pitch * (k as f32 + 0.5), sockets))
+        .collect();
+
+    // Each socket set on the grid by its middle, so it is symmetric, and
+    // each a pitch on from the one before.
+    in_rows(d, &middles, &mut |d, k| {
+        let connector = outputs[k];
+        let middle = middles[k];
+        let outline = socket(connector.kind, middle, scale);
 
         if connector.panel.is_some() {
             d.area(&outline, Fill::Tint(8));
         }
 
         d.polygon(&outline, Line::Outline);
-        d.label(v(x, names[k % 2]), connector.name.as_str());
-    }
+        d.label(v(middle.x, names[k % 2]), connector.name.as_str());
+    });
 }
 
 /// A USB device's port on the hub it is on: `1-4` is the fourth.
@@ -800,16 +828,24 @@ fn plugs(d: &mut Draft, machine: &Machine, room: Extent, hubs: &[&UsbDevice]) {
 
         d.label(v(room.min.x, y), name).anchor(Anchor::LEFT);
 
-        for port in 0..hub.ports {
-            let x = room.min.x + label + pitch * port as f32;
-            let socket = Extent::new(v(x, y - 1.5), v(x + pitch - 1.5, y + 1.5));
+        let sockets: Vec<Extent> = (0..hub.ports)
+            .map(|port| {
+                let x = room.min.x + label + pitch * port as f32;
 
-            if used.contains(&(port + 1)) {
+                Extent::new(v(x, y - 1.5), v(x + pitch - 1.5, y + 1.5))
+            })
+            .collect();
+        let corners_of: Vec<V2> = sockets.iter().copied().map(top_left).collect();
+
+        in_rows(d, &corners_of, &mut |d, port| {
+            let socket = sockets[port];
+
+            if used.contains(&(port as u32 + 1)) {
                 d.area(&corners(socket), Fill::Tint(8));
             }
 
             d.rect(socket.min, socket.max, Line::Outline);
-        }
+        });
     }
 }
 
@@ -866,6 +902,106 @@ fn megabytes(bytes: f32) -> String {
     format!("{:.1} MB/s", bytes / 1e6)
 }
 
+/// The top left corner of `extent`, which what it frames is set on the grid
+/// by.
+fn top_left(extent: Extent) -> V2 {
+    v(extent.min.x, extent.max.y)
+}
+
+/// Draws `draw` for each of `points`, set on the grid by it, a row at a
+/// time (points level with each other): each by the one before it in its
+/// row, and the first of a row by the first of the row over it. So points
+/// as far apart in units as others are as far apart in pixels wherever
+/// they fall, and rows of them line up.
+fn in_rows(d: &mut Draft, points: &[V2], draw: &mut impl FnMut(&mut Draft, usize)) {
+    fn down<F: FnMut(&mut Draft, usize)>(d: &mut Draft, rows: &[Vec<(usize, V2)>], draw: &mut F) {
+        if let Some((row, rest)) = rows.split_first() {
+            d.snapped(row[0].1, |d| {
+                along(d, row, draw);
+                down(d, rest, draw);
+            });
+        }
+    }
+
+    down(d, &rows_of(points.iter().copied()), draw);
+}
+
+/// Draws `draw` for each of `squares`, rows of them centred on a middle,
+/// set on the grid a row at a time from the row's middle out: those right
+/// of it each by its top left corner from the one before, those left of it
+/// each by its top right corner from the one after. So the squares of a
+/// row are as far apart as each other in pixels, and as far in from either
+/// end of what they are centred in.
+fn centred_rows(d: &mut Draft, squares: &[Extent], draw: &mut impl FnMut(&mut Draft, usize)) {
+    fn down<F: FnMut(&mut Draft, usize)>(
+        d: &mut Draft,
+        squares: &[Extent],
+        rows: &[Vec<(usize, V2)>],
+        draw: &mut F,
+    ) {
+        let Some((row, rest)) = rows.split_first() else {
+            return;
+        };
+        let first = squares[row[0].0];
+        let last = squares[row[row.len() - 1].0];
+        let middle = v((first.min.x + last.max.x) / 2.0, first.max.y);
+        let (left, right): (Vec<(usize, V2)>, Vec<(usize, V2)>) = row
+            .iter()
+            .map(|&(k, _)| (k, squares[k]))
+            .map(|(k, square)| {
+                if square.centre().x < middle.x {
+                    (k, v(square.max.x, square.max.y))
+                } else {
+                    (k, v(square.min.x, square.max.y))
+                }
+            })
+            .partition(|&(k, _)| squares[k].centre().x < middle.x);
+
+        d.snapped(middle, |d| {
+            let left: Vec<(usize, V2)> = left.into_iter().rev().collect();
+
+            for side in [&left, &right] {
+                if let Some(&(_, first)) = side.first() {
+                    d.snapped(first, |d| along(d, side, draw));
+                }
+            }
+
+            down(d, squares, rest, draw);
+        });
+    }
+
+    let rows = rows_of(squares.iter().map(|square| v(square.min.x, square.max.y)));
+
+    down(d, squares, &rows, draw);
+}
+
+/// `points` in rows of those level with each other, each with its index.
+fn rows_of(points: impl Iterator<Item = V2>) -> Vec<Vec<(usize, V2)>> {
+    let mut rows: Vec<Vec<(usize, V2)>> = Vec::new();
+
+    for (k, point) in points.enumerate() {
+        match rows.last_mut() {
+            Some(row) if row[0].1.y == point.y => row.push((k, point)),
+            _ => rows.push(vec![(k, point)]),
+        }
+    }
+
+    rows
+}
+
+/// Draws `draw` for each of `row`, the first in the figure set by its
+/// point already and each after in one set by its point inside the one
+/// before.
+fn along<F: FnMut(&mut Draft, usize)>(d: &mut Draft, row: &[(usize, V2)], draw: &mut F) {
+    if let Some((&(k, _), rest)) = row.split_first() {
+        draw(d, k);
+
+        if let Some(&(_, next)) = rest.first() {
+            d.snapped(next, |d| along(d, rest, draw));
+        }
+    }
+}
+
 /// The corners of `extent`, round it.
 fn corners(extent: Extent) -> [V2; 4] {
     [
@@ -876,21 +1012,25 @@ fn corners(extent: Extent) -> [V2; 4] {
     ]
 }
 
-/// Traffic along `pieces` at `rate` bytes a second, toward the processor
+/// Traffic along `route` at `rate` bytes a second, toward the processor
 /// if `inward`: dots a set distance apart running at a set speed, more of
-/// them on a busier link.
-fn dots(d: &mut Draft, pieces: &[Vec<V2>], rate: f32, inward: bool, t: f32, tone: Tone) {
+/// them on a busier link, each set on the grid as the wire it is on.
+fn dots(d: &mut Draft, route: &Route, rate: f32, inward: bool, t: f32, tone: Tone) {
     let share =
         ((rate.max(1.0).log10() - QUIETEST.log10()) / (BUSIEST / QUIETEST).log10()).clamp(0.0, 1.0);
 
-    flow(
+    flow_by(
         d,
-        pieces,
+        &route.pieces,
         share,
         SPACING,
         f64::from(t) * SPEED,
         inward,
-        tone,
+        |d, piece, at| {
+            set(d, &route.snaps[piece], |d| {
+                d.dot(at, 3).tone(tone);
+            });
+        },
     );
 }
 
@@ -1364,17 +1504,19 @@ impl Subject for Topology {
         let diagram = &self.diagram;
 
         for wire in &diagram.wires {
-            d.wire(wire);
+            set(d, &wire.snaps, |d| d.wire(&wire.points));
         }
 
-        for at in &diagram.junctions {
-            d.junction(*at);
+        for junction in &diagram.junctions {
+            set(d, &junction.snaps, |d| d.junction(junction.at));
         }
 
         for legend in &diagram.legends {
-            d.label(legend.at, legend.text.as_str())
-                .anchor(legend.anchor)
-                .tone(Tone::Muted);
+            set(d, &legend.snaps, |d| {
+                d.label(legend.at, legend.text.as_str())
+                    .anchor(legend.anchor)
+                    .tone(Tone::Muted);
+            });
         }
 
         d.part(self.index(Item::Processor), |d| self.package(d));
@@ -1385,7 +1527,7 @@ impl Subject for Topology {
 
         for block in &diagram.blocks {
             d.part(self.index(Item::Blocks(block.group)), |d| {
-                self.block(d, block)
+                set(d, &block.snaps, |d| self.block(d, block));
             });
         }
 
@@ -1398,20 +1540,24 @@ impl Subject for Topology {
         let package = diagram.package.frame;
 
         d.part(self.index(Item::Processor), |d| {
-            d.balloon(
-                self.index(Item::Processor),
-                v(package.min.x + 6.0, package.max.y),
-                Auto,
-            );
+            d.snapped(package.max, |d| {
+                d.balloon(
+                    self.index(Item::Processor),
+                    v(package.min.x + 6.0, package.max.y),
+                    Auto,
+                );
+            });
         });
 
         if let Some(bank) = &diagram.bank {
             d.part(self.index(Item::Memory), |d| {
-                d.balloon(
-                    self.index(Item::Memory),
-                    v(bank.frame.min.x + 6.0, bank.frame.max.y),
-                    Auto,
-                );
+                d.snapped(bank.frame.min, |d| {
+                    d.balloon(
+                        self.index(Item::Memory),
+                        v(bank.frame.min.x + 6.0, bank.frame.max.y),
+                        Auto,
+                    );
+                });
             });
         }
 
@@ -1419,7 +1565,9 @@ impl Subject for Topology {
             let index = self.index(Item::Blocks(block.group));
 
             d.part(index, |d| {
-                d.balloon(index, tip(block), Auto);
+                set(d, &block.snaps, |d| {
+                    d.balloon(index, tip(block), Auto);
+                });
             });
         }
     }
@@ -1535,10 +1683,15 @@ mod tests {
     /// what is written, more of them the busier the link, none when idle.
     #[test]
     fn traffic_runs_at_the_rate_measured() {
-        let pieces = vec![vec![v(0.0, 0.0), v(200.0, 0.0)]];
+        let route = |end: f32| Route {
+            gauges: Vec::new(),
+            pieces: vec![vec![v(0.0, 0.0), v(end, 0.0)]],
+            snaps: vec![Vec::new()],
+        };
+        let long = route(200.0);
         let count = |rate: f32| {
             let mut draft = Draft::new();
-            dots(&mut draft, &pieces, rate, false, 10.0, Tone::Live);
+            dots(&mut draft, &long, rate, false, 10.0, Tone::Live);
             draft.marks().len()
         };
 
@@ -1548,7 +1701,7 @@ mod tests {
 
         // On a wire shorter than the spacing, one dot: a moment later it
         // is further along its way, out or in.
-        let short = vec![vec![v(0.0, 0.0), v(6.0, 0.0)]];
+        let short = route(6.0);
         let at = |inward: bool, t: f32| {
             let mut draft = Draft::new();
             dots(&mut draft, &short, BUSIEST, inward, t, Tone::Live);
@@ -1784,6 +1937,186 @@ mod tests {
         assert_eq!(die.cores.len(), 16);
         assert!(die.cores.iter().all(|core| core.cores == 8));
         assert_eq!(die.cache.as_ref().unwrap().1, "L3 512 MiB");
+    }
+
+    /// At any scale, whole or not, the diagram is set on the pixel grid as
+    /// one: blocks as large as each other in units are as large in pixels,
+    /// a die's cores as far apart as each other, every wire meets the
+    /// block it ends at exactly, and every dot of traffic is centred on a
+    /// wire.
+    #[test]
+    fn the_diagram_is_set_on_the_pixel_grid() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use crate::draft::raster::{self, Piece, Projection};
+        use crate::draft::{Ink, Shape};
+        use crate::machine::Fixture;
+        use iced_core::Point;
+
+        let key = |size: V2| {
+            (
+                (size.x * 64.0).round() as i64,
+                (size.y * 64.0).round() as i64,
+            )
+        };
+
+        for fixture in Fixture::ALL {
+            let topology = Topology::new(&fixture.machine()).unwrap();
+            let diagram = &topology.diagram;
+            let mut draft = Draft::new();
+
+            topology.draw(&mut draft, 20.0);
+
+            for scale in [1.0, 1.25, 1.396, 1.43, 1.5, 1.77, 2.3] {
+                let projection = Projection::new((17.0, 900.0), scale);
+                let at = format!("{fixture:?} at {scale}");
+                let mut sizes: BTreeMap<(i64, i64), BTreeSet<(i32, i32)>> = BTreeMap::new();
+                // Each block's outline, by its frame, as drawn.
+                let mut outlines: Vec<(Extent, (i32, i32, i32, i32))> = Vec::new();
+                let mut wires: Vec<(Vec<V2>, Vec<Point<i32>>)> = Vec::new();
+                let mut dots = Vec::new();
+                // Each row of cores: their left and right edges, in units
+                // and as drawn.
+                let mut rows: BTreeMap<i64, Vec<(f32, f32, i32, i32)>> = BTreeMap::new();
+                let squares: Vec<Extent> = diagram
+                    .package
+                    .dies
+                    .iter()
+                    .flat_map(|die| die.cores.iter().map(|core| core.square))
+                    .collect();
+
+                for mark in draft.marks().iter().filter(|mark| mark.shown_in(None)) {
+                    let mut pieces = Vec::new();
+                    raster::rasterize(mark, &projection, &mut pieces);
+
+                    match (&mark.ink, pieces.first().map(|inked| &inked.piece)) {
+                        (
+                            Ink::Stroke {
+                                shape: Shape::Polyline { points, closed },
+                                ..
+                            },
+                            Some(Piece::Path { pixels, .. }),
+                        ) => {
+                            let bounds = (
+                                pixels.iter().map(|p| p.x).min().unwrap(),
+                                pixels.iter().map(|p| p.x).max().unwrap(),
+                                pixels.iter().map(|p| p.y).min().unwrap(),
+                                pixels.iter().map(|p| p.y).max().unwrap(),
+                            );
+
+                            if *closed && points.len() == 4 {
+                                let frame = Extent::new(points[0], points[2]);
+
+                                sizes
+                                    .entry(key(v(frame.width(), frame.height())))
+                                    .or_default()
+                                    .insert((bounds.1 - bounds.0, bounds.3 - bounds.2));
+
+                                if squares.contains(&frame) {
+                                    rows.entry((frame.max.y * 64.0).round() as i64)
+                                        .or_default()
+                                        .push((frame.min.x, frame.max.x, bounds.0, bounds.1));
+                                }
+
+                                outlines.push((frame, bounds));
+                            } else if !*closed {
+                                wires.push((points.clone(), pixels.clone()));
+                            }
+                        }
+                        (Ink::Dot { .. }, Some(Piece::Block(area))) => {
+                            dots.push(Point::new(
+                                area.x + area.width / 2,
+                                area.y + area.height / 2,
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+
+                for (size, drawn) in &sizes {
+                    assert_eq!(drawn.len(), 1, "{at}: {size:?} drawn as {drawn:?}");
+                }
+
+                // Cores are set from the middle of their row out, so they
+                // are as far apart as each other either side of it, and as
+                // far in from either side of their die, a pixel apart at
+                // most.
+                let dies: Vec<(i32, i32)> = diagram
+                    .package
+                    .dies
+                    .iter()
+                    .filter_map(|die| outlines.iter().find(|(frame, _)| *frame == die.frame))
+                    .map(|(_, bounds)| (bounds.0, bounds.1))
+                    .collect();
+
+                for row in rows.values_mut() {
+                    row.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+                    let middle = (row[0].0 + row[row.len() - 1].1) / 2.0;
+                    let mut steps: BTreeMap<i64, BTreeSet<i32>> = BTreeMap::new();
+
+                    for pair in row
+                        .windows(2)
+                        .filter(|pair| pair[1].0 <= middle || pair[0].1 >= middle)
+                    {
+                        steps
+                            .entry(((pair[1].0 - pair[0].0) * 64.0).round() as i64)
+                            .or_default()
+                            .insert(pair[1].2 - pair[0].2);
+                    }
+
+                    for (step, drawn) in steps {
+                        assert_eq!(drawn.len(), 1, "{at}: cores {step} apart drawn {drawn:?}");
+                    }
+
+                    let (left, right) = (row[0].2, row[row.len() - 1].3);
+
+                    if let Some((outer_left, outer_right)) =
+                        dies.iter().find(|(l, r)| *l < left && right < *r)
+                    {
+                        let margins = (left - outer_left, outer_right - right);
+
+                        assert!((margins.0 - margins.1).abs() <= 1, "{at}: {margins:?}");
+                    }
+                }
+
+                // A wire's end on a block's left or right edge lands on its
+                // outline's column of pixels.
+                for (points, pixels) in &wires {
+                    for (end, pixel) in [
+                        (points[0], pixels[0]),
+                        (*points.last().unwrap(), *pixels.last().unwrap()),
+                    ] {
+                        for (frame, bounds) in &outlines {
+                            if !(frame.min.y < end.y && end.y < frame.max.y) {
+                                continue;
+                            }
+
+                            if end.x == frame.min.x {
+                                assert_eq!(pixel.x, bounds.0, "{at}: {points:?} at {frame:?}");
+                            }
+                            if end.x == frame.max.x {
+                                assert_eq!(pixel.x, bounds.1, "{at}: {points:?} at {frame:?}");
+                            }
+                        }
+                    }
+                }
+
+                let inked: BTreeSet<(i32, i32)> = wires
+                    .iter()
+                    .flat_map(|(_, pixels)| pixels.iter().map(|p| (p.x, p.y)))
+                    .collect();
+
+                assert!(!dots.is_empty(), "{at}: no traffic");
+
+                for dot in dots {
+                    assert!(
+                        inked.contains(&(dot.x, dot.y)),
+                        "{at}: a dot off its wire at {dot:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

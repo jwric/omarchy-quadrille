@@ -70,6 +70,24 @@ fn rows(name: &str, value: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Draws `draw` set on the grid by each of `snaps` in turn, the outermost
+/// first (see [`Draft::snapped`]).
+fn set(d: &mut Draft, snaps: &[V2], draw: impl FnOnce(&mut Draft)) {
+    match snaps.split_first() {
+        Some((&at, rest)) => d.snapped(at, |d| set(d, rest, draw)),
+        None => draw(d),
+    }
+}
+
+/// Draws `draw` set on the grid by `at`, then `steps` times on by `step`,
+/// each by the one before: so each step is the same number of pixels.
+fn chain(d: &mut Draft, at: V2, step: V2, steps: usize, draw: impl FnOnce(&mut Draft)) {
+    d.snapped(at, |d| match steps {
+        0 => draw(d),
+        _ => chain(d, at + step, step, steps - 1, draw),
+    });
+}
+
 /// Something running along a route: dots `spacing` apart that have gone
 /// `travelled` along `pieces` (from their end toward their start if
 /// `backward`), `share` of them there, each there or not by its own number
@@ -86,6 +104,30 @@ fn flow(
     travelled: f64,
     backward: bool,
     tone: Tone,
+) {
+    flow_by(
+        d,
+        pieces,
+        share,
+        spacing,
+        travelled,
+        backward,
+        |d, _, at| {
+            d.dot(at, 3).tone(tone);
+        },
+    );
+}
+
+/// [`flow`], each dot drawn by `dot` with the piece it is on: set on the
+/// grid as that piece is.
+fn flow_by(
+    d: &mut Draft,
+    pieces: &[Vec<V2>],
+    share: f32,
+    spacing: f64,
+    travelled: f64,
+    backward: bool,
+    mut dot: impl FnMut(&mut Draft, usize, V2),
 ) {
     if !share.is_finite() || share <= 0.0 {
         return;
@@ -109,9 +151,9 @@ fn flow(
         let run = (travelled - number as f64 * spacing) as f32;
         let mut left = if backward { total - run } else { run };
 
-        for (piece, &length) in pieces.iter().zip(&lengths) {
+        for (index, (piece, &length)) in pieces.iter().zip(&lengths).enumerate() {
             if left <= length {
-                d.dot(along(piece, left), 3).tone(tone);
+                dot(d, index, along(piece, left));
                 break;
             }
             left -= length;

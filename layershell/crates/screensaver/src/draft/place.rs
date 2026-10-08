@@ -285,7 +285,7 @@ impl Plan {
                 continue;
             };
 
-            let offset = spot.moved(moved).offset(projection.px(target(mark)));
+            let offset = spot.moved(moved).offset(aimed(mark, projection));
             place(mark, Placement::Offset(offset.0, offset.1));
 
             if mark.moving {
@@ -753,7 +753,7 @@ impl Slot {
     fn target(&self, projection: &Projection) -> Point<i32> {
         let targets: Vec<Point<i32>> = self
             .samples()
-            .filter_map(|sample| Some(projection.px(target(self.marks[sample].as_ref()?))))
+            .filter_map(|sample| Some(aimed(self.marks[sample].as_ref()?, projection)))
             .collect();
         let count = targets.len().max(1) as i32;
 
@@ -782,7 +782,7 @@ impl Slot {
         let footprints = self
             .samples()
             .filter_map(|sample| {
-                let target = projection.px(target(self.marks[sample].as_ref()?));
+                let target = aimed(self.marks[sample].as_ref()?, projection);
                 let mark = self.offset(sample, spot.offset(target))?;
 
                 Some((sample, Footprint::of(&mark, projection)))
@@ -813,7 +813,7 @@ impl Slot {
         let Some(bounds) = Footprint::of(&mark, projection).bounds(false) else {
             return none;
         };
-        let target = projection.px(target(&mark));
+        let target = aimed(&mark, projection);
         let elbow = Point::new(target.x + offset.0, target.y + offset.1);
 
         // Across the edge and along it, as for a column.
@@ -903,6 +903,12 @@ fn place(mark: &mut Mark, placement: Placement) {
         Ink::Note { elbow, .. } => *elbow = placement,
         _ => {}
     }
+}
+
+/// Where the target of `mark`, a balloon or a note, lands through
+/// `projection`, set on the grid as the mark is.
+fn aimed(mark: &Mark, projection: &Projection) -> Point<i32> {
+    raster::through(mark, projection).px(target(mark))
 }
 
 fn target(mark: &Mark) -> super::V2 {
