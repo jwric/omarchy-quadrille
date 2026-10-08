@@ -196,8 +196,8 @@ impl Displays {
         let middle = area.centre();
         let overrun = OVERRUN * self.room;
 
-        // Its edges, centre lines and diagonal are hundreds of times longer
-        // than its detail is wide: the detail draws its corner itself.
+        // Its edges and centre lines are hundreds of times longer than its
+        // detail is wide: the detail draws its corner itself.
         d.in_main(|d| {
             d.rect(low, high, Line::Outline);
             d.line(
@@ -210,8 +210,6 @@ impl Displays {
                 v(high.x + overrun, middle.y),
                 Line::Centre,
             );
-            d.arrow(middle, high, Line::Thin);
-            d.arrow(middle, low, Line::Thin);
         });
 
         d.dim_h(low, v(high.x, low.y), -OFFSET * self.room);
@@ -280,14 +278,16 @@ impl Displays {
         });
     }
 
-    /// What is lettered at a display's centre: its connector, diagonal and
-    /// resolution. Drawn with what moves, after the scan line, so the line
-    /// passes behind it.
+    /// What is lettered at a display's centre: its diagonal, dimensioned
+    /// corner to corner with its value in its middle, its connector over it
+    /// and its resolution under it. Drawn with what moves, after the scan
+    /// line, so the line passes behind it.
     fn lettering(&self, d: &mut Draft, screen: &Screen) {
         let middle = screen.area.centre();
         let pixels = screen.panel.pixels;
 
-        d.label(middle, screen.inches()).tone(Tone::Ink);
+        d.dim_diagonal(screen.area.min, screen.area.max)
+            .text(screen.inches());
         d.label(middle, format!("{} × {}", pixels.0, pixels.1))
             .nudge(0, 12);
         d.label(middle, screen.connector.name.as_str())

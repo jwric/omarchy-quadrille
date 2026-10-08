@@ -941,6 +941,20 @@ fn bearing(angle: f32) -> f32 {
 /// Its sides are at 45° to the shaft, three pixels deep: the toolkit's
 /// arrowhead at any angle.
 fn arrowhead(tip: Point<i32>, towards: V2, tone: Tone, out: &mut Vec<Inked>) {
+    arrowhead_within(tip, towards, None, tone, out);
+}
+
+/// [`arrowhead`], its corners kept inside `bounds` (the top left and
+/// bottom right pixels) if given: one pointing into a corner of a
+/// rectangle along a line shallower or steeper than 45° would stand a
+/// pixel out past the edge the line meets at less than 45°.
+fn arrowhead_within(
+    tip: Point<i32>,
+    towards: V2,
+    bounds: Option<(Point<i32>, Point<i32>)>,
+    tone: Tone,
+    out: &mut Vec<Inked>,
+) {
     const DEPTH: f32 = 3.0;
 
     let along = towards.normalize_or_zero();
@@ -952,7 +966,16 @@ fn arrowhead(tip: Point<i32>, towards: V2, tone: Tone, out: &mut Vec<Inked>) {
     let across = along.perp();
     let tip_f = v(tip.x as f32, tip.y as f32);
     let base = tip_f - along * DEPTH;
-    let corner = |point: V2| Point::new(point.x.round() as i32, point.y.round() as i32);
+    let corner = |point: V2| {
+        let pixel = Point::new(point.x.round() as i32, point.y.round() as i32);
+
+        match bounds {
+            Some((low, high)) => {
+                Point::new(pixel.x.clamp(low.x, high.x), pixel.y.clamp(low.y, high.y))
+            }
+            None => pixel,
+        }
+    };
 
     out.push(Inked {
         piece: Piece::Rows {
@@ -1419,6 +1442,47 @@ fn dimension(measure: &Measure, text: &str, tone: Tone, p: &Projection, out: &mu
 
             lettering(text, at, tone, out);
         }
+        Measure::Diagonal { a, b } => {
+            let snap = |point: V2| Point::new(point.x.round() as i32, point.y.round() as i32);
+            let (pa, pb) = (p.exact(a), p.exact(b));
+            // From the pixel inside each corner, so the rectangle's edges,
+            // which what it measures draws, are left whole.
+            let inside = |from: Point<i32>, to: Point<i32>| {
+                Point::new(
+                    from.x + (to.x - from.x).signum(),
+                    from.y + (to.y - from.y).signum(),
+                )
+            };
+            let (sa, sb) = (snap(pa), snap(pb));
+            let (sa, sb) = (inside(sa, sb), inside(sb, sa));
+            let low = Point::new(sa.x.min(sb.x), sa.y.min(sb.y));
+            let high = Point::new(sa.x.max(sb.x), sa.y.max(sb.y));
+
+            out.push(path(shape::line(sa, sb), Tone::Line));
+
+            if pa.distance(pb) >= 12.0 {
+                arrowhead_within(sa, pa - pb, Some((low, high)), Tone::Line, out);
+                arrowhead_within(sb, pb - pa, Some((low, high)), Tone::Line, out);
+            }
+
+            if text.is_empty() {
+                return;
+            }
+
+            // In the break at the middle if its ground is inside the
+            // rectangle, clear of its edges; past the end otherwise.
+            let width = i32::from(LETTERING.width(text));
+            let ground = (width + 3, i32::from(LETTERING.cap()) + 4);
+            let at = if high.x - low.x > ground.0 + 2 && high.y - low.y > ground.1 + 2 {
+                place(LETTERING, text, snap(pa.lerp(pb, 0.5)), Anchor::CENTRE)
+            } else {
+                let beyond = snap(pb + (pb - pa).normalize_or_zero() * 5.0);
+
+                place(LETTERING, text, beyond, Anchor::LEFT)
+            };
+
+            lettering(text, at, tone, out);
+        }
         Measure::Radial {
             centre,
             radius,
@@ -1622,6 +1686,68 @@ mod tests {
             out.iter()
                 .any(|inked| matches!(&inked.piece, Piece::Text { text, .. } if text == "40"))
         );
+    }
+
+    /// A diagonal's arrowheads have their tips in its rectangle's corners
+    /// and stay inside its edges, whatever its shape and wherever it falls
+    /// on the grid; its value goes in the break at its middle.
+    #[test]
+    fn a_diagonals_arrowheads_stay_inside_its_rectangle() {
+        for (width, height) in [
+            (160.0, 90.0),
+            (160.0, 100.0),
+            (210.0, 90.0),
+            (90.0, 160.0),
+            (100.0, 100.0),
+        ] {
+            for shift in [0.0, 0.3, 0.5, 0.7] {
+                let a = v(shift, shift * 0.7);
+                let b = a + v(width, height);
+                let mut draft = Draft::new();
+                draft.dim_diagonal(a, b).text("27.0\"");
+                let mut out = Vec::new();
+                rasterize(&draft.marks()[0], &UNIT, &mut out);
+
+                // The rectangle's corners, and the pixels inside them.
+                let (low, high) = (UNIT.px(v(a.x, b.y)), UNIT.px(v(b.x, a.y)));
+                let (low, high) = (
+                    Point::new(low.x + 1, low.y + 1),
+                    Point::new(high.x - 1, high.y - 1),
+                );
+                let heads: Vec<&[(i32, i32, i32)]> = out
+                    .iter()
+                    .filter_map(|inked| match &inked.piece {
+                        Piece::Rows { rows, .. } => Some(rows.as_slice()),
+                        _ => None,
+                    })
+                    .collect();
+                let on = |corner: Point<i32>, head: &[(i32, i32, i32)]| {
+                    head.iter()
+                        .any(|&(y, from, to)| y == corner.y && from <= corner.x && corner.x <= to)
+                };
+                let at = format!("{width} × {height} at {shift}");
+
+                assert_eq!(heads.len(), 2, "{at}");
+                assert!(
+                    on(Point::new(low.x, high.y), heads[0])
+                        && on(Point::new(high.x, low.y), heads[1]),
+                    "{at}"
+                );
+
+                for &(y, from, to) in heads.iter().copied().flatten() {
+                    assert!(
+                        (low.y..=high.y).contains(&y) && low.x <= from && to <= high.x,
+                        "{at}: row {y} from {from} to {to} leaves {low:?} to {high:?}"
+                    );
+                }
+
+                let middle = UNIT.px(a.lerp(b, 0.5));
+                assert!(out.iter().any(|inked| matches!(
+                    inked.piece,
+                    Piece::Knockout(area) if contains(area, middle)
+                )));
+            }
+        }
     }
 
     #[test]

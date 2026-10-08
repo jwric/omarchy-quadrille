@@ -92,6 +92,10 @@ pub enum Measure {
         axis: Axis,
         offset: f32,
     },
+    /// The diagonal of the rectangle with corners `a` and `b`, as a display
+    /// is sold by: a line from corner to corner, arrowed onto both and kept
+    /// inside the rectangle there, its value in a break at its middle.
+    Diagonal { a: V2, b: V2 },
     /// A diameter or radius: an arrow onto the circle at `angle`, a leader
     /// `reach` pixels out and a shelf with the value.
     Radial {
@@ -742,6 +746,14 @@ impl Draft {
         };
 
         self.dimension(measure, text)
+    }
+
+    /// The diagonal of the rectangle with corners `a` and `b` (see
+    /// [`Measure::Diagonal`]); with no text, the line and its arrows alone.
+    pub fn dim_diagonal(&mut self, a: V2, b: V2) -> Made<'_> {
+        let text = number(a.distance(b));
+
+        self.dimension(Measure::Diagonal { a, b }, text)
     }
 
     pub fn dim_diameter(&mut self, centre: V2, radius: f32, angle: f32, reach: i32) -> Made<'_> {
