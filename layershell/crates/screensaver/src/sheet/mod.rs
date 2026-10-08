@@ -728,7 +728,19 @@ impl<'a> Scene<'a> {
                     ratio = Some(least);
                 }
             } else if ratio.is_none() {
-                scale = scale.max(main.scale * 2.0);
+                // Twice the view's scale, or what fits what must be read in
+                // full round the circle's middle, if that is less.
+                let least = match detail.holds {
+                    Some(holds) => {
+                        let half = (holds.max - detail.centre).max(detail.centre - holds.min);
+                        let held = Extent::new(detail.centre - half, detail.centre + half);
+
+                        (main.scale * 2.0).min(fit(card, held, window, sheet.display).0)
+                    }
+                    None => main.scale * 2.0,
+                };
+
+                scale = scale.max(least);
             }
 
             Some(DetailView {
@@ -1927,6 +1939,57 @@ mod tests {
                         "{fixture:?} {} on {width}: {above} above, {below} below, {left} left, \
                          {right} right",
                         subject.name()
+                    );
+                }
+            }
+        }
+    }
+
+    /// The topology reads as well on the monitors most desks have as on
+    /// the laptop: 1920 × 1080 (or 3840 × 2160 at 2), where it is drawn at a
+    /// pixel to a unit, and 2560 × 1440, where it is drawn larger than its
+    /// details' windows are made for, so they magnify less.
+    #[test]
+    fn the_topology_reads_well_on_common_monitors() {
+        use crate::machine::Fixture;
+
+        for (width, height) in [(1920, 1080), (2560, 1440)] {
+            let output = Output {
+                width,
+                height,
+                scale: 1.0,
+                display: Display {
+                    mm_per_vpx: 0.5,
+                    estimated: true,
+                },
+            };
+            let (width, height) = output.virtual_size();
+
+            for fixture in Fixture::ALL {
+                let subjects = subjects::all(&fixture.machine());
+                let index = subjects::find(&subjects, "topology").unwrap();
+                let planned = Planned::default();
+
+                for part in 0..subjects[index].card().parts.len() {
+                    let local = timeline::PLOT_START
+                        + timeline::PLOT
+                        + timeline::SETTLE
+                        + timeline::DETAIL * part as f32
+                        + MARK
+                        + timeline::DETAIL_PLOT
+                        + 1.0;
+                    let sheet = sheet(&subjects, index, output, local);
+                    let scene = Scene::new(&sheet, width as i32, height as i32, &planned);
+                    let faults: Vec<String> = placed_faults(&sheet, &scene)
+                        .into_iter()
+                        .chain(lettering_faults(&scene))
+                        .chain(broken_outlines(&scene))
+                        .collect();
+
+                    assert!(
+                        faults.is_empty(),
+                        "{fixture:?} on {width} × {height} at {local:.1} s: {}",
+                        faults.join("; ")
                     );
                 }
             }

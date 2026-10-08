@@ -914,7 +914,7 @@ fn top_left(extent: Extent) -> V2 {
 /// as far apart in units as others are as far apart in pixels wherever
 /// they fall, and rows of them line up.
 fn in_rows(d: &mut Draft, points: &[V2], draw: &mut impl FnMut(&mut Draft, usize)) {
-    fn down<F: FnMut(&mut Draft, usize)>(d: &mut Draft, rows: &[Vec<(usize, V2)>], draw: &mut F) {
+    fn down<F: FnMut(&mut Draft, usize)>(d: &mut Draft, rows: &[Row], draw: &mut F) {
         if let Some((row, rest)) = rows.split_first() {
             d.snapped(row[0].1, |d| {
                 along(d, row, draw);
@@ -936,7 +936,7 @@ fn centred_rows(d: &mut Draft, squares: &[Extent], draw: &mut impl FnMut(&mut Dr
     fn down<F: FnMut(&mut Draft, usize)>(
         d: &mut Draft,
         squares: &[Extent],
-        rows: &[Vec<(usize, V2)>],
+        rows: &[Row],
         draw: &mut F,
     ) {
         let Some((row, rest)) = rows.split_first() else {
@@ -945,7 +945,7 @@ fn centred_rows(d: &mut Draft, squares: &[Extent], draw: &mut impl FnMut(&mut Dr
         let first = squares[row[0].0];
         let last = squares[row[row.len() - 1].0];
         let middle = v((first.min.x + last.max.x) / 2.0, first.max.y);
-        let (left, right): (Vec<(usize, V2)>, Vec<(usize, V2)>) = row
+        let (left, right): (Row, Row) = row
             .iter()
             .map(|&(k, _)| (k, squares[k]))
             .map(|(k, square)| {
@@ -958,7 +958,7 @@ fn centred_rows(d: &mut Draft, squares: &[Extent], draw: &mut impl FnMut(&mut Dr
             .partition(|&(k, _)| squares[k].centre().x < middle.x);
 
         d.snapped(middle, |d| {
-            let left: Vec<(usize, V2)> = left.into_iter().rev().collect();
+            let left: Row = left.into_iter().rev().collect();
 
             for side in [&left, &right] {
                 if let Some(&(_, first)) = side.first() {
@@ -975,9 +975,12 @@ fn centred_rows(d: &mut Draft, squares: &[Extent], draw: &mut impl FnMut(&mut Dr
     down(d, squares, &rows, draw);
 }
 
+/// A row of points, each with its index.
+type Row = Vec<(usize, V2)>;
+
 /// `points` in rows of those level with each other, each with its index.
-fn rows_of(points: impl Iterator<Item = V2>) -> Vec<Vec<(usize, V2)>> {
-    let mut rows: Vec<Vec<(usize, V2)>> = Vec::new();
+fn rows_of(points: impl Iterator<Item = V2>) -> Vec<Row> {
+    let mut rows: Vec<Row> = Vec::new();
 
     for (k, point) in points.enumerate() {
         match rows.last_mut() {
@@ -1481,7 +1484,61 @@ fn part(machine: &Machine, diagram: &Diagram, item: Item) -> Part {
         }
     };
 
-    let mut part = Part::new(name, quantity, &fit(&value, 10)).detail(centre, radius);
+    // What its detail must hold in full: the cores and cache of the first
+    // die, the bank's lettering and first rows, a block's plate, a bridge
+    // and its lettering over it.
+    let holds = match item {
+        Item::Processor => {
+            let die = &diagram.package.dies[0];
+            let (middle, _) = processor_ring(&diagram.package);
+            let half = (middle.y
+                - die
+                    .cores
+                    .iter()
+                    .map(|core| core.square.min.y)
+                    .chain(die.cache.as_ref().map(|(band, _)| band.min.y))
+                    .fold(f32::MAX, f32::min))
+            .abs();
+
+            Extent::new(
+                v(die.frame.min.x, middle.y - half),
+                v(die.frame.max.x, middle.y + half),
+            )
+        }
+        Item::Memory => {
+            let frame = diagram.bank.as_ref().expect("Drawn with memory").frame;
+
+            Extent::new(
+                v(frame.min.x, frame.min.y.max(frame.max.y - 44.0)),
+                frame.max,
+            )
+        }
+        Item::Blocks(_) => {
+            let first = blocks
+                .iter()
+                .find(|block| block.balloon)
+                .unwrap_or(&blocks[0]);
+            let frame = first.frame;
+
+            match first.form {
+                Form::Bridge => Extent::new(
+                    v(frame.centre().x - 24.0, frame.min.y),
+                    v(
+                        frame.centre().x + 24.0,
+                        frame.max.y + 8.0 + DETAIL_LINE * first.more.len() as f32,
+                    ),
+                ),
+                _ => {
+                    let plate = plate(frame);
+
+                    Extent::new(v(plate.min.x, frame.min.y), v(plate.max.x, frame.max.y))
+                }
+            }
+        }
+    };
+    let mut part = Part::new(name, quantity, &fit(&value, 10))
+        .detail(centre, radius)
+        .holding(holds);
 
     part.spec = spec.into_iter().take(SPEC_ROWS).collect();
     part

@@ -172,6 +172,14 @@ impl Part {
         self.detail = Some(Detail::fixed(centre, radius));
         self
     }
+
+    /// Says what of its detail must be read in full (see [`Detail::holds`]).
+    pub fn holding(mut self, holds: Extent) -> Self {
+        if let Some(detail) = &mut self.detail {
+            detail.holds = Some(holds);
+        }
+        self
+    }
 }
 
 /// A circle of the model that a detail view magnifies.
@@ -181,6 +189,11 @@ pub struct Detail {
     pub radius: f32,
     /// Whether it moves with its part, and so is drawn every frame.
     pub follows: bool,
+    /// What of it must be read in full, where a diagram letters it: a
+    /// detail magnifies at least twice the view's scale, but no more than
+    /// lets this fit its window, so a view drawn large on a large display
+    /// does not magnify its detail past its window.
+    pub holds: Option<Extent>,
 }
 
 impl Detail {
@@ -189,6 +202,7 @@ impl Detail {
             centre,
             radius,
             follows: false,
+            holds: None,
         }
     }
 
@@ -197,6 +211,7 @@ impl Detail {
             centre,
             radius,
             follows: true,
+            holds: None,
         }
     }
 }
