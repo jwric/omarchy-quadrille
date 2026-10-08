@@ -62,6 +62,15 @@ pub struct Plan {
     /// The view it places annotations in: `None` for the front view.
     view: Option<usize>,
     spots: HashMap<Id, Spot>,
+    /// The origin of the projection it was worked out through: drawn
+    /// through another moved by whole pixels, it moves its annotations
+    /// with the drawing.
+    origin: (f32, f32),
+    /// What its annotations cover wherever they go, as placed.
+    covers: Option<Rectangle<i32>>,
+    /// How far the drawing and its annotations, as placed, are from the
+    /// middle of the view (see [`Plan::centre`]).
+    pub shift: (i32, i32),
 }
 
 /// Where one annotation goes.
@@ -187,14 +196,72 @@ impl Plan {
             None => search.descend(&options),
         };
 
-        let spots = search
-            .arrange(&choices)
+        let arranged = search.arrange(&choices);
+        let covers = arranged
+            .iter()
+            .enumerate()
+            .filter_map(|(i, spot)| {
+                let placed = search.placed(i, (*spot)?);
+                let (placed, _) = placed.as_ref().as_ref()?;
+
+                placed
+                    .footprints
+                    .iter()
+                    .filter_map(|(_, footprint)| footprint.bounds(true))
+                    .reduce(union)
+            })
+            .reduce(union);
+        let spots = arranged
             .into_iter()
             .zip(&search.slots)
             .filter_map(|(spot, slot)| Some((slot.id.clone(), spot?)))
             .collect();
 
-        Self { view, spots }
+        Self {
+            view,
+            spots,
+            origin: projection.origin,
+            covers,
+            shift: (0, 0),
+        }
+    }
+
+    /// Works out how far to move the drawing for it and its annotations to
+    /// be in the middle of `clip`, from `samples` of the subject drawn
+    /// across its run (without what the sheet marks on it for a while,
+    /// such as a detail's circle) through the projection the plan was
+    /// worked out through: kept as [`Plan::shift`].
+    pub fn centre<'a>(
+        &mut self,
+        samples: impl IntoIterator<Item = &'a [Mark]>,
+        projection: &Projection,
+        clip: Rectangle<i32>,
+    ) {
+        let mut covers = self.covers;
+
+        for mark in samples
+            .into_iter()
+            .flatten()
+            .filter(|mark| mark.shown_in(self.view))
+        {
+            let mut pieces = Vec::new();
+            raster::rasterize(mark, projection, &mut pieces);
+
+            for bounds in pieces.iter().filter_map(|inked| extent(&inked.piece)) {
+                covers = Some(covers.map_or(bounds, |covers| union(covers, bounds)));
+            }
+        }
+
+        let Some(covers) = covers.and_then(|covers| raster::intersection(covers, clip)) else {
+            return;
+        };
+        // Twice the middles, so halving their difference rounds once.
+        let middle = |from: i32, length: i32| 2 * from + length;
+
+        self.shift = (
+            (middle(clip.x, clip.width) - middle(covers.x, covers.width)) / 2,
+            (middle(clip.y, clip.height) - middle(covers.y, covers.height)) / 2,
+        );
     }
 
     /// Places the automatic annotations among `marks`, drawn through
@@ -205,6 +272,10 @@ impl Plan {
     /// the moment instead.
     pub fn apply(&self, marks: &mut [Mark], projection: &Projection) {
         let mut moving = Vec::new();
+        let moved = (
+            (projection.origin.0 - self.origin.0).round() as i32,
+            (projection.origin.1 - self.origin.1).round() as i32,
+        );
 
         for (index, mark) in marks.iter_mut().enumerate() {
             let Some(spot) = Id::of(mark)
@@ -214,7 +285,7 @@ impl Plan {
                 continue;
             };
 
-            let offset = spot.offset(projection.px(target(mark)));
+            let offset = spot.moved(moved).offset(projection.px(target(mark)));
             place(mark, Placement::Offset(offset.0, offset.1));
 
             if mark.moving {
@@ -251,6 +322,14 @@ impl Plan {
 }
 
 impl Spot {
+    /// The same spot with the drawing moved by `by` pixels.
+    fn moved(self, by: (i32, i32)) -> Self {
+        match self {
+            Self::At(at) => Self::At(Point::new(at.x + by.0, at.y + by.1)),
+            off => off,
+        }
+    }
+
     /// Its offset from a target at `target`.
     fn offset(self, target: Point<i32>) -> (i32, i32) {
         match self {

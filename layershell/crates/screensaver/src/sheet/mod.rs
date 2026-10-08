@@ -635,7 +635,7 @@ impl<'a> Scene<'a> {
     fn new(sheet: &'a Sheet<'a>, width: i32, height: i32, planned: &Planned) -> Self {
         let card = sheet.subject.card();
         let layout = Layout::new(width, height, card);
-        let (panes, main_ratio) = arrange(sheet, &layout);
+        let (mut panes, main_ratio) = arrange(sheet, &layout);
         let main = panes[0].projection;
 
         let mut draft = Draft::new();
@@ -648,12 +648,14 @@ impl<'a> Scene<'a> {
             // Spread by the golden ratio, which no cycle of the subject's
             // keeps time with: evenly spaced samples can all catch a part
             // at the same point of its stroke.
+            let mut drawn = Vec::new();
             let samples: Vec<Draft> = (0..PLACING_SAMPLES)
                 .map(|k| {
                     let mut sample = Draft::new();
                     let t = running * (k as f32 * 0.618_034).fract();
 
                     sheet.subject.draw(&mut sample, t);
+                    drawn.push(sample.marks().len());
 
                     // The circles the sheet marks details with, and their
                     // letters, which annotations keep clear of too.
@@ -681,9 +683,30 @@ impl<'a> Scene<'a> {
 
             panes
                 .iter()
-                .map(|pane| Plan::new(&samples, &pane.projection, pane.cell, pane.view))
+                .map(|pane| {
+                    let mut plan = Plan::new(&samples, &pane.projection, pane.cell, pane.view);
+                    let drawings = samples
+                        .iter()
+                        .zip(&drawn)
+                        .map(|(sample, &drawn)| &sample.marks()[..drawn]);
+
+                    plan.centre(drawings, &pane.projection, pane.cell);
+                    plan
+                })
                 .collect()
         });
+
+        // A view alone is drawn with what is placed round it in its
+        // middle, not the room the subject keeps round its drawing: the
+        // balloons go wherever they read best, which may be on one side.
+        if let [pane] = panes.as_mut_slice() {
+            let (x, y) = plans[0].shift;
+
+            pane.projection.origin.0 += x as f32;
+            pane.projection.origin.1 += y as f32;
+        }
+
+        let main = panes[0].projection;
 
         for (plan, pane) in plans.iter().zip(&panes) {
             plan.apply(draft.marks_mut(), &pane.projection);
@@ -1759,6 +1782,85 @@ mod tests {
         }
 
         assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+    }
+
+    /// A view alone has as much paper on either side of what is drawn in
+    /// it, its annotations with it, as on the other, a few pixels apart at
+    /// most for what moves: for every sheet of every machine, on both
+    /// outputs. (A designed subject's moving parts may reach further at
+    /// one moment than another, and it is centred on all of their reach.)
+    #[test]
+    fn a_view_alone_is_drawn_in_its_middle() {
+        use crate::machine::Fixture;
+
+        for fixture in Fixture::ALL {
+            let subjects = subjects::all(&fixture.machine());
+
+            for (index, subject) in subjects.iter().enumerate() {
+                if subject.card().domain != subjects::Domain::Computing
+                    || !subject.views().is_empty()
+                {
+                    continue;
+                }
+
+                for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+                    let (width, height) = output.virtual_size();
+                    let sheet = sheet(&subjects, index, output, 12.0);
+                    let scene =
+                        Scene::new(&sheet, width as i32, height as i32, &Planned::default());
+                    let view = scene.layout.drawing();
+                    let union = |a: Rectangle<i32>, b: Rectangle<i32>| {
+                        let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+                        let right = (a.x + a.width).max(b.x + b.width);
+                        let bottom = (a.y + a.height).max(b.y + b.height);
+
+                        rect(x, y, right - x, bottom - y)
+                    };
+                    let mut inked: Option<Rectangle<i32>> = None;
+
+                    for mark in scene
+                        .draft
+                        .marks()
+                        .iter()
+                        .filter(|mark| mark.shown_in(None))
+                    {
+                        let mut pieces = Vec::new();
+                        raster::rasterize(mark, &scene.main, &mut pieces);
+
+                        for piece in pieces {
+                            let area = match piece.piece {
+                                raster::Piece::Path { pixels, .. } => pixels
+                                    .iter()
+                                    .map(|pixel| rect(pixel.x, pixel.y, 1, 1))
+                                    .reduce(union),
+                                raster::Piece::Text { at, text } => Some(text_box(at, &text)),
+                                raster::Piece::Block(area) | raster::Piece::Knockout(area) => {
+                                    Some(area)
+                                }
+                                raster::Piece::Rows { .. } => None,
+                            };
+
+                            if let Some(area) = area.and_then(|a| raster::intersection(a, view)) {
+                                inked = Some(inked.map_or(area, |inked| union(inked, area)));
+                            }
+                        }
+                    }
+
+                    let inked = inked.expect("Something drawn");
+                    let above = inked.y - view.y;
+                    let below = view.y + view.height - inked.y - inked.height;
+                    let left = inked.x - view.x;
+                    let right = view.x + view.width - inked.x - inked.width;
+
+                    assert!(
+                        (above - below).abs() <= 8 && (left - right).abs() <= 8,
+                        "{fixture:?} {} on {width}: {above} above, {below} below, {left} left, \
+                         {right} right",
+                        subject.name()
+                    );
+                }
+            }
+        }
     }
 
     /// Every view the sheet shows is framed inside a cell of the main area
