@@ -545,10 +545,7 @@ fn arrange(sheet: &Sheet<'_>, layout: &Layout) -> (Vec<Pane>, Option<Ratio>) {
 
         let mut panes = vec![Pane {
             view: None,
-            projection: Projection {
-                origin: front_origin,
-                scale,
-            },
+            projection: Projection::new(front_origin, scale),
             cell: rect(
                 drawing.x,
                 drawing.y,
@@ -566,15 +563,15 @@ fn arrange(sheet: &Sheet<'_>, layout: &Layout) -> (Vec<Pane>, Option<Ratio>) {
         };
 
         if let Some(beside) = beside {
-            let projection = Projection {
-                origin: (
+            let projection = Projection::new(
+                (
                     (x + scale * (right - left) + BETWEEN as f32
                         - scale * views[beside].extent.min.x)
                         .round(),
                     front_origin.1,
                 ),
                 scale,
-            };
+            );
 
             panes.push(Pane {
                 view: Some(beside),
@@ -590,14 +587,14 @@ fn arrange(sheet: &Sheet<'_>, layout: &Layout) -> (Vec<Pane>, Option<Ratio>) {
         }
 
         if let Some(under) = under {
-            let projection = Projection {
-                origin: (
+            let projection = Projection::new(
+                (
                     front_origin.0,
                     (y + scale * (high - low) + BETWEEN as f32 + scale * views[under].extent.max.y)
                         .round(),
                 ),
                 scale,
-            };
+            );
 
             panes.push(Pane {
                 view: Some(under),
@@ -1113,7 +1110,7 @@ impl<'a> Scene<'a> {
             .draft
             .marks()
             .iter()
-            .filter(|mark| mark.magnified() && view.takes(layer, mark))
+            .filter(|mark| mark.magnified_for(view.focus.part) && view.takes(layer, mark))
             .map(|mark| (mark, &view.projection));
         let share = (plotted < 1.0).then_some(plotted);
 
@@ -1347,7 +1344,7 @@ fn plot<'m, Renderer: geometry::Renderer>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draft::{Pass, Placement};
+    use crate::draft::{Pass, Placement, Scope};
     use crate::headless::Output;
     use crate::machine::Machine;
     use crate::subjects;
@@ -1522,7 +1519,9 @@ mod tests {
             let window = layout::inset(scene.layout.detail_window(), 1);
 
             for mark in scene.draft.marks() {
-                if mark.scope != crate::draft::Scope::Detail || mark.part != Some(view.focus.part) {
+                if !matches!(mark.scope, Scope::Detail | Scope::Own)
+                    || mark.part != Some(view.focus.part)
+                {
                     continue;
                 }
 

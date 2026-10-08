@@ -1,36 +1,44 @@
 //! The machine's cooling as a schematic plan: the heat sources with their
-//! temperatures, the heat pipe from the processor (and the graphics) to the
-//! fins in the fans' outlets, the fans as rotors turning at the speeds their
-//! monitors measure, and the air drawn in at the base, past what it cools
-//! and out through the vents.
+//! temperatures, the fans as rotors turning at the speeds their monitors
+//! measure, the air drawn in at the base, past what it cools and out
+//! through the vents, and the way each source's heat gets to it.
 //!
 //! The arrangement is a diagram, not the machine's: the inventory says what
-//! is measured, not where it is. It is laid out like a laptop's base seen
-//! from above with its vents at the back, the top of the sheet: the fans in
-//! the corners with the processor between them under the heat pipe, and in
-//! rows under it what the air cools, each giving its heat to the air drawn
-//! up the side to the nearest fan. A desktop's fans are axial, a laptop's
-//! blowers.
+//! is measured, not where it is. It is laid out with the vents at the top of
+//! the sheet. A laptop (a tablet, a mini PC) cools its processor and
+//! graphics through a heat pipe to fins in its blowers' outlets: the blowers
+//! in the top corners, the processor between them under the pipe. A desktop
+//! or a server gives them heatsinks of their own in the air its case fans
+//! move: axial fans in the corners, exhausts at the top and intakes at the
+//! base. Under them in rows is what the air cools, each giving its heat to
+//! the air drawn up the side to the nearest fan that turns.
 //!
-//! A fan the monitor lists but that has not been seen turning is drawn in
-//! phantom: a controller can list more fans than the machine has, and a fan
-//! that has stopped reads 0 like one that is not there. With no fan
-//! measured at all, the paths are drawn and nothing moves on them.
+//! A fan a controller lists but that has not been seen turning is drawn in
+//! phantom: an embedded controller can list more fans than the machine has,
+//! and a fan that has stopped reads 0 like one that is not there. A board's
+//! monitor lists a header for every fan the board could take, so its
+//! headers reading 0 when the machine is read are left out and counted. A
+//! fan on a device, a graphics card's, is the device's, not the case's: its
+//! speed is lettered in the device's block. With no fan measured at all,
+//! the paths are drawn and nothing moves on them.
 //!
 //! The units are the laptop's virtual pixels at full size, as the topology
 //! sheet's are, so lettering fits its blocks at the laptop's scale or
-//! larger.
+//! larger. Each block, thermometer and fan is set on the pixel grid as one
+//! figure ([`Draft::snapped`]): drawn the same wherever it falls, symmetric
+//! where it is symmetric, its lettering and gauges as far from its outline
+//! on every side, and the heat pipe meeting what it runs into.
 use std::cell::RefCell;
 use std::f32::consts::{PI, TAU};
 
-use quadrille::draw::Anchor;
+use quadrille::draw::{Anchor, Horizontal, Vertical};
 
 use crate::draft::Placement::Auto;
 use crate::draft::raster::LETTERING;
-use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, arc_points, polar, v};
+use crate::draft::{Draft, Extent, Fill, Line, Shape, Tone, V2, arc_points, polar, v};
 use crate::machine::{
-    ChargeState, ChargerKind, ChassisKind, Link, Machine, PciAddress, PciKind, Sensor, SensorKind,
-    Site, Snapshot,
+    ChargeState, ChargerKind, ChassisKind, Drive, DriveKind, Link, Machine, PciAddress, PciKind,
+    Sensor, SensorKind, Site, Snapshot,
 };
 
 use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
@@ -39,51 +47,61 @@ use super::{SPEC_ROWS, binary, counted, decimal, fit, flow, lettered, rows};
 
 /// A heat source's block: wide enough for its name and a temperature...
 const BLOCK: f32 = 108.0;
-/// ...lettering this far in from its sides...
+/// ...everything in it as far from each of its sides...
 const PAD: f32 = 6.0;
-/// ...from its top to the middle of its title, and to its first gauge...
-const TITLE: f32 = 10.0;
-const GAUGES: f32 = 22.0;
-/// ...between gauges, and under the last.
-const GAUGE: f32 = 7.0;
-const FOOT: f32 = 8.0;
+/// ...under a line of lettering, its name and hottest temperature, and
+/// another for the speed of a fan of its own...
+const LINE: f32 = 12.0;
+/// ...and from its top to the middle of its name's capitals, where the
+/// arrow of its heat leaves it.
+const TITLE: f32 = PAD + 4.0;
 
-/// A thermometer's bulb, from the block's side, and its radius; its tube's
-/// length and half its bore, and the scale along it in °C.
-const BULB: f32 = 9.0;
+/// A thermometer: its bulb's radius, its tube's length past the bulb's
+/// centre and half its bore, and the scale along it in °C.
 const BULB_RADIUS: f32 = 3.0;
 const TUBE: f32 = 60.0;
 const GLASS: f32 = 2.0;
 const COLDEST: f32 = 20.0;
 const HOTTEST: f32 = 100.0;
+/// Between thermometers one under another, bulb to bulb: a bulb and room
+/// for a pixel or more between bulbs at any scale the view is drawn at.
+const GAUGE: f32 = 9.0;
 /// A temperature read in caution from here.
 const HOT: f32 = 85.0;
 /// The thermometers a block has at most: the rest of its sensors are in its
 /// specification.
 const MOST_GAUGES: usize = 4;
 /// The processor's other sensors (its cores) as squares tinted by their
-/// temperatures, this many to a row, and how many at most.
+/// temperatures under its thermometer: how far under, their size and
+/// pitch, how many to a row and how many at most.
+const CORES_UNDER: f32 = 4.0;
 const CORE: f32 = 5.0;
-const CORE_PITCH: f32 = 7.0;
+const CORE_PITCH: f32 = 7.5;
 const CORES_ACROSS: usize = 12;
 const MOST_CORES: usize = 48;
-/// A battery's gauge: its body's length.
+/// A battery's gauge: its body's length and half its height, and its
+/// terminal's length and half its height.
 const CELL: f32 = 44.0;
-/// In a detail, a block's name over its first gauge, and the room after
-/// a tube for its temperature.
-const DETAIL_TITLE: f32 = 7.0;
-const DETAIL_VALUE: f32 = 20.0;
-/// Between a detail's circle and the bulbs and name it encloses.
-const CLEAR: f32 = 5.0;
+const CELL_HALF: f32 = 3.5;
+const TERMINAL: f32 = 2.5;
+const TERMINAL_HALF: f32 = 1.5;
+/// In a detail, the room over a block's first bulb for its name, and after
+/// a tube for its temperature: `100 °C` four units after it at twice the
+/// laptop's view.
+const DETAIL_NAME: f32 = 6.0;
+const DETAIL_VALUE: f32 = 4.0 + 36.0 / 2.36;
 
 /// Between blocks across and down.
 const ACROSS: f32 = 14.0;
-const DOWN: f32 = 14.0;
+const DOWN: f32 = 16.0;
 /// Between the blocks and the fans, room for the heat's arrows.
 const SIDE: f32 = 30.0;
 /// Between the case and the fans, and between fans side by side.
 const INSET: f32 = 8.0;
 const BETWEEN: f32 = 10.0;
+/// Between a tower's fans one over another on a side: room to see the air
+/// go up from one to the other.
+const STACKED: f32 = 30.0;
 /// The case's corners, cut off; the room under the fans for the air drawn
 /// up to them; the intakes' half width.
 const CHAMFER: f32 = 6.0;
@@ -91,10 +109,9 @@ const AIRWAY: f32 = 40.0;
 const INTAKE: f32 = 12.0;
 /// From the top of the case: the exhaust's arrows, and the fans' speeds
 /// over them under their names, a line of lettering (at the laptop's
-/// scale) apart.
+/// scale) apart. Under the base, a fan's speed over its name.
 const EXHAUST: f32 = 14.0;
 const NAMES: f32 = 24.0;
-const LINE: f32 = 12.0;
 
 /// The fin stack under each vent: its depth and the pitch of its fins.
 const FINS: f32 = 16.0;
@@ -106,6 +123,8 @@ const PIPE: f32 = -FINS / 2.0;
 const COOLED: f32 = 26.0;
 /// A fin stack with no fan: its width.
 const SINK: f32 = 48.0;
+/// A heatsink's fins over a desktop's processor or graphics.
+const HEATSINK: f32 = 8.0;
 
 /// A rotor: its radius, its hub's, and (a blower's) where its blades start.
 const ROTOR: f32 = 24.0;
@@ -130,7 +149,7 @@ const SLOWED: f32 = 150.0;
 /// it, the frame is not the next one.
 const STEP: f64 = 0.5;
 /// How far air runs for each radian its fan turns, and heat along the pipe
-/// in a second; the dots' spacing.
+/// in a second; the dots' spacing and size.
 const AIR: f64 = 12.0;
 const HEAT: f64 = 18.0;
 const SPACING: f64 = 9.0;
@@ -139,9 +158,19 @@ const SPACING: f64 = 9.0;
 const WARM: f32 = 30.0;
 const SCALDING: f32 = 90.0;
 
-/// The fans drawn, at most, and their names in the readings.
+/// The fans drawn, at most, and their names, by the monitor's number for
+/// them where those tell them apart.
 const MOST_FANS: usize = 4;
-const FAN_NAMES: [&str; MOST_FANS] = ["FAN 1", "FAN 2", "FAN 3", "FAN 4"];
+const FAN_NAMES: [&str; 16] = [
+    "FAN 1", "FAN 2", "FAN 3", "FAN 4", "FAN 5", "FAN 6", "FAN 7", "FAN 8", "FAN 9", "FAN 10",
+    "FAN 11", "FAN 12", "FAN 13", "FAN 14", "FAN 15", "FAN 16",
+];
+/// The monitors on a board that list a header for every fan the board could
+/// take, by the start of their drivers' names: the Super I/O chips, and the
+/// boards' own embedded controllers.
+const HEADER_CHIPS: [&str; 8] = [
+    "nct", "it8", "f71", "f81", "w83", "sch5", "asusec", "gigabyte",
+];
 
 /// Room round the drawing for the balloons to line up in.
 const MARGIN: f32 = 22.0;
@@ -174,8 +203,10 @@ impl Kind {
         }
     }
 
-    /// Whether the heat pipe cools it; the air cools the rest.
-    fn piped(self) -> bool {
+    /// Whether it is cooled through fins of its own: the heat pipe's on a
+    /// laptop, a heatsink's on a desktop. The air cools the rest as it
+    /// passes.
+    fn finned(self) -> bool {
         matches!(self, Self::Processor | Self::Graphics)
     }
 }
@@ -195,7 +226,10 @@ struct Source {
     name: String,
     /// The PCI device it is, for a device's.
     device: Option<PciAddress>,
-    /// Which of the machine's batteries it is, for a battery.
+    /// Which of the machine's drives, processor packages or batteries it
+    /// is, for one of those.
+    drive: Option<usize>,
+    package: Option<usize>,
     battery: Option<usize>,
     /// Every temperature sensor on it, by index in a snapshot...
     sensors: Vec<usize>,
@@ -203,60 +237,115 @@ struct Source {
     gauges: Vec<usize>,
     /// ...and the processor's others, its cores, drawn as squares.
     cores: Vec<usize>,
+    /// Its own fans' speed sensors: a graphics card's.
+    fans: Vec<usize>,
+    /// Whether a detail magnifies it: the first of its kind, whose part's
+    /// detail is centred on it.
+    detailed: bool,
     frame: Extent,
+    /// The points the figure its block is set inside is set by (see
+    /// [`Draft::snapped`]): the heat pipe's, for a block under it, which
+    /// meets its top.
+    snaps: Vec<V2>,
 }
 
 impl Source {
-    /// Its block's height: its title, its gauges and its cores' rows.
-    fn height(&self) -> f32 {
-        let gauges = self.gauges.len().max(1);
-        let below = match self.cores.len().div_ceil(CORES_ACROSS) {
-            0 => FOOT,
-            rows => 6.0 + (rows - 1) as f32 * CORE_PITCH + CORE + 5.0,
-        };
+    fn new(kind: Kind) -> Self {
+        Self {
+            kind,
+            name: String::new(),
+            device: None,
+            drive: None,
+            package: None,
+            battery: None,
+            sensors: Vec::new(),
+            gauges: Vec::new(),
+            cores: Vec::new(),
+            fans: Vec::new(),
+            detailed: false,
+            frame: Extent::new(V2::ZERO, V2::ZERO),
+            snaps: Vec::new(),
+        }
+    }
 
-        GAUGES + (gauges - 1) as f32 * GAUGE + below
+    /// Its block's height: its name's line, its fan's, its gauges and its
+    /// cores' rows, with the same room over and under them.
+    fn height(&self) -> f32 {
+        let fan = if self.fans.is_empty() { 0.0 } else { LINE };
+        let gauges = self.gauges.len().max(1) as f32;
+
+        PAD + LINE + fan + 2.0 * BULB_RADIUS + (gauges - 1.0) * GAUGE + self.cores_height() + PAD
+    }
+
+    /// The room its cores take under its thermometer.
+    fn cores_height(&self) -> f32 {
+        match self.cores.len().div_ceil(CORES_ACROSS) {
+            0 => 0.0,
+            rows => CORES_UNDER + (rows - 1) as f32 * CORE_PITCH + CORE,
+        }
+    }
+
+    /// Its block's top left corner, which it is set on the grid by.
+    fn corner(&self) -> V2 {
+        v(self.frame.min.x, self.frame.max.y)
+    }
+
+    /// The bottom left of its last thermometer's bulb, or of a battery's
+    /// gauge: `PAD` in from its block's side and over what is under it.
+    fn foot(&self) -> V2 {
+        self.frame.min + v(PAD, PAD + self.cores_height())
     }
 
     /// The middle of the bulb of its thermometer `k`, or of a battery's
-    /// gauge.
+    /// gauge's left end.
     fn gauge(&self, k: usize) -> V2 {
-        v(
-            self.frame.min.x + BULB,
-            self.frame.max.y - GAUGES - k as f32 * GAUGE,
-        )
-    }
+        let last = self.gauges.len().max(1) - 1;
 
-    /// The circle a detail of it magnifies: its gauges and the lettering a
-    /// detail adds round them, as a detail at twice the view's scale or
-    /// more has room for, with room to spare left of its bulbs, where its
-    /// name starts.
-    fn ring(&self) -> (V2, f32) {
-        let first = self.gauge(0);
-        let last = match self.cores.len() {
-            0 => self.gauge(self.gauges.len().max(1) - 1).y - BULB_RADIUS,
-            n => self.core(n - 1).min.y,
-        };
-        let top = first.y + DETAIL_TITLE + 3.0;
-        let (left, right) = (
-            first.x - BULB_RADIUS - CLEAR,
-            first.x + BULB_RADIUS + TUBE + DETAIL_VALUE,
-        );
-
-        (
-            v(((left + right) / 2.0).round(), ((top + last) / 2.0).round()),
-            ((right - left) / 2.0).round(),
-        )
+        self.foot()
+            + v(
+                BULB_RADIUS,
+                BULB_RADIUS + (last - k.min(last)) as f32 * GAUGE,
+            )
     }
 
     /// The square of its core `k`.
     fn core(&self, k: usize) -> Extent {
-        let last = self.gauge(self.gauges.len().max(1) - 1);
+        let rows = self.cores.len().div_ceil(CORES_ACROSS);
         let (row, column) = (k / CORES_ACROSS, k % CORES_ACROSS);
-        let left = self.frame.min.x + PAD + column as f32 * CORE_PITCH;
-        let top = last.y - 6.0 - row as f32 * CORE_PITCH;
+        let corner = self.frame.min
+            + v(
+                PAD + column as f32 * CORE_PITCH,
+                PAD + (rows - 1 - row) as f32 * CORE_PITCH,
+            );
 
-        Extent::new(v(left, top - CORE), v(left + CORE, top))
+        Extent::new(corner, corner + V2::splat(CORE))
+    }
+
+    /// The circle a detail of it magnifies: round its name, its gauges and
+    /// the values a detail letters after them, as a detail at twice the
+    /// view's scale or more has room for (on the laptop, a detail twice
+    /// the view's scale holds a block's width a little short of its
+    /// block's).
+    fn ring(&self) -> (V2, f32) {
+        let first = self.gauge(0);
+        let bottom = match self.cores.len() {
+            0 => self.foot().y,
+            n => self.core(n - 1).min.y,
+        };
+        let top = first.y + BULB_RADIUS + DETAIL_NAME;
+        let (left, right) = (
+            first.x - BULB_RADIUS - 2.0,
+            first.x + BULB_RADIUS + TUBE + DETAIL_VALUE,
+        );
+        let half = v(right - left, top - bottom) / 2.0;
+
+        (
+            v(
+                ((left + right) / 2.0).round(),
+                ((top + bottom) / 2.0).round(),
+            ),
+            half.length().ceil(),
+        )
     }
 
     /// Its hottest temperature now.
@@ -266,6 +355,80 @@ impl Source {
             .filter_map(|&index| celsius(snapshot, index))
             .reduce(f32::max)
     }
+
+    /// Draws `draw` set on the grid as its block is, by its top left corner.
+    fn set(&self, d: &mut Draft, draw: impl FnOnce(&mut Draft)) {
+        set(d, &self.snaps, |d| d.snapped(self.corner(), draw));
+    }
+
+    /// ...by its top right corner, from which its value is set in.
+    fn set_right(&self, d: &mut Draft, draw: impl FnOnce(&mut Draft)) {
+        self.set(d, |d| d.snapped(self.frame.max, draw));
+    }
+
+    /// ...by its bottom left corner, from which its gauges are set up.
+    fn set_foot(&self, d: &mut Draft, draw: impl FnOnce(&mut Draft)) {
+        self.set(d, |d| d.snapped(self.frame.min, draw));
+    }
+
+    /// ...by the middle of thermometer `k`'s bulb, set a whole number of
+    /// gauges' pitches over the last one, which is set by the bottom left
+    /// of its bulb: so every bulb is as far from the next, and the last as
+    /// far from the block's bottom as its name is from the top.
+    fn set_gauge(&self, d: &mut Draft, k: usize, draw: impl FnOnce(&mut Draft, V2)) {
+        let last = self.gauges.len().max(1) - 1;
+        let centre = self.gauge(k);
+
+        self.set_foot(d, |d| {
+            chain(d, self.foot(), v(0.0, GAUGE), last - k.min(last), |d| {
+                d.snapped(centre, |d| draw(d, centre));
+            });
+        });
+    }
+
+    /// ...by core `k`'s square's bottom left corner, set a whole number of
+    /// pitches from the first of the bottom row: every square the same and
+    /// as far from the next.
+    fn set_core(&self, d: &mut Draft, k: usize, draw: impl FnOnce(&mut Draft, Extent)) {
+        let rows = self.cores.len().div_ceil(CORES_ACROSS);
+        let (row, column) = (k / CORES_ACROSS, k % CORES_ACROSS);
+        let origin = self.frame.min + V2::splat(PAD);
+        let up = origin + v(0.0, (rows - 1 - row) as f32 * CORE_PITCH);
+        let square = self.core(k);
+
+        self.set_foot(d, |d| {
+            chain(d, origin, v(0.0, CORE_PITCH), rows - 1 - row, |d| {
+                chain(d, up, v(CORE_PITCH, 0.0), column, |d| draw(d, square));
+            });
+        });
+    }
+}
+
+/// Records what `draw` makes for the detail of `source`'s part, if that
+/// detail is of `source`: the first block of a kind, which it is centred
+/// on.
+fn in_its_detail(d: &mut Draft, source: &Source, draw: impl FnOnce(&mut Draft)) {
+    if source.detailed {
+        d.in_own_detail(draw);
+    }
+}
+
+/// Draws `draw` set on the grid by each of `snaps` in turn, the outermost
+/// first.
+fn set(d: &mut Draft, snaps: &[V2], draw: impl FnOnce(&mut Draft)) {
+    match snaps.split_first() {
+        Some((&at, rest)) => d.snapped(at, |d| set(d, rest, draw)),
+        None => draw(d),
+    }
+}
+
+/// Draws `draw` set on the grid by `at`, then `steps` times on by `step`,
+/// each by the one before: so each step is the same number of pixels.
+fn chain(d: &mut Draft, at: V2, step: V2, steps: usize, draw: impl FnOnce(&mut Draft)) {
+    d.snapped(at, |d| match steps {
+        0 => draw(d),
+        _ => chain(d, at + step, step, steps - 1, draw),
+    });
 }
 
 /// A fan, as the sheet draws it.
@@ -273,12 +436,19 @@ impl Source {
 struct Fan {
     /// Its speed's sensor, by index in a snapshot.
     sensor: usize,
+    /// Its name on the sheet.
+    name: &'static str,
     /// What its monitor calls it, and the monitor.
     label: Option<String>,
     chip: String,
-    /// Its axis, and whether it is drawn mirrored: its outlet on its left.
+    /// Whether it was turning when the machine was first read.
+    turning: bool,
+    /// Its axis, whether it is drawn mirrored (its outlet on its left), and
+    /// whether it is a tower's intake at the base rather than an exhaust at
+    /// the top.
     centre: V2,
     mirrored: bool,
+    low: bool,
 }
 
 impl Fan {
@@ -308,14 +478,23 @@ impl Fan {
 
         (a.min(b), a.max(b))
     }
+
+    /// What it takes up down, from its base to its top.
+    fn height(&self, rotor: Rotor) -> (f32, f32) {
+        let reach = rotor.reach();
+
+        (self.centre.y + reach.min.y, self.centre.y + reach.max.y)
+    }
 }
 
 /// What kind of fans a machine has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Rotor {
-    /// A centrifugal blower in its scroll, as a laptop has.
+    /// A centrifugal blower in its scroll, as a laptop has, blowing through
+    /// the fins at the end of the heat pipe.
     Blower,
-    /// An axial fan in a square frame, as a desktop has.
+    /// An axial fan in a square frame, as a desktop's or a server's case
+    /// has.
     Axial,
 }
 
@@ -325,7 +504,7 @@ impl Rotor {
     fn depth(self) -> f32 {
         match self {
             Self::Blower => (FINS + OUTLET + SCROLL_IN * TONGUE.sin()).round(),
-            Self::Axial => FINS + 2.0 + FRAME,
+            Self::Axial => INSET + FRAME,
         }
     }
 
@@ -374,12 +553,12 @@ impl Rotor {
         Extent::new(min.floor(), max.ceil())
     }
 
-    /// Where its balloon points: its housing's outer side, high, toward
-    /// the corner of the sheet.
+    /// Where its balloon points: its housing's outer side, away from its
+    /// outlet and the fins.
     fn tip(self) -> V2 {
         match self {
             Self::Blower => polar(scroll(0.8 * PI), 0.8 * PI),
-            Self::Axial => v(-FRAME, FRAME),
+            Self::Axial => v(-FRAME, 0.0),
         }
     }
 
@@ -398,13 +577,22 @@ fn scroll(angle: f32) -> f32 {
     SCROLL_IN + (SCROLL_OUT - SCROLL_IN) * (angle - TONGUE) / (TAU - TONGUE)
 }
 
+/// The points the drawing round the heat pipe is set on the grid by,
+/// outermost first: the top of the case, the pipe's axis under it, which
+/// the fins are split round and the drops hang from, and the bottom of the
+/// fins, which the blowers' outlets meet. Each is set from the one before,
+/// so what is drawn from one meets what is drawn from another.
+const TOP: V2 = v(0.0, 0.0);
+const AXIS: V2 = v(0.0, PIPE);
+const UNDER_FINS: V2 = v(0.0, -FINS);
+
 /// Where the case and the paths are, in the laptop's virtual pixels, `y`
 /// up and the top of the case at 0.
 #[derive(Debug, Clone)]
 struct Plan {
     case: Extent,
-    /// The gaps in the case's top over the fins, and the middles of those
-    /// in its base where the air comes in.
+    /// The gaps in the case's top over the fans' outlets or the fins, and
+    /// the columns of air drawn up from the base.
     vents: Vec<(f32, f32)>,
     intakes: Vec<f32>,
     /// The heat pipe's run under the vents, end to end, and where it drops
@@ -432,60 +620,87 @@ struct Arrow {
 
 /// Lays `sources` and `fans` out, the sources the air cools in rows of
 /// `columns`.
+///
+/// The fans are dealt to the sides in turn, the first (those turning) to
+/// the outer places: a blower's beside the one before it at the top, an
+/// axial fan's at the base under it.
 fn plan(sources: &mut [Source], fans: &mut [Fan], rotor: Rotor, columns: usize) -> Plan {
     let reach = rotor.reach();
     let depth = rotor.depth();
-    let left = fans.len() / 2;
+    let sides: [Vec<usize>; 2] = [
+        (0..fans.len()).step_by(2).collect(),
+        (1..fans.len()).step_by(2).collect(),
+    ];
+    let piped = rotor == Rotor::Blower;
 
     // The fans on the left, their outlets on their right, toward the
-    // middle; those on the right mirrored.
+    // middle.
     let mut x = INSET;
+    let mut edge = INSET;
 
-    for fan in &mut fans[..left] {
+    for (place, &k) in sides[0].iter().enumerate() {
+        let fan = &mut fans[k];
+
         fan.mirrored = false;
+        fan.low = rotor == Rotor::Axial && place > 0;
         fan.centre = v(x - reach.min.x, -depth);
-        x = fan.centre.x + reach.max.x + BETWEEN;
+        edge = fan.centre.x + reach.max.x;
+
+        if rotor == Rotor::Blower {
+            x = edge + BETWEEN;
+        }
     }
 
-    let middle = if left > 0 {
-        x - BETWEEN + SIDE
-    } else {
+    let middle = if sides[0].is_empty() {
         INSET + SIDE / 2.0
+    } else {
+        edge + SIDE
     };
-    let (piped, aired): (Vec<usize>, Vec<usize>) =
-        (0..sources.len()).partition(|&index| sources[index].kind.piped());
+    let (first, rest): (Vec<usize>, Vec<usize>) =
+        (0..sources.len()).partition(|&index| sources[index].kind.finned());
     let width = |n: usize| n as f32 * BLOCK + n.saturating_sub(1) as f32 * ACROSS;
-    let columns = columns.min(aired.len()).max(1);
-    let span = width(piped.len()).max(width(columns));
+    let columns = columns.min(rest.len()).max(1);
+    let span = width(first.len()).max(width(columns));
+    let centre = middle + span / 2.0;
+    // What a desktop's heatsinks take over their blocks.
+    let fins = if piped { 0.0 } else { HEATSINK };
 
-    // What the heat pipe cools, side by side under it...
-    let mut x = middle + (span - width(piped.len())) / 2.0;
+    // What has fins of its own, side by side under the top...
+    let mut x = middle + (span - width(first.len())) / 2.0;
     let mut bottom = -COOLED;
 
-    for &index in &piped {
-        let height = sources[index].height();
+    for &index in &first {
+        let source = &mut sources[index];
+        let height = source.height();
 
-        sources[index].frame = Extent::new(v(x, -COOLED - height), v(x + BLOCK, -COOLED));
+        source.frame = Extent::new(v(x, -COOLED - height), v(x + BLOCK, -COOLED));
+        source.snaps = if piped {
+            vec![TOP, AXIS, v(0.0, -COOLED)]
+        } else {
+            Vec::new()
+        };
         bottom = bottom.min(-COOLED - height);
         x += BLOCK + ACROSS;
     }
 
     // ...and what the air cools, in rows under that.
-    let mut top = if piped.is_empty() {
+    let mut top = if first.is_empty() {
         -COOLED
     } else {
         bottom - DOWN
     };
-    let first = middle + (span - width(columns)) / 2.0;
+    let left = middle + (span - width(columns)) / 2.0;
 
-    for row in aired.chunks(columns) {
+    for row in rest.chunks(columns) {
         let mut lowest = top;
 
         for (column, &index) in row.iter().enumerate() {
-            let height = sources[index].height();
-            let x = first + column as f32 * (BLOCK + ACROSS);
+            let source = &mut sources[index];
+            let height = source.height();
+            let x = left + column as f32 * (BLOCK + ACROSS);
 
-            sources[index].frame = Extent::new(v(x, top - height), v(x + BLOCK, top));
+            source.frame = Extent::new(v(x, top - height), v(x + BLOCK, top));
+            source.snaps = Vec::new();
             lowest = lowest.min(top - height);
         }
 
@@ -493,50 +708,78 @@ fn plan(sources: &mut [Source], fans: &mut [Fan], rotor: Rotor, columns: usize) 
         top = lowest - DOWN;
     }
 
+    // The fans on the right, mirrored, from the middle out.
     let mut x = middle + span + SIDE;
+    let mut edge = x;
 
-    for fan in &mut fans[left..] {
+    for (place, &k) in sides[1].iter().enumerate().rev() {
+        let fan = &mut fans[k];
+
         fan.mirrored = true;
+        fan.low = rotor == Rotor::Axial && place > 0;
         fan.centre = v(x + reach.max.x, -depth);
-        x = fan.centre.x - reach.min.x + BETWEEN;
+        edge = fan.centre.x - reach.min.x;
+
+        if rotor == Rotor::Blower {
+            x = edge + BETWEEN;
+        }
     }
 
-    let mut vents: Vec<(f32, f32)> = fans.iter().map(|fan| fan.vent(rotor)).collect();
-    let sink = (fans.is_empty() && !piped.is_empty()).then_some((x, x + SINK));
-    let right = match sink {
-        Some((_, end)) => end + INSET,
-        None if fans.len() > left => x - BETWEEN + INSET,
-        None => middle + span + SIDE / 2.0,
-    };
-
-    vents.extend(sink);
-
-    let centre = middle + span / 2.0;
-
-    if vents.is_empty() {
-        vents.push((centre - SINK / 2.0, centre + SINK / 2.0));
-    }
-
+    // The case's floor: under the blocks, and far enough under the fans at
+    // the top for the air drawn up to them, or for a tower's intakes under
+    // them.
     let mut floor = bottom - DOWN;
 
     if !fans.is_empty() {
         floor = floor.min(-depth + reach.min.y - AIRWAY);
     }
 
-    let case = Extent::new(v(0.0, floor), v(right, 0.0));
-    let intakes = if fans.is_empty() {
-        vec![centre]
-    } else {
-        fans.iter().map(|fan| fan.centre.x).collect()
+    if fans.iter().any(|fan| fan.low) {
+        floor = floor.min(-depth + reach.min.y - STACKED - reach.height() - INSET);
+
+        for fan in fans.iter_mut().filter(|fan| fan.low) {
+            fan.centre.y = floor + INSET - reach.min.y;
+        }
+    }
+
+    let sink = (fans.is_empty() && piped && !first.is_empty()).then_some((x, x + SINK));
+    let right = match sink {
+        Some((_, end)) => end + INSET,
+        None if !sides[1].is_empty() => edge + INSET,
+        None => middle + span + SIDE / 2.0,
     };
+    let mut vents: Vec<(f32, f32)> = fans
+        .iter()
+        .filter(|fan| !fan.low)
+        .map(|fan| fan.vent(rotor))
+        .collect();
+
+    vents.extend(sink);
+
+    if vents.is_empty() && piped {
+        vents.push((centre - SINK / 2.0, centre + SINK / 2.0));
+    }
+
+    let case = Extent::new(v(0.0, floor), v(right, 0.0));
+    let mut intakes: Vec<f32> = fans.iter().map(|fan| fan.centre.x).collect();
+
+    intakes.sort_by(f32::total_cmp);
+    intakes.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+
+    if intakes.is_empty() {
+        intakes.push(centre);
+    }
 
     // The pipe from the fins at one end to those at the other, over every
     // block it drops to.
-    let drops: Vec<f32> = piped
-        .iter()
-        .map(|&index| sources[index].frame.centre().x)
-        .collect();
-    let pipe = (!drops.is_empty() && (sink.is_some() || !fans.is_empty())).then(|| {
+    let drops: Vec<f32> = match piped {
+        true => first
+            .iter()
+            .map(|&index| sources[index].frame.centre().x)
+            .collect(),
+        false => Vec::new(),
+    };
+    let pipe = (!drops.is_empty() && !vents.is_empty()).then(|| {
         let ends = vents
             .iter()
             .map(|&(a, b)| (a + 2.0, b - 2.0))
@@ -566,52 +809,105 @@ fn plan(sources: &mut [Source], fans: &mut [Fan], rotor: Rotor, columns: usize) 
         (b - a >= room).then(|| v(((a + b) / 2.0).round(), PIPE - BORE / 2.0 - 7.0))
     });
 
-    // What the air cools gives its heat to the air drawn up the side to
-    // the nearest fan (in one column between fans on both sides, to each
-    // side in turn), or with none to the air rising.
-    let has_right = fans.len() > left;
+    // What the air cools gives its heat to the air drawn up the side
+    // nearer it (in one column between fans on both sides, to each side in
+    // turn), to the fan nearest it there that turns; or with none, to the
+    // air rising.
+    let aired: Vec<usize> = if piped {
+        rest.clone()
+    } else {
+        first.iter().chain(&rest).copied().collect()
+    };
+    let mut alternate = false;
     let arrows = aired
         .iter()
-        .enumerate()
-        .map(|(k, &source)| {
+        .map(|&source| {
             let frame = sources[source].frame;
             let y = frame.max.y - TITLE;
-            let leftward = match (left > 0, has_right) {
-                (true, true) if columns == 1 => k % 2 == 0,
-                (true, true) => k % columns == 0,
-                (inward, _) => inward,
-            };
 
             if fans.is_empty() {
                 let x = frame.centre().x;
+                let room = if sources[source].kind.finned() {
+                    fins
+                } else {
+                    0.0
+                };
 
-                Arrow {
+                return Arrow {
                     source,
-                    from: v(x, frame.max.y + 2.0),
-                    to: v(x, frame.max.y + DOWN - 4.0),
+                    from: v(x, frame.max.y + room + 2.0),
+                    to: v(x, frame.max.y + room + DOWN - 4.0),
                     fan: None,
+                };
+            }
+
+            let middle = frame.centre().x;
+            let leftward = match (sides[0].is_empty(), sides[1].is_empty()) {
+                (false, true) => true,
+                (true, false) => false,
+                _ if (middle - centre).abs() < 1.0 => {
+                    alternate = !alternate;
+                    alternate
                 }
-            } else if leftward {
-                Arrow {
-                    source,
-                    from: v(frame.min.x - 3.0, y),
-                    to: v(fans[left - 1].centre.x + 3.0, y),
-                    fan: Some(left - 1),
+                _ => middle < centre,
+            };
+            let side = &sides[if leftward { 0 } else { 1 }];
+            // The fan that takes the heat: a blower's nearest the blocks
+            // that turns, an axial one's at the top if it turns.
+            let order: Vec<usize> = match rotor {
+                Rotor::Blower => side.iter().rev().copied().collect(),
+                Rotor::Axial => side.clone(),
+            };
+            let fan = order
+                .iter()
+                .copied()
+                .find(|&k| fans[k].turning)
+                .unwrap_or(order[0]);
+            let column = fans[fan].centre.x;
+            // Short of any housing on the way at its height.
+            let mut end = if leftward { column + 3.0 } else { column - 3.0 };
+
+            for &k in side {
+                let (low, high) = fans[k].height(rotor);
+                let (a, b) = fans[k].span(rotor);
+
+                if (low - 3.0..=high + 3.0).contains(&y) {
+                    end = if leftward {
+                        end.max(b + 3.0)
+                    } else {
+                        end.min(a - 3.0)
+                    };
                 }
+            }
+
+            let from = if leftward {
+                frame.min.x - 3.0
             } else {
-                Arrow {
-                    source,
-                    from: v(frame.max.x + 3.0, y),
-                    to: v(fans[left].centre.x - 3.0, y),
-                    fan: Some(left),
-                }
+                frame.max.x + 3.0
+            };
+
+            Arrow {
+                source,
+                from: v(from, y),
+                to: v(end, y),
+                fan: Some(fan),
             }
         })
         .collect();
 
+    let under = if fans.iter().any(|fan| fan.low) {
+        24.0 + LINE + 6.0
+    } else {
+        30.0
+    };
+    let over = if vents.is_empty() {
+        EXHAUST + 6.0
+    } else {
+        NAMES + LINE + 6.0
+    };
     let extent = Extent::new(
-        v(-MARGIN, floor - 30.0 - MARGIN),
-        v(right + MARGIN, NAMES + LINE + 6.0 + MARGIN),
+        v(-MARGIN, floor - under - MARGIN),
+        v(right + MARGIN, over + MARGIN),
     );
 
     Plan {
@@ -676,16 +972,43 @@ fn degrees(celsius: Option<f32>) -> String {
     }
 }
 
-/// What a monitor calls a sensor, and the monitor: `PACKAGE, CORETEMP`.
+/// A monitor's chip as its driver names it, without the bus or instance a
+/// driver adds to tell its devices apart: `r8169_0_600:00` and
+/// `mt7921_phy0` are `R8169` and `MT7921`.
+fn chip(name: &str) -> String {
+    let mut parts = name.split('_');
+    let first = parts.next().unwrap_or_default();
+    let named: Vec<&str> = std::iter::once(first)
+        .chain(parts.take_while(|part| !part.chars().any(|c| c.is_ascii_digit())))
+        .collect();
+
+    lettered(&named.join("_"))
+}
+
+/// What a monitor calls a sensor, and the monitor: `PACKAGE ID 0, CORETEMP`.
 fn called(sensor: &Sensor) -> String {
     match &sensor.label {
-        Some(label) => format!("{}, {}", lettered(label), lettered(&sensor.chip)),
-        None => lettered(&sensor.chip),
+        Some(label) => format!("{}, {}", lettered(label), chip(&sensor.chip)),
+        None => chip(&sensor.chip),
     }
 }
 
-/// The heat sources of `machine`: what its temperature sensors are on,
-/// then its batteries.
+/// What a drive is, in a word, as its block is named.
+fn drive_name(drive: &Drive) -> &'static str {
+    match drive.kind {
+        DriveKind::Nvme => "NVMe",
+        DriveKind::Mmc => "eMMC",
+        DriveKind::Virtual => "DISK",
+        DriveKind::Usb => "USB DRIVE",
+        _ if drive.rotational => "HDD",
+        DriveKind::Sata => "SSD",
+        DriveKind::Other => "DRIVE",
+    }
+}
+
+/// The heat sources of `machine`: what its temperature sensors are on (a
+/// processor package, the memory, a drive, a device, the board), then its
+/// batteries.
 fn sources(machine: &Machine) -> Vec<Source> {
     let mut sources: Vec<Source> = Vec::new();
     let mut modules: Vec<(usize, usize)> = Vec::new();
@@ -695,50 +1018,56 @@ fn sources(machine: &Machine) -> Vec<Source> {
             continue;
         }
 
-        let (kind, device) = match sensor.site {
-            Site::Processor(_) => (Kind::Processor, None),
+        let mut source = match sensor.site {
+            Site::Processor(package) => Source {
+                package: Some(package),
+                ..Source::new(Kind::Processor)
+            },
             Site::Module(module) => {
                 modules.push((module, index));
-                (Kind::Memory, None)
+                Source::new(Kind::Memory)
             }
-            // By the drive's controller, as the topology draws it.
-            Site::Drive(drive) => (
-                Kind::Drive,
-                machine.drives.get(drive).and_then(|drive| drive.pci),
-            ),
-            Site::Board => (Kind::Board, None),
-            Site::Device(address) => (device(machine, address), Some(address)),
+            Site::Drive(drive) => Source {
+                drive: Some(drive),
+                ..Source::new(Kind::Drive)
+            },
+            Site::Board => Source::new(Kind::Board),
+            Site::Device(address) => Source {
+                device: Some(address),
+                ..Source::new(device(machine, address))
+            },
         };
 
-        match sources
-            .iter_mut()
-            .find(|source| source.kind == kind && source.device == device)
+        match sources.iter_mut().find(|other| {
+            (other.kind, other.device, other.drive, other.package)
+                == (source.kind, source.device, source.drive, source.package)
+        }) {
+            Some(other) => other.sensors.push(index),
+            None => {
+                source.sensors.push(index);
+                sources.push(source);
+            }
+        }
+    }
+
+    // A device's own fans are its, not the case's.
+    for (index, sensor) in machine.fans() {
+        if let Site::Device(address) = sensor.site
+            && let Some(source) = sources
+                .iter_mut()
+                .find(|source| source.device == Some(address) && source.drive.is_none())
         {
-            Some(source) => source.sensors.push(index),
-            None => sources.push(Source {
-                kind,
-                name: String::new(),
-                device,
-                battery: None,
-                sensors: vec![index],
-                gauges: Vec::new(),
-                cores: Vec::new(),
-                frame: Extent::new(V2::ZERO, V2::ZERO),
-            }),
+            source.fans.push(index);
         }
     }
 
     sources.extend((0..machine.batteries.len()).map(|battery| Source {
-        kind: Kind::Battery,
-        name: "BATTERY".into(),
-        device: None,
         battery: Some(battery),
-        sensors: Vec::new(),
-        gauges: Vec::new(),
-        cores: Vec::new(),
-        frame: Extent::new(V2::ZERO, V2::ZERO),
+        ..Source::new(Kind::Battery)
     }));
-    sources.sort_by_key(|source| source.kind);
+    sources.sort_by_key(|source| (source.kind, source.package, source.drive));
+
+    let label = |index: usize| machine.sensors[index].label.as_deref();
 
     for source in &mut sources {
         match source.kind {
@@ -748,17 +1077,7 @@ fn sources(machine: &Machine) -> Vec<Source> {
                 let package = source
                     .sensors
                     .iter()
-                    .position(|&index| {
-                        machine.sensors[index]
-                            .label
-                            .as_deref()
-                            .is_some_and(|label| {
-                                let label = label.to_lowercase();
-                                ["package", "tctl", "tdie"]
-                                    .iter()
-                                    .any(|word| label.contains(word))
-                            })
-                    })
+                    .position(|&index| label(index).is_some_and(package))
                     .unwrap_or(0);
                 let mut others = source.sensors.clone();
 
@@ -775,6 +1094,14 @@ fn sources(machine: &Machine) -> Vec<Source> {
                     .take(MOST_GAUGES)
                     .collect();
             }
+            // A board's monitors with what they measure named first: its
+            // own inputs (SYSTIN, CPUTIN) before a thermal zone's.
+            Kind::Board => {
+                let mut sensors = source.sensors.clone();
+
+                sensors.sort_by_key(|&index| label(index).is_none());
+                source.gauges = sensors.into_iter().take(MOST_GAUGES).collect();
+            }
             _ => source.gauges = source.sensors.iter().copied().take(MOST_GAUGES).collect(),
         }
 
@@ -788,7 +1115,10 @@ fn sources(machine: &Machine) -> Vec<Source> {
             Kind::Processor => "CPU",
             Kind::Graphics => "GPU",
             Kind::Memory => "MEMORY",
-            Kind::Drive => "DRIVE",
+            Kind::Drive => source
+                .drive
+                .and_then(|drive| machine.drives.get(drive))
+                .map_or("DRIVE", drive_name),
             Kind::Network => match link(machine, source.device) {
                 Some(Link::Wireless) => "WI-FI",
                 Some(Link::Ethernet) => "ETHERNET",
@@ -811,8 +1141,10 @@ fn sources(machine: &Machine) -> Vec<Source> {
         .into();
     }
 
-    // Sources of the same name numbered apart.
+    // Sources of the same name numbered apart, and the first of each kind
+    // in its part's detail.
     let names: Vec<String> = sources.iter().map(|source| source.name.clone()).collect();
+    let kinds: Vec<Kind> = sources.iter().map(|source| source.kind).collect();
 
     for (index, source) in sources.iter_mut().enumerate() {
         if names.iter().filter(|name| **name == source.name).count() > 1 {
@@ -822,9 +1154,21 @@ fn sources(machine: &Machine) -> Vec<Source> {
                 .count();
             source.name = fit(&format!("{} {}", source.name, nth + 1), 10);
         }
+
+        source.detailed = !kinds[..index].contains(&source.kind);
     }
 
     sources
+}
+
+/// Whether a processor's sensor `label` is its package's or its die's, not
+/// a core's.
+fn package(label: &str) -> bool {
+    let label = label.to_lowercase();
+
+    ["package", "tctl", "tdie"]
+        .iter()
+        .any(|word| label.contains(word))
 }
 
 /// What the PCI device at `address` is, as a source of heat.
@@ -853,6 +1197,10 @@ fn link(machine: &Machine, address: Option<PciAddress>) -> Option<Link> {
         .find(|interface| interface.pci == address && !interface.usb)
         .map(|interface| interface.link)
 }
+
+/// The anchor lettering in a block's corners is set by: its capitals' top.
+const CAPS_LEFT: Anchor = Anchor::new(Horizontal::Left, Vertical::CapTop);
+const CAPS_RIGHT: Anchor = Anchor::new(Horizontal::Right, Vertical::CapTop);
 
 pub struct Cooling {
     card: Card,
@@ -887,27 +1235,65 @@ impl Cooling {
             ChassisKind::Desktop | ChassisKind::Server => Rotor::Axial,
             _ => Rotor::Blower,
         };
-        // The fans turning when the machine was first read are drawn before
-        // those that were not: a desktop's monitor lists every header on the
-        // board, the empty ones first as often as not.
+        // The case's fans: not a device's, and not a board's headers that
+        // read 0 when the machine was first read, which are empty as often
+        // as not. Those turning are drawn before those that were not.
         let first = machine.sample(0.0);
-        let mut listed: Vec<(usize, &Sensor)> = machine.fans().collect();
+        let mut headers = 0;
+        let mut listed: Vec<(usize, &Sensor)> = Vec::new();
+
+        for (index, sensor) in machine.fans() {
+            let turning = rpm(&first, index) > 0.0;
+
+            if matches!(sensor.site, Site::Device(_)) {
+                continue;
+            }
+
+            if !turning
+                && HEADER_CHIPS
+                    .iter()
+                    .any(|chip| sensor.chip.starts_with(chip))
+            {
+                headers += 1;
+                continue;
+            }
+
+            listed.push((index, sensor));
+        }
 
         listed.sort_by_key(|&(sensor, _)| rpm(&first, sensor) <= 0.0);
 
-        let fans: Vec<Fan> = listed
+        let drawn = &listed[..listed.len().min(MOST_FANS)];
+        // Named by their monitors' numbers for them where those tell them
+        // apart, as `sensors` and a board's headers name them.
+        let mut channels: Vec<u32> = drawn.iter().map(|(_, sensor)| sensor.channel).collect();
+
+        channels.sort();
+        channels.dedup();
+
+        let numbered = channels.len() == drawn.len()
+            && channels
+                .iter()
+                .all(|&channel| (1..=FAN_NAMES.len() as u32).contains(&channel));
+        let fans: Vec<Fan> = drawn
             .iter()
-            .take(MOST_FANS)
-            .map(|&(sensor, about)| Fan {
+            .enumerate()
+            .map(|(k, &(sensor, about))| Fan {
                 sensor,
+                name: FAN_NAMES[if numbered {
+                    about.channel as usize - 1
+                } else {
+                    k
+                }],
                 label: about.label.clone(),
                 chip: about.chip.clone(),
+                turning: rpm(&first, sensor) > 0.0,
                 centre: V2::ZERO,
                 mirrored: false,
+                low: false,
             })
             .collect();
-        let sources = sources(machine);
-        let (sources, fans, plan) = Self::fold(sources, fans, rotor);
+        let (sources, fans, plan) = Self::fold(sources(machine), fans, rotor);
 
         let mut items: Vec<Item> = Vec::new();
 
@@ -927,6 +1313,9 @@ impl Cooling {
             notes.push("NO FAN MEASURED: NONE TURNS".into());
         } else {
             notes.push(format!("ROTORS SLOWED {SLOWED} TIMES"));
+        }
+
+        if fans.iter().any(|fan| !fan.turning) {
             notes.push("PHANTOM FANS: NOT SEEN TURNING".into());
         }
 
@@ -936,6 +1325,13 @@ impl Cooling {
             notes.push(format!(
                 "{} MORE NOT SHOWN",
                 counted(listed.len() - fans.len(), "FAN", "FANS")
+            ));
+        }
+
+        if headers > 0 {
+            notes.push(format!(
+                "{} AT 0 rpm OMITTED",
+                counted(headers, "FAN HEADER", "FAN HEADERS")
             ));
         }
 
@@ -1010,8 +1406,17 @@ impl Cooling {
             .expect("Every item drawn is listed")
     }
 
-    /// The case in phantom, broken at its vents and intakes, and the air
-    /// going in at its base and out of its vents.
+    /// The points fan `fan`'s drawing is set on the grid by: a blower's
+    /// from the bottom of the fins its outlet meets.
+    fn fan_snaps(&self, fan: &Fan) -> Vec<V2> {
+        match self.rotor {
+            Rotor::Blower => vec![TOP, AXIS, UNDER_FINS, fan.centre],
+            Rotor::Axial => vec![TOP, fan.centre],
+        }
+    }
+
+    /// The case in phantom, broken at its vents and intakes, and, with no
+    /// fan to draw it, the air going in at its base and out of its vents.
     fn case(&self, d: &mut Draft) {
         let plan = &self.plan;
         let Extent { min, max } = plan.case;
@@ -1042,22 +1447,22 @@ impl Cooling {
             d.line(v(a, min.y), v(b, min.y), Line::Phantom);
         }
 
-        for &(a, b) in &plan.vents {
-            for k in 1..=3 {
-                let x = (a + (b - a) * k as f32 / 4.0).round();
-                d.arrow(v(x, 2.0), v(x, EXHAUST), Line::Path);
+        for &x in &plan.intakes {
+            if !self.fans.iter().any(|fan| fan.low && fan.centre.x == x) {
+                d.label(v(x, min.y - 24.0), "AIR IN");
             }
         }
 
-        // The air in: up to each fan, or into the case with none.
-        for (k, &x) in plan.intakes.iter().enumerate() {
-            let to = match self.fans.get(k) {
-                Some(fan) => v(x, self.inlet(fan)),
-                None => v(x, min.y + DOWN),
-            };
+        if self.fans.is_empty() {
+            for &(a, b) in &plan.vents {
+                for x in exhausts(a, b) {
+                    d.arrow(v(x, 2.0), v(x, EXHAUST), Line::Thin);
+                }
+            }
 
-            d.arrow(v(x, min.y - 16.0), to, Line::Path);
-            d.label(v(x, min.y - 24.0), "AIR IN");
+            for &x in &plan.intakes {
+                d.arrow(v(x, min.y - 16.0), v(x, min.y + DOWN), Line::Thin);
+            }
         }
 
         if let Some((a, b)) = plan.sink {
@@ -1067,7 +1472,23 @@ impl Cooling {
 
     /// Where the air drawn up to `fan` meets it: under its housing.
     fn inlet(&self, fan: &Fan) -> f32 {
-        fan.centre.y + self.rotor.reach().min.y - 3.0
+        fan.height(self.rotor).0 - 3.0
+    }
+
+    /// The air into `fan`, a path from under the case or, a tower's fan at
+    /// the top, from the one at the base under it.
+    fn intake(&self, fan: &Fan) -> [V2; 2] {
+        let x = fan.centre.x;
+        let from = match self
+            .fans
+            .iter()
+            .find(|low| low.low && !fan.low && low.centre.x == x)
+        {
+            Some(low) => low.height(self.rotor).1 + 3.0,
+            None => self.plan.case.min.y - 16.0,
+        };
+
+        [v(x, from), v(x, self.inlet(fan))]
     }
 
     /// The heat pipe and its drops to the blocks it cools, and the fins it
@@ -1079,23 +1500,30 @@ impl Cooling {
         };
         let half = BORE / 2.0;
         let (upper, lower) = (PIPE + half, PIPE - half);
-        let drops: Vec<(f32, f32)> = plan.drops.iter().map(|&x| (x - half, x + half)).collect();
 
-        d.line(v(from, upper), v(to, upper), Line::Outline);
+        set(d, &[TOP, AXIS], |d| {
+            let drops: Vec<(f32, f32)> = plan.drops.iter().map(|&x| (x - half, x + half)).collect();
 
-        for (a, b) in gaps(from, to, &drops) {
-            d.line(v(a, lower), v(b, lower), Line::Outline);
-        }
+            d.line(v(from, upper), v(to, upper), Line::Outline);
 
-        for x in [from, to] {
-            d.line(v(x, upper), v(x, lower), Line::Outline);
-        }
-
-        for &x in &plan.drops {
-            for side in [-half, half] {
-                d.line(v(x + side, lower), v(x + side, -COOLED), Line::Outline);
+            for (a, b) in gaps(from, to, &drops) {
+                d.line(v(a, lower), v(b, lower), Line::Outline);
             }
-        }
+
+            for x in [from, to] {
+                d.line(v(x, upper), v(x, lower), Line::Outline);
+            }
+
+            // Each drop symmetric about its axis, from the pipe down to the
+            // top of its block.
+            for &x in &plan.drops {
+                d.snapped(v(x, PIPE), |d| {
+                    for side in [-half, half] {
+                        d.line(v(x + side, lower), v(x + side, -COOLED), Line::Outline);
+                    }
+                });
+            }
+        });
 
         if let Some(at) = plan.legend {
             d.label(at, "HEAT PIPE");
@@ -1114,101 +1542,150 @@ impl Cooling {
         let count = ((b - a) / FIN).floor().max(1.0) as usize;
         let first = a + (b - a - (count - 1) as f32 * FIN) / 2.0;
 
-        for x in [a, b] {
-            d.line(v(x, -FINS), v(x, 0.0), edge);
-        }
-
-        for k in 0..count {
-            let x = first + k as f32 * FIN;
-
-            if piped {
-                d.line(v(x, -FINS), v(x, PIPE - half), fin);
-                d.line(v(x, PIPE + half), v(x, 0.0), fin);
-            } else {
-                d.line(v(x, -FINS), v(x, 0.0), fin);
+        set(d, &[TOP, AXIS], |d| {
+            for x in [a, b] {
+                d.line(v(x, -FINS), v(x, 0.0), edge);
             }
-        }
+
+            for k in 0..count {
+                let x = first + k as f32 * FIN;
+
+                if piped {
+                    d.line(v(x, -FINS), v(x, PIPE - half), fin);
+                    d.line(v(x, PIPE + half), v(x, 0.0), fin);
+                } else {
+                    d.line(v(x, -FINS), v(x, 0.0), fin);
+                }
+            }
+        });
     }
 
-    /// A source's block: its outline and name, and its gauges' glass.
+    /// A source's block: its outline and name, its gauges' glass, its
+    /// cores' squares, a desktop's heatsink.
     fn block(&self, d: &mut Draft, source: &Source) {
         let frame = source.frame;
-        let title = v(frame.min.x + PAD, frame.max.y - TITLE);
 
-        d.rect(frame.min, frame.max, Line::Outline);
-        d.label(title, source.name.as_str())
-            .anchor(Anchor::LEFT)
-            .tone(Tone::Muted);
+        source.set(d, |d| {
+            d.rect(frame.min, frame.max, Line::Outline);
+            d.label(
+                v(frame.min.x + PAD, frame.max.y - PAD),
+                source.name.as_str(),
+            )
+            .anchor(CAPS_LEFT)
+            .nudge(-1, 0)
+            .tone(Tone::Ink);
+
+            if !source.fans.is_empty() {
+                d.label(v(frame.min.x + PAD, frame.max.y - PAD - LINE), "FAN")
+                    .anchor(CAPS_LEFT)
+                    .nudge(-1, 0)
+                    .tone(Tone::Muted);
+            }
+
+            // A heatsink's fins standing on it.
+            if self.rotor == Rotor::Axial && source.kind.finned() {
+                let count = ((BLOCK - 2.0 * PAD) / FIN).floor() as usize;
+
+                for k in 0..=count {
+                    let x = frame.min.x + PAD + k as f32 * FIN;
+                    let line = if k == 0 || k == count {
+                        Line::Outline
+                    } else {
+                        Line::Thin
+                    };
+
+                    d.line(v(x, frame.max.y), v(x, frame.max.y + HEATSINK), line);
+                }
+            }
+        });
 
         if source.kind == Kind::Battery {
-            let at = source.gauge(0);
-            let left = frame.min.x + PAD;
+            let foot = source.foot();
+            let middle = foot + v(0.0, CELL_HALF);
 
-            d.rect(
-                v(left, at.y - 3.5),
-                v(left + CELL, at.y + 3.5),
-                Line::Outline,
-            );
-            d.rect(
-                v(left + CELL, at.y - 1.5),
-                v(left + CELL + 2.5, at.y + 1.5),
-                Line::Outline,
-            );
+            source.set_foot(d, |d| {
+                d.snapped(foot, |d| {
+                    d.snapped(middle, |d| {
+                        d.rect(
+                            middle - v(0.0, CELL_HALF),
+                            middle + v(CELL, CELL_HALF),
+                            Line::Outline,
+                        );
+                        d.rect(
+                            middle + v(CELL, -TERMINAL_HALF),
+                            middle + v(CELL + TERMINAL, TERMINAL_HALF),
+                            Line::Outline,
+                        );
+                    });
+                });
+            });
         } else {
             for k in 0..source.gauges.len() {
-                let at = source.gauge(k);
-                // Where the tube leaves the bulb.
-                let neck = (BULB_RADIUS * BULB_RADIUS - GLASS * GLASS).sqrt();
-                let end = at.x + BULB_RADIUS + TUBE;
+                source.set_gauge(d, k, |d, at| {
+                    d.keyhole(at, BULB_RADIUS, GLASS, BULB_RADIUS + TUBE, Line::Outline);
 
-                d.circle(at, BULB_RADIUS, Line::Outline);
-                d.polyline(
-                    &[
-                        v(at.x + neck, at.y + GLASS),
-                        v(end, at.y + GLASS),
-                        v(end, at.y - GLASS),
-                        v(at.x + neck, at.y - GLASS),
-                    ],
-                    Line::Outline,
-                );
-
-                // The scale, every 20 °C, where a detail has room for it.
-                d.in_detail(|d| {
-                    for step in 0..=4 {
-                        let x = at.x + BULB_RADIUS + TUBE * step as f32 / 4.0;
-                        d.line(v(x, at.y - GLASS), v(x, at.y - GLASS - 1.5), Line::Thin);
-                    }
+                    // The scale, every 20 °C, where a detail has room for it.
+                    d.in_detail(|d| {
+                        for step in 0..=4 {
+                            let x = at.x + BULB_RADIUS + TUBE * step as f32 / 4.0;
+                            d.line(v(x, at.y - GLASS), v(x, at.y - GLASS - 1.5), Line::Thin);
+                        }
+                    });
                 });
             }
 
             for k in 0..source.cores.len() {
-                let square = source.core(k);
-                d.rect(square.min, square.max, Line::Thin);
+                source.set_core(d, k, |d, square| {
+                    d.rect(square.min, square.max, Line::Thin);
+                });
             }
         }
 
-        d.in_detail(|d| {
-            d.label(
-                v(frame.min.x + PAD, source.gauge(0).y + DETAIL_TITLE),
-                source.name.as_str(),
-            )
-            .anchor(Anchor::LEFT)
-            .tone(Tone::Ink);
+        // Its name in its own detail, over its first gauge, where the
+        // detail has it in view.
+        source.set_gauge(d, 0, |d, at| {
+            let top = if source.kind == Kind::Battery {
+                at.y + CELL_HALF - BULB_RADIUS
+            } else {
+                at.y
+            };
+
+            in_its_detail(d, source, |d| {
+                d.label(
+                    v(at.x - BULB_RADIUS, top + BULB_RADIUS + 2.0),
+                    source.name.as_str(),
+                )
+                .anchor(Anchor::BASELINE_LEFT)
+                .nudge(-1, 0)
+                .tone(Tone::Ink);
+            });
         });
     }
 
     /// What a source's gauges read now: its hottest temperature, each
-    /// thermometer's column and its value (in a detail), its cores' tints;
-    /// a battery's charge and its power.
+    /// thermometer's column and its value (in its detail), its cores'
+    /// tints, its fan's speed; a battery's charge and its power.
     fn readings_of(&self, d: &mut Draft, source: &Source, snapshot: &Snapshot) {
         let frame = source.frame;
-        let value = v(frame.max.x - PAD, frame.max.y - TITLE);
+        let value = v(frame.max.x - PAD, frame.max.y - PAD);
+        let valued = |d: &mut Draft, text: String| {
+            source.set_right(d, |d| {
+                d.label(value, text)
+                    .anchor(CAPS_RIGHT)
+                    .nudge(1, 0)
+                    .tone(Tone::Muted);
+            });
+        };
 
         if let Some(battery) = source.battery {
             let charge = snapshot.batteries.get(battery).cloned().unwrap_or_default();
-            let at = source.gauge(0);
-            let left = frame.min.x + PAD;
-            let fraction = charge.fraction.filter(|f| f.is_finite()).unwrap_or(0.0);
+            let foot = source.foot();
+            let middle = foot + v(0.0, CELL_HALF);
+            let fraction = charge
+                .fraction
+                .filter(|f| f.is_finite())
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
             let tone = if fraction < 0.15 {
                 Tone::Caution
             } else {
@@ -1229,88 +1706,92 @@ impl Cooling {
                 Some(ChargeState::Idle) => "IDLE",
                 None => "",
             };
+            let percent = charge
+                .fraction
+                .map_or("-- %".into(), |f| format!("{:.0} %", f * 100.0));
 
-            if fraction > 0.0 {
-                d.area(
-                    &corners(Extent::new(
-                        v(left + 1.0, at.y - 2.5),
-                        v(left + 1.0 + (CELL - 2.0) * fraction, at.y + 2.5),
-                    )),
-                    Fill::Solid,
-                )
-                .tone(tone);
-            }
+            valued(d, percent.clone());
 
-            d.label(
-                value,
-                charge
-                    .fraction
-                    .map_or("-- %".into(), |f| format!("{:.0} %", f * 100.0)),
-            )
-            .anchor(Anchor::RIGHT)
-            .tone(Tone::Ink);
-            d.label(v(left + CELL + 8.0, at.y), power)
-                .anchor(Anchor::LEFT)
-                .tone(Tone::Muted);
+            source.set_foot(d, |d| {
+                d.snapped(foot, |d| {
+                    d.snapped(middle, |d| {
+                        // The charge inside the body, up to its share of it.
+                        if fraction > 0.0 {
+                            d.fill_inside(
+                                rectangle(Extent::new(
+                                    middle - v(0.0, CELL_HALF),
+                                    middle + v(CELL * fraction, CELL_HALF),
+                                )),
+                                Fill::Solid,
+                            )
+                            .tone(tone);
+                        }
 
-            // What it is doing, in words, where a detail has room.
-            d.in_detail(|d| {
-                let right = left + CELL + 6.0;
-                let mut how = charge
-                    .fraction
-                    .map_or("-- %".into(), |f| format!("{:.0} %", f * 100.0));
+                        d.label(middle + v(CELL + TERMINAL + 6.0, 0.0), power)
+                            .anchor(Anchor::LEFT)
+                            .tone(Tone::Muted);
 
-                if let Some(watts) = watts {
-                    how += &format!(", {watts:.1} W");
-                }
+                        // What it is doing, in words, in its own detail.
+                        in_its_detail(d, source, |d| {
+                            let right = middle.x + CELL + TERMINAL + 4.0;
+                            let mut how = percent;
 
-                d.label(v(right, at.y + 3.0), state)
-                    .anchor(Anchor::LEFT)
-                    .tone(Tone::Ink);
-                d.label(v(right, at.y - 3.0), how)
-                    .anchor(Anchor::LEFT)
-                    .tone(Tone::Muted);
+                            if let Some(watts) = watts {
+                                how += &format!(", {watts:.1} W");
+                            }
+
+                            d.label(v(right, middle.y + 3.0), state)
+                                .anchor(Anchor::LEFT)
+                                .tone(Tone::Ink);
+                            d.label(v(right, middle.y - 3.0), how)
+                                .anchor(Anchor::LEFT)
+                                .tone(Tone::Muted);
+                        });
+                    });
+                });
             });
             return;
         }
 
-        d.label(value, degrees(source.hottest(snapshot)))
-            .anchor(Anchor::RIGHT)
-            .tone(Tone::Ink);
+        valued(d, degrees(source.hottest(snapshot)));
+
+        if let Some(&fan) = source.fans.first() {
+            source.set_right(d, |d| {
+                d.label(
+                    value - v(0.0, LINE),
+                    format!("{:.0} rpm", rpm(snapshot, fan)),
+                )
+                .anchor(CAPS_RIGHT)
+                .nudge(1, 0)
+                .tone(Tone::Ink);
+            });
+        }
 
         for (k, &sensor) in source.gauges.iter().enumerate() {
-            let at = source.gauge(k);
             let reading = celsius(snapshot, sensor);
-            let tone = if reading.is_some_and(|c| c >= HOT) {
-                Tone::Caution
-            } else {
-                Tone::Accent
-            };
-            let share = reading
-                .map(|c| ((c - COLDEST) / (HOTTEST - COLDEST)).clamp(0.0, 1.0))
-                .unwrap_or(0.0);
 
-            d.area(
-                &arc_points(at, BULB_RADIUS - 1.0, 0.0, TAU, 12),
-                Fill::Solid,
-            )
-            .tone(tone);
+            source.set_gauge(d, k, |d, at| {
+                // An unread thermometer is empty glass.
+                if let Some(celsius) = reading {
+                    let share = ((celsius - COLDEST) / (HOTTEST - COLDEST)).clamp(0.0, 1.0);
 
-            if share > 0.0 {
-                d.area(
-                    &corners(Extent::new(
-                        v(at.x + BULB_RADIUS - 1.0, at.y - GLASS + 1.0),
-                        v(at.x + BULB_RADIUS + TUBE * share, at.y + GLASS - 1.0),
-                    )),
-                    Fill::Solid,
-                )
-                .tone(tone);
-            }
+                    d.fill_inside(
+                        Shape::Keyhole {
+                            centre: at,
+                            radius: BULB_RADIUS,
+                            half: GLASS,
+                            length: BULB_RADIUS + TUBE * share,
+                        },
+                        Fill::Solid,
+                    )
+                    .tone(warmth(celsius));
+                }
 
-            d.in_detail(|d| {
-                d.label(v(at.x + BULB_RADIUS + TUBE + 4.0, at.y), degrees(reading))
-                    .anchor(Anchor::LEFT)
-                    .tone(Tone::Ink);
+                in_its_detail(d, source, |d| {
+                    d.label(v(at.x + BULB_RADIUS + TUBE + 4.0, at.y), degrees(reading))
+                        .anchor(Anchor::LEFT)
+                        .tone(Tone::Ink);
+                });
             });
         }
 
@@ -1320,18 +1801,16 @@ impl Cooling {
             };
             let level = (1.0 + 15.0 * (c - WARM) / (HOTTEST - WARM)).round() as u8;
 
-            d.area(&corners(source.core(k)), Fill::Tint(level.clamp(1, 16)))
-                .tone(if c >= HOT {
-                    Tone::Caution
-                } else {
-                    Tone::Accent
-                });
+            source.set_core(d, k, |d, square| {
+                d.fill_inside(rectangle(square), Fill::Tint(level.clamp(1, 16)))
+                    .tone(warmth(c));
+            });
         }
     }
 
     /// Fan `index` turned to `angle`: its housing, its fins and its rotor,
-    /// in phantom until it has been seen turning, and its name and speed
-    /// over its vent.
+    /// in phantom until it has been seen turning, the air through it, and
+    /// its name and speed over its vent or under its intake.
     fn fan(&self, d: &mut Draft, index: usize, angle: f32, seen: bool, speed: f32) {
         let fan = &self.fans[index];
         let (edge, thin) = if seen {
@@ -1341,93 +1820,129 @@ impl Cooling {
         };
         let drawn = |points: &[V2]| points.iter().map(|&p| fan.at(p)).collect::<Vec<_>>();
 
-        d.polyline(&drawn(&self.rotor.housing()), edge);
+        set(d, &self.fan_snaps(fan), |d| {
+            d.polyline(&drawn(&self.rotor.housing()), edge);
 
-        match self.rotor {
-            Rotor::Blower => {
-                d.circle(fan.centre, ROOT, thin);
+            match self.rotor {
+                Rotor::Blower => {
+                    d.circle(fan.centre, ROOT, thin);
 
-                for k in 0..BLADES {
-                    let base = angle + k as f32 * TAU / BLADES as f32;
-                    let blade: Vec<V2> = (0..=4)
-                        .map(|s| {
+                    for k in 0..BLADES {
+                        let base = angle + k as f32 * TAU / BLADES as f32;
+                        let blade: Vec<V2> = (0..=4)
+                            .map(|s| {
+                                let s = s as f32 / 4.0;
+                                polar(ROOT + (ROTOR - ROOT) * s, base + CURVE * s)
+                            })
+                            .collect();
+
+                        d.polyline(&drawn(&blade), edge);
+                    }
+                }
+                Rotor::Axial => {
+                    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                        d.circle(fan.centre + v(x, y) * (FRAME - 5.0), 2.0, edge);
+                    }
+
+                    d.circle(fan.centre, ROTOR + 4.0, edge);
+
+                    for k in 0..VANES {
+                        let base = angle + k as f32 * TAU / VANES as f32;
+                        let mut vane: Vec<V2> = (0..=4)
+                            .map(|s| {
+                                let s = s as f32 / 4.0;
+                                polar(HUB + (ROTOR + 1.0 - HUB) * s, base + 0.3 + 0.35 * s)
+                            })
+                            .collect();
+
+                        vane.extend(arc_points(V2::ZERO, ROTOR + 1.0, base + 0.65, -0.75, 3));
+                        vane.extend((0..=4).rev().map(|s| {
                             let s = s as f32 / 4.0;
-                            polar(ROOT + (ROTOR - ROOT) * s, base + CURVE * s)
-                        })
-                        .collect();
+                            polar(HUB + (ROTOR + 1.0 - HUB) * s, base - 0.25 + 0.15 * s)
+                        }));
 
-                    d.polyline(&drawn(&blade), edge);
+                        d.polygon(&drawn(&vane), edge);
+                    }
                 }
             }
-            Rotor::Axial => {
-                for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-                    d.circle(fan.centre + v(x, y) * (FRAME - 5.0), 2.0, edge);
-                }
 
-                d.circle(fan.centre, ROTOR + 4.0, edge);
+            d.circle(fan.centre, HUB, edge);
 
-                for k in 0..VANES {
-                    let base = angle + k as f32 * TAU / VANES as f32;
-                    let mut vane: Vec<V2> = (0..=4)
-                        .map(|s| {
-                            let s = s as f32 / 4.0;
-                            polar(HUB + (ROTOR + 1.0 - HUB) * s, base + 0.3 + 0.35 * s)
-                        })
-                        .collect();
+            // Which way it turns, in its own detail.
+            d.in_own_detail(|d| {
+                let arc = drawn(&arc_points(V2::ZERO, HUB - 3.0, 0.3 * PI, 1.2 * PI, 16));
+                let (tail, head) = (arc[arc.len() - 2], arc[arc.len() - 1]);
 
-                    vane.extend(arc_points(V2::ZERO, ROTOR + 1.0, base + 0.65, -0.75, 3));
-                    vane.extend((0..=4).rev().map(|s| {
-                        let s = s as f32 / 4.0;
-                        polar(HUB + (ROTOR + 1.0 - HUB) * s, base - 0.25 + 0.15 * s)
-                    }));
-
-                    d.polygon(&drawn(&vane), edge);
-                }
-            }
-        }
-
-        d.circle(fan.centre, HUB, edge);
-        self.fins(d, fan.vent(self.rotor), edge, thin);
-
-        // Which way it turns, where a detail has room to show it.
-        d.in_detail(|d| {
-            let arc = drawn(&arc_points(V2::ZERO, HUB - 3.0, 0.3 * PI, 1.2 * PI, 16));
-            let (tail, head) = (arc[arc.len() - 2], arc[arc.len() - 1]);
-
-            d.polyline(&arc[..arc.len() - 1], Line::Thin)
-                .tone(Tone::Live);
-            d.arrow(tail, head, Line::Thin).tone(Tone::Live);
+                d.polyline(&arc[..arc.len() - 1], Line::Thin)
+                    .tone(Tone::Live);
+                d.arrow(tail, head, Line::Thin).tone(Tone::Live);
+            });
         });
 
-        let (a, b) = fan.vent(self.rotor);
-        let middle = ((a + b) / 2.0).round();
+        if self.rotor == Rotor::Blower {
+            self.fins(d, fan.vent(self.rotor), edge, thin);
+        }
+
+        // The air through it: in from under it, and out of its vent over
+        // it, or into the fan over it.
+        let path = if seen { Line::Thin } else { Line::Phantom };
+        let [from, to] = self.intake(fan);
+
+        d.arrow(from, to, path);
+
         let (name, value) = if seen {
             (Tone::Muted, Tone::Ink)
         } else {
             (Tone::Faint, Tone::Faint)
         };
 
-        d.label(v(middle, NAMES), FAN_NAMES[index])
-            .nudge(0, -(LINE as i32))
-            .tone(name);
-        d.label(v(middle, NAMES), format!("{speed:.0} rpm"))
-            .tone(value);
+        if fan.low {
+            let base = self.plan.case.min.y;
+
+            d.label(v(fan.centre.x, base - 24.0), format!("{speed:.0} rpm"))
+                .tone(value);
+            d.label(v(fan.centre.x, base - 24.0 - LINE), fan.name)
+                .tone(name);
+        } else {
+            let (a, b) = fan.vent(self.rotor);
+            let middle = ((a + b) / 2.0).round();
+
+            for x in exhausts(a, b) {
+                d.arrow(v(x, 2.0), v(x, EXHAUST), path);
+            }
+
+            d.label(v(middle, NAMES), fan.name)
+                .nudge(0, -(LINE as i32))
+                .tone(name);
+            d.label(v(middle, NAMES), format!("{speed:.0} rpm"))
+                .tone(value);
+        }
     }
 
     /// What runs along the paths: heat up the pipe from what it cools, more
-    /// of it the hotter that is; the air each fan draws in and blows out,
-    /// as far as the fan has turned; the heat that air takes on its way.
+    /// of it the hotter that is, to the fins of each fan seen turning; the
+    /// air each fan draws in and blows out, as far as the fan has turned;
+    /// the heat that air takes on its way.
     fn flows(&self, d: &mut Draft, snapshot: &Snapshot, turns: &[f64], seen: &[bool], t: f32) {
         let heat = |source: &Source| {
             source
                 .hottest(snapshot)
                 .map_or(0.0, |c| ((c - WARM) / (SCALDING - WARM)).clamp(0.05, 1.0))
         };
-        let piped = self.sources.iter().filter(|source| source.kind.piped());
+        let piped = self.sources.iter().filter(|source| source.kind.finned());
 
         if self.plan.pipe.is_some() {
+            let vents: Vec<(f32, f32)> = self
+                .fans
+                .iter()
+                .zip(seen)
+                .filter(|&(_, &seen)| seen)
+                .map(|(fan, _)| fan.vent(self.rotor))
+                .chain(self.plan.sink)
+                .collect();
+
             for (source, &x) in piped.zip(&self.plan.drops) {
-                for &(a, b) in &self.plan.vents {
+                for &(a, b) in &vents {
                     let route = [vec![v(x, -COOLED), v(x, PIPE), v((a + b) / 2.0, PIPE)]];
 
                     flow(
@@ -1449,21 +1964,15 @@ impl Cooling {
             }
 
             let travelled = turns[k] * AIR;
-            let x = fan.centre.x;
-            let intake = [vec![
-                v(x, self.plan.case.min.y - 16.0),
-                v(x, self.inlet(fan)),
-            ]];
+            let mut routes = vec![self.intake(fan).to_vec()];
 
-            flow(d, &intake, 1.0, SPACING, travelled, false, Tone::Live);
+            if !fan.low {
+                let (a, b) = fan.vent(self.rotor);
+                routes.extend(exhausts(a, b).map(|x| vec![v(x, 2.0), v(x, EXHAUST)]));
+            }
 
-            let (a, b) = fan.vent(self.rotor);
-
-            for step in 1..=3 {
-                let x = (a + (b - a) * step as f32 / 4.0).round();
-                let out = [vec![v(x, 2.0), v(x, EXHAUST)]];
-
-                flow(d, &out, 1.0, SPACING, travelled, false, Tone::Live);
+            for route in routes {
+                flow(d, &[route], 1.0, SPACING, travelled, false, Tone::Live);
             }
 
             for arrow in self.plan.arrows.iter().filter(|a| a.fan == Some(k)) {
@@ -1519,6 +2028,30 @@ impl Cooling {
             .collect()
     }
 
+    /// Where fan `fan` is in the case, in words: `LEFT`, `TOP RIGHT`.
+    fn position(&self, fan: &Fan) -> String {
+        let side = if fan.mirrored { "RIGHT" } else { "LEFT" };
+
+        match self.rotor {
+            Rotor::Axial if fan.low => format!("BASE {side}"),
+            Rotor::Axial => format!("TOP {side}"),
+            Rotor::Blower => {
+                // The one nearer the middle of two on a side is inner.
+                let inner = self.fans.iter().any(|other| {
+                    other.mirrored == fan.mirrored
+                        && (other.centre.x - fan.centre.x) * if fan.mirrored { 1.0 } else { -1.0 }
+                            > 0.0
+                });
+
+                if inner {
+                    format!("{side}, INNER")
+                } else {
+                    side.into()
+                }
+            }
+        }
+    }
+
     /// The parts list's item `item`.
     fn part(&self, item: Item) -> Part {
         let machine = &self.machine;
@@ -1529,19 +2062,23 @@ impl Cooling {
             .collect();
         let mut spec: Vec<(String, String)> = Vec::new();
         // The way the air takes a source's heat.
-        let cooled = |source: &Source| match self
+        let aired = |source: &Source| match self
             .plan
             .arrows
             .iter()
             .find(|arrow| std::ptr::eq(&self.sources[arrow.source], source))
-            .map(|arrow| arrow.fan)
+            .and_then(|arrow| arrow.fan)
         {
-            Some(Some(fan)) => format!("BY AIR TO {}", FAN_NAMES[fan]),
-            _ => "BY AIR RISING".into(),
+            Some(fan) => format!("AIR TO {}", self.fans[fan].name),
+            None => "AIR RISING".into(),
         };
-        let fans = match self.fans.len() {
-            0 => "FINS".into(),
-            n => counted(n, "FAN", "FANS"),
+        // ...and its fins'.
+        let finned = |source: &Source| match self.rotor {
+            Rotor::Blower => match self.fans.len() {
+                0 => "BY HEAT PIPE TO FINS".to_owned(),
+                n => format!("BY HEAT PIPE TO {}", counted(n, "FAN", "FANS")),
+            },
+            Rotor::Axial => format!("BY HEATSINK, {}", aired(source)),
         };
 
         let (name, quantity, value) = match item {
@@ -1552,22 +2089,42 @@ impl Cooling {
                     spec.extend(rows("MODEL", &lettered(model)));
                 }
 
-                for source in &sources {
-                    if let Some(&gauge) = source.gauges.first() {
-                        spec.extend(rows("SENSOR", &called(&machine.sensors[gauge])));
-                    }
-
-                    // Every sensor but the package's is a core's, drawn
-                    // or not.
-                    if !source.cores.is_empty() {
-                        spec.push((
-                            "CORES".into(),
-                            format!("{} MEASURED", source.sensors.len() - 1),
-                        ));
-                    }
+                if let [source] = sources.as_slice()
+                    && let Some(&gauge) = source.gauges.first()
+                {
+                    spec.extend(rows("SENSOR", &called(&machine.sensors[gauge])));
+                } else if let Some(&gauge) = sources.first().and_then(|s| s.gauges.first()) {
+                    spec.push((
+                        "SENSORS".into(),
+                        format!(
+                            "{} PACKAGES, {}",
+                            sources.len(),
+                            chip(&machine.sensors[gauge].chip)
+                        ),
+                    ));
                 }
 
-                spec.push(("COOLED".into(), format!("BY HEAT PIPE TO {fans}")));
+                // Every sensor but a package's is a core's, drawn or not.
+                let cores: usize = sources
+                    .iter()
+                    .map(|source| {
+                        source
+                            .sensors
+                            .iter()
+                            .filter(|&&index| {
+                                !machine.sensors[index].label.as_deref().is_some_and(package)
+                            })
+                            .count()
+                    })
+                    .sum();
+
+                if sources.iter().any(|source| !source.cores.is_empty()) {
+                    spec.push(("CORES".into(), format!("{cores} MEASURED")));
+                }
+
+                if let Some(source) = sources.first() {
+                    spec.extend(rows("COOLED", &finned(source)));
+                }
 
                 if let Some(cpu) = cpu {
                     let ghz = |mhz: u32| format!("{:.1}", mhz as f32 / 1000.0);
@@ -1584,7 +2141,11 @@ impl Cooling {
                     counted(cpu.cores as usize, "CORE", "CORES")
                 });
 
-                ("CPU", cpu.map_or(1, |cpu| cpu.packages.max(1)), value)
+                (
+                    "CPU",
+                    cpu.map_or(sources.len() as u32, |cpu| cpu.packages.max(1)),
+                    value,
+                )
             }
             Item::Sources(Kind::Battery) => {
                 let batteries: Vec<_> = sources
@@ -1652,12 +2213,12 @@ impl Cooling {
                 if let Some(&gauge) = sources.first().and_then(|s| s.gauges.first()) {
                     spec.push((
                         "SENSORS".into(),
-                        format!("{} ON EACH", lettered(&machine.sensors[gauge].chip)),
+                        format!("{} ON EACH", chip(&machine.sensors[gauge].chip)),
                     ));
                 }
 
                 if let Some(source) = sources.first() {
-                    spec.push(("COOLED".into(), cooled(source)));
+                    spec.push(("COOLED".into(), format!("BY {}", aired(source))));
                 }
 
                 (
@@ -1673,10 +2234,7 @@ impl Cooling {
                     let device = source
                         .device
                         .and_then(|address| machine.pci_device(address));
-                    let drive = machine
-                        .drives
-                        .iter()
-                        .find(|drive| drive.pci.is_some() && drive.pci == source.device);
+                    let drive = source.drive.and_then(|drive| machine.drives.get(drive));
 
                     match (drive, device) {
                         (Some(drive), _) => {
@@ -1715,38 +2273,55 @@ impl Cooling {
                             match (&sensor.label, sensor.chip.as_str()) {
                                 (Some(label), _) => lettered(label),
                                 (None, "acpitz") => "ACPI THERMAL ZONE".into(),
-                                (None, chip) => lettered(chip),
+                                (None, name) => chip(name),
                             }
                         })
                         .collect();
 
                     spec.extend(rows("SENSORS", &sensors.join(", ")));
 
-                    if !kind.piped() {
-                        spec.push(("COOLED".into(), cooled(source)));
+                    if let Some(&fan) = source.fans.first() {
+                        spec.push((
+                            "FAN".into(),
+                            format!("ITS OWN, {}", chip(&machine.sensors[fan].chip)),
+                        ));
+                    }
+
+                    if !kind.finned() {
+                        spec.push(("COOLED".into(), format!("BY {}", aired(source))));
                     }
                 }
 
-                if kind.piped() {
-                    spec.push(("COOLED".into(), format!("BY HEAT PIPE TO {fans}")));
+                if let Some(source) = sources.first().filter(|_| kind.finned()) {
+                    spec.extend(rows("COOLED", &finned(source)));
                 }
 
                 let value = match values.as_slice() {
                     [one] => one.clone(),
                     _ if kind == Kind::Network => values.join(", ").replace("ETHERNET", "ETH"),
+                    _ if kind == Kind::Drive => counted(values.len(), "DRIVE", "DRIVES"),
                     _ => counted(values.len(), "SOURCE", "SOURCES"),
                 };
 
                 (kind.part(), sources.len() as u32, value)
             }
             Item::Fans => {
-                for (k, fan) in self.fans.iter().enumerate() {
-                    let about = match &fan.label {
-                        Some(label) => format!("{}, {}", lettered(label), lettered(&fan.chip)),
-                        None => lettered(&fan.chip),
-                    };
+                let mut chips: Vec<String> = self.fans.iter().map(|fan| chip(&fan.chip)).collect();
 
-                    spec.extend(rows(FAN_NAMES[k], &about));
+                chips.dedup();
+                spec.extend(rows("MONITOR", &chips.join(", ")));
+
+                for fan in &self.fans {
+                    let mut about = Vec::new();
+
+                    about.extend(fan.label.as_deref().map(lettered));
+                    about.push(self.position(fan));
+
+                    if !fan.turning {
+                        about.push("PHANTOM".into());
+                    }
+
+                    spec.push((fan.name.into(), about.join(", ")));
                 }
 
                 spec.push(("DRAWN".into(), format!("SLOWED {SLOWED} TIMES")));
@@ -1772,14 +2347,31 @@ impl Cooling {
     }
 }
 
-/// The corners of `extent`, round it.
-fn corners(extent: Extent) -> [V2; 4] {
-    [
-        extent.min,
-        v(extent.max.x, extent.min.y),
-        extent.max,
-        v(extent.min.x, extent.max.y),
-    ]
+/// The three arrows' places across a vent from `a` to `b`.
+fn exhausts(a: f32, b: f32) -> impl Iterator<Item = f32> {
+    (1..=3).map(move |k| (a + (b - a) * k as f32 / 4.0).round())
+}
+
+/// The tone a temperature is filled in: live, or in caution when hot.
+fn warmth(celsius: f32) -> Tone {
+    if celsius >= HOT {
+        Tone::Caution
+    } else {
+        Tone::Live
+    }
+}
+
+/// `extent`'s outline, as a shape to fill inside.
+fn rectangle(extent: Extent) -> Shape {
+    Shape::Polyline {
+        points: vec![
+            extent.min,
+            v(extent.max.x, extent.min.y),
+            extent.max,
+            v(extent.min.x, extent.max.y),
+        ],
+        closed: true,
+    }
 }
 
 impl Subject for Cooling {
@@ -1804,7 +2396,7 @@ impl Subject for Cooling {
         self.pipe(d);
 
         for arrow in &self.plan.arrows {
-            d.arrow(arrow.from, arrow.to, Line::Path);
+            d.arrow(arrow.from, arrow.to, Line::Thin);
         }
 
         for source in &self.sources {
@@ -1814,7 +2406,9 @@ impl Subject for Cooling {
         }
 
         for fan in &self.fans {
-            d.centre_mark(fan.centre, HUB, 3.0);
+            set(d, &self.fan_snaps(fan), |d| {
+                d.centre_mark(fan.centre, HUB, 3.0);
+            });
         }
 
         d.moving(|d| {
@@ -1891,7 +2485,7 @@ impl Subject for Cooling {
 
         for k in turning.into_iter().take(2) {
             readings.push(Reading::new(
-                FAN_NAMES[k],
+                self.fans[k].name,
                 format!("{:4.0} rpm", rpm(&snapshot, self.fans[k].sensor)),
             ));
         }
@@ -1915,7 +2509,9 @@ impl Subject for Cooling {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draft::{Ink, Shape};
+    use crate::draft::Ink;
+    use crate::draft::raster::{Piece, Projection, rasterize};
+    use crate::machine::Fixture;
 
     #[test]
     fn the_fixture_is_documented_part_by_part() {
@@ -2084,7 +2680,8 @@ mod tests {
             .map(|reading| format!("{} {}", reading.name, reading.value))
             .collect();
 
-        assert!(readings.contains(&"FAN 1 1200 rpm".into()), "{readings:?}");
+        // Named by the monitor's numbers for them, as `sensors` names them.
+        assert!(readings.contains(&"FAN 5 1200 rpm".into()), "{readings:?}");
     }
 
     /// Counts in the parts list are of what the machine has, not of what
@@ -2137,8 +2734,9 @@ mod tests {
     }
 
     /// Four fans, two a side, leave room for one column between them: what
-    /// the air cools gives its heat to each side in turn, and it all fits
-    /// the laptop's view.
+    /// the air cools gives its heat to each side in turn, to the fan there
+    /// that turns, and it all fits the laptop's view. The fans are dealt to
+    /// the sides in turn, so the two turning take a corner each.
     #[test]
     fn four_fans_take_the_heat_from_one_column_each_side_in_turn() {
         let mut machine = Machine::fixture();
@@ -2150,7 +2748,7 @@ mod tests {
         let extent = cooling.extent();
         let sides: Vec<bool> = cooling.fans.iter().map(|fan| fan.mirrored).collect();
 
-        assert_eq!(sides, [false, false, true, true]);
+        assert_eq!(sides, [false, true, false, true]);
         assert!(extent.width() <= BUDGET.x && extent.height() <= BUDGET.y);
 
         let leftward: Vec<bool> = cooling
@@ -2168,7 +2766,7 @@ mod tests {
                 .iter()
                 .map(|a| a.fan)
                 .collect::<Vec<_>>(),
-            [Some(1), Some(2), Some(1), Some(2)]
+            [Some(0), Some(1), Some(0), Some(1)]
         );
     }
 
@@ -2186,7 +2784,7 @@ mod tests {
 
         assert_eq!(cooling.rotor, Rotor::Axial);
         assert_eq!(cooling.card().title, "DESKTOP COOLING");
-        assert_eq!((b - a, fan.centre.y), (2.0 * FRAME, -(FINS + 2.0 + FRAME)));
+        assert_eq!((b - a, fan.centre.y), (2.0 * FRAME, -(INSET + FRAME)));
         assert!(extent.width() <= BUDGET.x && extent.height() <= BUDGET.y);
     }
 
@@ -2244,6 +2842,325 @@ mod tests {
         let cooling = Cooling::new(&machine).unwrap();
         let mut draft = Draft::new();
         cooling.draw(&mut draft, 3.0);
+    }
+
+    /// The pixels of what `mark` draws under `projection`: its strokes'
+    /// and areas', and the box of its lettering's capitals.
+    fn inked(mark: &crate::draft::Mark, projection: &Projection) -> Vec<(i32, i32)> {
+        let mut pieces = Vec::new();
+        let mut pixels = Vec::new();
+
+        rasterize(mark, projection, &mut pieces);
+
+        for inked in pieces {
+            match inked.piece {
+                Piece::Path { pixels: path, .. } => {
+                    pixels.extend(path.iter().map(|p| (p.x, p.y)));
+                }
+                Piece::Rows { rows, .. } => {
+                    for (y, from, to) in rows {
+                        pixels.extend((from..=to).map(|x| (x, y)));
+                    }
+                }
+                Piece::Block(block) => {
+                    for y in block.y..block.y + block.height {
+                        pixels.extend((block.x..block.x + block.width).map(|x| (x, y)));
+                    }
+                }
+                // A glyph's ink starts a column into its cell and fills the
+                // rest of it, from the capitals' top to the baseline.
+                Piece::Text { at, text } => {
+                    let width = i32::from(LETTERING.width(&text));
+                    let top = at.y + i32::from(LETTERING.cap_top());
+                    let bottom = at.y + i32::from(LETTERING.baseline()) - 1;
+
+                    pixels.extend([(at.x + 1, top), (at.x + width - 1, bottom)]);
+                }
+                Piece::Knockout(_) => {}
+            }
+        }
+
+        pixels
+    }
+
+    const SCALES: [f32; 8] = [0.92, 1.0, 1.07, 1.18, 1.25, 1.37, 1.64, 2.36];
+
+    /// Every block of every machine is padded alike on its four sides (its
+    /// name and value as far from its top and sides as its last gauge is
+    /// from its bottom), blocks as tall in units are as tall in pixels, and
+    /// each thermometer is one closed outline the same either side of its
+    /// centre line, its column inside it, a pixel or more clear of the
+    /// next: at every scale the sheet is drawn at, wherever the block falls
+    /// on the grid.
+    #[test]
+    fn every_block_is_padded_alike_and_its_thermometers_are_whole() {
+        for fixture in Fixture::ALL {
+            let machine = fixture.machine();
+            let Some(cooling) = Cooling::new(&machine) else {
+                continue;
+            };
+            let snapshot = machine.sample(12.0);
+
+            for scale in SCALES {
+                for origin in [(13.0, 517.0), (240.0, 61.0)] {
+                    let projection = Projection::new(origin, scale);
+                    let mut heights: Vec<(f32, i32)> = Vec::new();
+
+                    for source in &cooling.sources {
+                        let at = format!("{fixture:?} {} at {scale}", source.name);
+                        let mut d = Draft::new();
+
+                        cooling.block(&mut d, source);
+                        cooling.readings_of(&mut d, source, &snapshot);
+
+                        let marks: Vec<&crate::draft::Mark> =
+                            d.marks().iter().filter(|m| m.shown_in(None)).collect();
+                        let outline = inked(marks[0], &projection);
+                        let (left, right) = (
+                            outline.iter().map(|p| p.0).min().unwrap(),
+                            outline.iter().map(|p| p.0).max().unwrap(),
+                        );
+                        let (top, bottom) = (
+                            outline.iter().map(|p| p.1).min().unwrap(),
+                            outline.iter().map(|p| p.1).max().unwrap(),
+                        );
+                        let inside: Vec<(i32, i32)> = marks[1..]
+                            .iter()
+                            .flat_map(|mark| inked(mark, &projection))
+                            .filter(|&(x, y)| x > left && x < right && y > top && y < bottom)
+                            .collect();
+                        let pads = [
+                            inside.iter().map(|p| p.0).min().unwrap() - left - 1,
+                            right - inside.iter().map(|p| p.0).max().unwrap() - 1,
+                            inside.iter().map(|p| p.1).min().unwrap() - top - 1,
+                            bottom - inside.iter().map(|p| p.1).max().unwrap() - 1,
+                        ];
+
+                        assert!(pads.iter().all(|&pad| pad == pads[0]), "{at}: {pads:?}");
+                        heights.push((source.frame.height(), bottom - top));
+
+                        // Its thermometers.
+                        let glass: Vec<Vec<(i32, i32)>> = marks
+                            .iter()
+                            .filter(|mark| {
+                                matches!(
+                                    mark.ink,
+                                    Ink::Stroke {
+                                        shape: Shape::Keyhole { .. },
+                                        ..
+                                    }
+                                )
+                            })
+                            .map(|mark| inked(mark, &projection))
+                            .collect();
+                        let columns: Vec<(i32, i32)> = marks
+                            .iter()
+                            .filter(|mark| {
+                                matches!(
+                                    mark.ink,
+                                    Ink::Inside {
+                                        shape: Shape::Keyhole { .. },
+                                        ..
+                                    }
+                                )
+                            })
+                            .flat_map(|mark| inked(mark, &projection))
+                            .collect();
+
+                        for outline in &glass {
+                            let closed = outline
+                                .iter()
+                                .zip(outline.iter().cycle().skip(1))
+                                .all(|(a, b)| (a.0 - b.0).abs() <= 1 && (a.1 - b.1).abs() <= 1);
+                            let (high, low) = (
+                                outline.iter().map(|p| p.1).min().unwrap(),
+                                outline.iter().map(|p| p.1).max().unwrap(),
+                            );
+                            let mut mirrored: Vec<(i32, i32)> =
+                                outline.iter().map(|&(x, y)| (x, high + low - y)).collect();
+                            let mut sorted = outline.clone();
+
+                            mirrored.sort();
+                            sorted.sort();
+                            assert!(closed, "{at}: a thermometer is open");
+                            assert_eq!(sorted, mirrored, "{at}: a thermometer is crooked");
+                        }
+
+                        for pair in glass.windows(2) {
+                            let above = pair[0].iter().map(|p| p.1).max().unwrap();
+                            let below = pair[1].iter().map(|p| p.1).min().unwrap();
+
+                            assert!(below - above >= 2, "{at}: bulbs touch");
+                        }
+
+                        let glass: Vec<&(i32, i32)> = glass.iter().flatten().collect();
+                        assert!(
+                            !columns.iter().any(|pixel| glass.contains(&pixel)),
+                            "{at}: a column is on its glass"
+                        );
+                    }
+
+                    for a in &heights {
+                        for b in heights.iter().filter(|b| b.0 == a.0) {
+                            assert_eq!(a.1, b.1, "{fixture:?} at {scale}: blocks differ");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The heat pipe's drops meet it and the block each drops to, and the
+    /// fins it runs through meet it, whatever the scale.
+    #[test]
+    fn the_heat_pipe_meets_what_it_runs_into() {
+        let cooling = Cooling::new(&Machine::fixture()).unwrap();
+        let cpu = &cooling.sources[0];
+
+        for scale in SCALES {
+            let projection = Projection::new((31.0, 402.0), scale);
+            let mut pipe = Draft::new();
+            let mut block = Draft::new();
+
+            cooling.pipe(&mut pipe);
+            cooling.block(&mut block, cpu);
+
+            let lines: Vec<Vec<(i32, i32)>> = pipe
+                .marks()
+                .iter()
+                .filter(|mark| mark.pass() == crate::draft::Pass::Edges)
+                .map(|mark| inked(mark, &projection))
+                .collect();
+            let top = inked(&block.marks()[0], &projection)
+                .iter()
+                .map(|p| p.1)
+                .min()
+                .unwrap();
+            // The upper line, then the lower's stretches, the ends, and the
+            // drop's sides.
+            let upper = lines[0][0].1;
+            let lower = lines[1][0].1;
+            let (axis_up, axis_down) = (upper, lower);
+
+            for side in &lines[lines.len() - 2..] {
+                let rows: Vec<i32> = side.iter().map(|p| p.1).collect();
+
+                assert_eq!(rows.iter().min(), Some(&lower), "at {scale}");
+                assert_eq!(rows.iter().max(), Some(&top), "at {scale}");
+            }
+
+            // The fins either side of the pipe stop on its lines.
+            let mut fins = Draft::new();
+            let vent = cooling.fans[0].vent(cooling.rotor);
+
+            cooling.fins(&mut fins, vent, Line::Outline, Line::Thin);
+
+            for mark in fins
+                .marks()
+                .iter()
+                .filter(|m| m.pass() < crate::draft::Pass::Edges)
+            {
+                let rows: Vec<i32> = inked(mark, &projection).iter().map(|p| p.1).collect();
+                let (min, max) = (*rows.iter().min().unwrap(), *rows.iter().max().unwrap());
+
+                assert!(
+                    max == axis_up || min == axis_down,
+                    "at {scale}: {min}..{max}"
+                );
+            }
+        }
+    }
+
+    /// A graphics card's own fan is lettered in its block, not drawn as one
+    /// of the case's; a board's headers reading 0 are left out and counted;
+    /// each processor package and each drive is a block of its own; and a
+    /// tower's four fans and seven blocks fit the laptop's view.
+    #[test]
+    fn a_desktop_is_drawn_as_a_tower() {
+        let machine = Fixture::Desktop.machine();
+        let cooling = Cooling::new(&machine).unwrap();
+        let gpu = cooling
+            .sources
+            .iter()
+            .find(|source| source.kind == Kind::Graphics)
+            .unwrap();
+        let names: Vec<&str> = cooling.fans.iter().map(|fan| fan.name).collect();
+        let blocks: Vec<&str> = cooling.sources.iter().map(|s| s.name.as_str()).collect();
+
+        assert_eq!(gpu.fans.len(), 1);
+        assert!(
+            !cooling
+                .fans
+                .iter()
+                .any(|fan| gpu.fans.contains(&fan.sensor))
+        );
+        assert_eq!(names, ["FAN 2", "FAN 4", "FAN 5", "FAN 7"]);
+        assert!(cooling.fans.iter().all(|fan| fan.turning));
+        assert!(
+            cooling
+                .card()
+                .notes
+                .contains(&"3 FAN HEADERS AT 0 rpm OMITTED".into())
+        );
+        assert!(
+            !cooling
+                .card()
+                .notes
+                .iter()
+                .any(|n| n.starts_with("PHANTOM"))
+        );
+        assert_eq!(
+            blocks,
+            ["CPU", "GPU", "MEMORY", "NVMe", "SSD", "HDD", "BOARD"]
+        );
+        assert!(cooling.plan.pipe.is_none());
+
+        let extent = cooling.extent();
+        assert!(extent.width() <= BUDGET.x && extent.height() <= BUDGET.y);
+
+        // Two fans at the top exhausting, two at the base taking air in.
+        let low: Vec<bool> = cooling.fans.iter().map(|fan| fan.low).collect();
+        assert_eq!(low, [false, false, true, true]);
+
+        let server = Cooling::new(&Fixture::Server.machine()).unwrap();
+        let cpus: Vec<&str> = server
+            .sources
+            .iter()
+            .filter(|s| s.kind == Kind::Processor)
+            .map(|s| s.name.as_str())
+            .collect();
+        let spec = &server.card().parts[0].spec;
+
+        assert_eq!(cpus, ["CPU 1", "CPU 2"]);
+        assert!(
+            spec.contains(&("CORES".into(), "64 MEASURED".into())),
+            "{spec:?}"
+        );
+    }
+
+    /// No heat arrow runs through a fan's housing: one at the height of a
+    /// housing stops at its side.
+    #[test]
+    fn heat_arrows_stop_short_of_the_housings() {
+        for fixture in Fixture::ALL {
+            let Some(cooling) = Cooling::new(&fixture.machine()) else {
+                continue;
+            };
+
+            for arrow in &cooling.plan.arrows {
+                for fan in &cooling.fans {
+                    let (a, b) = fan.span(cooling.rotor);
+                    let (low, high) = fan.height(cooling.rotor);
+                    let (from, to) = (arrow.from.x.min(arrow.to.x), arrow.from.x.max(arrow.to.x));
+
+                    assert!(
+                        !((low..=high).contains(&arrow.from.y) && from < b && to > a),
+                        "{fixture:?}: {arrow:?} crosses {}",
+                        fan.name
+                    );
+                }
+            }
+        }
     }
 
     #[test]

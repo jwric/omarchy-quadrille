@@ -1296,10 +1296,7 @@ mod tests {
         assert!(elbows[3] > items[3].target.y);
     }
 
-    const UNIT: Projection = Projection {
-        origin: (200.0, 150.0),
-        scale: 1.0,
-    };
+    const UNIT: Projection = Projection::new((200.0, 150.0), 1.0);
 
     const VIEW: Rectangle<i32> = rect(0, 0, 400, 300);
 

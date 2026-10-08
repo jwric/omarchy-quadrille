@@ -69,6 +69,9 @@ fn rows(name: &str, value: &str) -> Vec<(String, String)> {
 /// `backward`), `share` of them there, each there or not by its own number
 /// so a busier route carries more of them and none blinks as it runs. The
 /// pieces are one route, broken where it passes through something drawn.
+///
+/// A dot is three pixels across, so it sits square on the 1 px line it
+/// runs along, a pixel either side.
 fn flow(
     d: &mut Draft,
     pieces: &[Vec<V2>],
@@ -102,7 +105,7 @@ fn flow(
 
         for (piece, &length) in pieces.iter().zip(&lengths) {
             if left <= length {
-                d.dot(along(piece, left), 2).tone(tone);
+                d.dot(along(piece, left), 3).tone(tone);
                 break;
             }
             left -= length;

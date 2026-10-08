@@ -142,6 +142,12 @@ pub enum Ink {
     Arrow { from: V2, to: V2, line: Line },
     /// An area, filled.
     Area { contour: Vec<V2>, fill: Fill },
+    /// The inside of `shape`, filled: every pixel within its stroke and
+    /// none of the stroke's own, so a fill and the outline drawn on the same
+    /// shape meet without one covering the other. For shapes each row of
+    /// pixels crosses once in and once out: a circle, a rectangle, a
+    /// keyhole.
+    Inside { shape: Shape, fill: Fill },
     /// Text at a point of the model, nudged by whole pixels.
     Label {
         at: V2,
@@ -212,6 +218,16 @@ pub enum Shape {
         start: f32,
         sweep: f32,
     },
+    /// A round hole and a slot leading out of it to the right, as one
+    /// outline: the circle open where the slot leaves it, the slot's sides
+    /// `half` either side of the circle's centre line, closed `length` from
+    /// the centre. A thermometer's glass, its bulb and its bore.
+    Keyhole {
+        centre: V2,
+        radius: f32,
+        half: f32,
+        length: f32,
+    },
 }
 
 /// Which views a mark appears in.
@@ -224,6 +240,10 @@ pub enum Scope {
     Main,
     /// What only a magnified detail can say legibly.
     Detail,
+    /// What only the detail of its own part says: the values of its
+    /// instruments, which another part's detail would show without saying
+    /// whose they are.
+    Own,
 }
 
 /// One recorded mark.
@@ -239,6 +259,9 @@ pub struct Mark {
     /// The subject's view it is drawn in, by its index among the other
     /// views; `None` for the front view.
     pub view: Option<usize>,
+    /// The points the figure it is part of is set on the pixel grid by,
+    /// outermost first (see [`Draft::snapped`]).
+    pub snaps: Vec<V2>,
 }
 
 /// The order a plotter draws in: the construction first, then the edges,
@@ -257,13 +280,18 @@ pub enum Pass {
 impl Mark {
     /// Whether the mark is drawn in `view` (`None`: the front view).
     pub fn shown_in(&self, view: Option<usize>) -> bool {
-        self.view == view && self.scope != Scope::Detail
+        self.view == view && !matches!(self.scope, Scope::Detail | Scope::Own)
     }
 
     /// Whether the mark is drawn in a detail, which magnifies the front
     /// view.
     pub fn magnified(&self) -> bool {
         self.view.is_none() && self.scope != Scope::Main
+    }
+
+    /// Whether the mark is drawn in the detail of part `focus`.
+    pub fn magnified_for(&self, focus: usize) -> bool {
+        self.magnified() && (self.scope != Scope::Own || self.part == Some(focus))
     }
 
     pub fn pass(&self) -> Pass {
@@ -274,7 +302,7 @@ impl Mark {
                 Line::Hidden => Pass::Hidden,
                 Line::Trace | Line::Path => Pass::Traces,
             },
-            Ink::Area { .. } => Pass::Areas,
+            Ink::Area { .. } | Ink::Inside { .. } => Pass::Areas,
             Ink::Dot { .. } => Pass::Traces,
             Ink::Label { .. }
             | Ink::Dimension { .. }
@@ -296,7 +324,9 @@ pub struct Draft {
     moving: bool,
     detail: bool,
     main: bool,
+    own: bool,
     view: Option<usize>,
+    snaps: Vec<V2>,
 }
 
 /// The mark just made, to say more about it.
@@ -409,6 +439,14 @@ impl Draft {
         self.detail = outer;
     }
 
+    /// Records what `draw` makes for the detail of its own part only (see
+    /// [`Scope::Own`]).
+    pub fn in_own_detail(&mut self, draw: impl FnOnce(&mut Self)) {
+        let outer = std::mem::replace(&mut self.own, true);
+        draw(self);
+        self.own = outer;
+    }
+
     /// Records what `draw` makes for the main view only, never magnified:
     /// geometry a detail would show a sliver of at great cost, such as an
     /// edge hundreds of times longer than the detail is wide, which the
@@ -417,6 +455,19 @@ impl Draft {
         let outer = std::mem::replace(&mut self.main, true);
         draw(self);
         self.main = outer;
+    }
+
+    /// Records what `draw` makes as one figure, set on the pixel grid by
+    /// `at`: each of its points lands on the pixel `at` lands on, moved by
+    /// its distance from `at` in whole pixels, rounded the same way either
+    /// side. So the figure is drawn the same wherever it falls on the grid,
+    /// symmetric where it is symmetric about `at`, and what is drawn in it
+    /// from `at` and back meets `at` exactly; a figure set inside another is
+    /// set by its point's pixel in that one.
+    pub fn snapped(&mut self, at: V2, draw: impl FnOnce(&mut Self)) {
+        self.snaps.push(at);
+        draw(self);
+        self.snaps.pop();
     }
 
     fn push(&mut self, ink: Ink, tone: Tone) -> Made<'_> {
@@ -431,7 +482,9 @@ impl Draft {
                 | Ink::Datum { .. }
                 | Ink::Control { .. }
         );
-        let scope = if self.detail {
+        let scope = if self.own {
+            Scope::Own
+        } else if self.detail {
             Scope::Detail
         } else if annotation || self.main {
             Scope::Main
@@ -446,6 +499,7 @@ impl Draft {
             moving: self.moving,
             scope,
             view: self.view,
+            snaps: self.snaps.clone(),
         });
 
         Made(self.marks.last_mut().expect("Just pushed"))
@@ -500,6 +554,28 @@ impl Draft {
         )
     }
 
+    /// A round hole of `radius` round `centre` with a slot `half` either
+    /// side of its centre line leading out of it to the right, closed
+    /// `length` from `centre`, as one outline (see [`Shape::Keyhole`]).
+    pub fn keyhole(
+        &mut self,
+        centre: V2,
+        radius: f32,
+        half: f32,
+        length: f32,
+        line: Line,
+    ) -> Made<'_> {
+        self.stroke(
+            Shape::Keyhole {
+                centre,
+                radius,
+                half,
+                length,
+            },
+            line,
+        )
+    }
+
     pub fn arrow(&mut self, from: V2, to: V2, line: Line) -> Made<'_> {
         self.push(Ink::Arrow { from, to, line }, line.tone())
     }
@@ -518,6 +594,12 @@ impl Draft {
             },
             Tone::Line,
         )
+    }
+
+    /// The inside of `shape` filled, up to the pixels of its stroke (see
+    /// [`Ink::Inside`]).
+    pub fn fill_inside(&mut self, shape: Shape, fill: Fill) -> Made<'_> {
+        self.push(Ink::Inside { shape, fill }, Tone::Line)
     }
 
     /// The centre lines of a circle: a cross reaching `reach` past it.

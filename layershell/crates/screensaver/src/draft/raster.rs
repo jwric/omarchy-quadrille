@@ -23,9 +23,30 @@ pub struct Projection {
     pub origin: (f32, f32),
     /// Pixels per model unit.
     pub scale: f32,
+    /// A point of the model and the pixel it is set on, for a figure set on
+    /// the grid as one (see [`Draft::snapped`](super::Draft::snapped)):
+    /// every point lands that pixel plus its offset from the point, rounded.
+    pub snap: Option<(V2, Point<i32>)>,
 }
 
 impl Projection {
+    pub const fn new(origin: (f32, f32), scale: f32) -> Self {
+        Self {
+            origin,
+            scale,
+            snap: None,
+        }
+    }
+
+    /// The projection of a figure set on the grid by `at`, inside the
+    /// figure this one sets, if any.
+    pub fn snapped(&self, at: V2) -> Self {
+        Self {
+            snap: Some((at, self.px(at))),
+            ..*self
+        }
+    }
+
     /// `extent` centred in `area` at `scale` pixels per unit. The origin is
     /// put on a whole pixel, so a model point a whole number of pixels from
     /// it lands exactly.
@@ -34,33 +55,58 @@ impl Projection {
         let x = area.x as f32 + area.width as f32 / 2.0;
         let y = area.y as f32 + area.height as f32 / 2.0;
 
-        Self {
-            origin: (
+        Self::new(
+            (
                 (x - centre.x * scale).round(),
                 (y + centre.y * scale).round(),
             ),
             scale,
-        }
+        )
     }
 
     pub fn px(&self, point: V2) -> Point<i32> {
-        Point::new(
-            (self.origin.0 + point.x * self.scale).round() as i32,
-            (self.origin.1 - point.y * self.scale).round() as i32,
-        )
+        match self.snap {
+            Some((at, pixel)) => {
+                let offset = steady(point - at) * self.scale;
+
+                Point::new(
+                    pixel.x + offset.x.round() as i32,
+                    pixel.y - offset.y.round() as i32,
+                )
+            }
+            None => Point::new(
+                (self.origin.0 + point.x * self.scale).round() as i32,
+                (self.origin.1 - point.y * self.scale).round() as i32,
+            ),
+        }
     }
 
     /// The same point, not rounded: for directions and placements.
     fn exact(&self, point: V2) -> V2 {
-        v(
-            self.origin.0 + point.x * self.scale,
-            self.origin.1 - point.y * self.scale,
-        )
+        match self.snap {
+            Some((at, pixel)) => {
+                let offset = steady(point - at) * self.scale;
+
+                v(pixel.x as f32 + offset.x, pixel.y as f32 - offset.y)
+            }
+            None => v(
+                self.origin.0 + point.x * self.scale,
+                self.origin.1 - point.y * self.scale,
+            ),
+        }
     }
 
     pub fn length(&self, length: f32) -> i32 {
         (length * self.scale).round() as i32
     }
+}
+
+/// An offset in the model to a 64th of a unit, so the rounding error of
+/// working it out from two points far from the origin cannot round the
+/// same offset either way at different places: an offset and its opposite
+/// are rounded alike.
+fn steady(offset: V2) -> V2 {
+    (offset * 64.0).round() / 64.0
 }
 
 /// Which pixels of a path are inked, counted along it.
@@ -478,6 +524,11 @@ fn lettering(text: &str, top_left: Point<i32>, tone: Tone, out: &mut Vec<Inked>)
 /// The pieces of `mark` under `projection`.
 pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
     let tone = mark.tone;
+    let snapped = mark
+        .snaps
+        .iter()
+        .fold(*projection, |projection, &at| projection.snapped(at));
+    let projection = &snapped;
 
     match &mark.ink {
         Ink::Stroke { shape, line } => out.push(Inked {
@@ -521,6 +572,20 @@ pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
                 });
             }
         }
+        Ink::Inside { shape, fill } => {
+            let rows = inside(&stroke(shape, projection));
+
+            if !rows.is_empty() {
+                out.push(Inked {
+                    piece: Piece::Rows {
+                        origin: Point::new(rows[0].1, rows[0].0),
+                        rows,
+                        texture: Texture::of(*fill),
+                    },
+                    tone,
+                });
+            }
+        }
         Ink::Label {
             at,
             nudge,
@@ -541,7 +606,7 @@ pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
         } => {
             let target = projection.px(*target);
 
-            out.push(dot(target, 3, Tone::Line));
+            out.push(dot(v(target.x as f32, target.y as f32), 3, Tone::Line));
             callout(target, (*x, *y), text, tone, out);
         }
         Ink::Balloon {
@@ -550,7 +615,7 @@ pub fn rasterize(mark: &Mark, projection: &Projection, out: &mut Vec<Inked>) {
             offset: Placement::Offset(x, y),
         } => balloon(*item, projection.px(*target), (*x, *y), tone, out),
         Ink::Note { .. } | Ink::Balloon { .. } => {}
-        Ink::Dot { at, size } => out.push(dot(projection.px(*at), *size, tone)),
+        Ink::Dot { at, size } => out.push(dot(projection.exact(*at), *size, tone)),
         Ink::Finish { at, text } => finish(projection.px(*at), text, tone, out),
         Ink::Datum { at, toward, letter } => {
             datum(
@@ -633,11 +698,16 @@ fn clip_to(from: i32, to: i32, spans: &[(i32, i32)]) -> Vec<(i32, i32)> {
         .collect()
 }
 
-fn dot(at: Point<i32>, size: i32, tone: Tone) -> Inked {
+/// A square dot `size` pixels across centred on `at` as nearly as the grid
+/// allows: an odd size on the pixel `at` is in, an even one between the two
+/// pixels nearest it.
+fn dot(at: V2, size: i32, tone: Tone) -> Inked {
     let size = size.max(1);
+    let half = (size - 1) as f32 / 2.0;
+    let corner = |at: f32| (at - half).round() as i32;
 
     Inked {
-        piece: Piece::Block(rect(at.x - size / 2, at.y - size / 2, size, size)),
+        piece: Piece::Block(rect(corner(at.x), corner(at.y), size, size)),
         tone,
     }
 }
@@ -686,7 +756,89 @@ fn stroke(shape: &Shape, projection: &Projection) -> Vec<Point<i32>> {
                 clockwise_arc(centre, radius, from, to)
             }
         }
+        Shape::Keyhole {
+            centre,
+            radius,
+            half,
+            length,
+        } => keyhole(
+            projection.px(*centre),
+            projection.length(*radius),
+            projection.length(*half),
+            projection.length(*length),
+        ),
     }
+}
+
+/// The pixels of a keyhole's outline (see [`Shape::Keyhole`]): the 1 px
+/// circle of `radius` round `centre` with its pixels between the slot's
+/// sides left out, from where the slot's lower side leaves it round by the
+/// bottom, the left and the top to where its upper side does, then along
+/// that side, down its closed end `length` from `centre` and back.
+///
+/// Each side starts on the pixel after the circle's last on its row, so the
+/// outline is closed and the same either side of the centre line; a slot
+/// as wide as the hole is a pixel narrower than it, and one that ends
+/// inside the circle leaves the circle whole.
+fn keyhole(centre: Point<i32>, radius: i32, half: i32, length: i32) -> Vec<Point<i32>> {
+    let circle = ordered_circle(centre, radius);
+    let half = half.clamp(1, (radius - 1).max(1));
+    // The circle's last pixel on each of the slot's sides.
+    let neck = circle
+        .iter()
+        .filter(|pixel| pixel.y == centre.y - half && pixel.x > centre.x)
+        .map(|pixel| pixel.x)
+        .max();
+    let end = centre.x + length;
+
+    let Some(neck) = neck.filter(|&neck| radius > 1 && end > neck) else {
+        return circle;
+    };
+
+    let mouth = |pixel: &Point<i32>| pixel.x > centre.x && (pixel.y - centre.y).abs() < half;
+    // The walk goes clockwise from the top, so it passes the mouth on the
+    // right: start after it.
+    let after = circle.iter().rposition(mouth).map_or(0, |last| last + 1);
+    let mut pixels: Vec<Point<i32>> = circle[after..]
+        .iter()
+        .chain(&circle[..after])
+        .filter(|pixel| !mouth(pixel))
+        .copied()
+        .collect();
+    let (upper, lower) = (centre.y - half, centre.y + half);
+
+    pixels.extend((neck + 1..=end).map(|x| Point::new(x, upper)));
+    pixels.extend((upper + 1..=lower).map(|y| Point::new(end, y)));
+    pixels.extend((neck + 1..end).rev().map(|x| Point::new(x, lower)));
+    pixels
+}
+
+/// The rows strictly inside an outline each row crosses once in and once
+/// out: on each row, the pixels after its first run of the outline's and
+/// before its last.
+fn inside(outline: &[Point<i32>]) -> Vec<(i32, i32, i32)> {
+    let mut rows: Vec<(i32, Vec<i32>)> = Vec::new();
+
+    for pixel in outline {
+        match rows.iter_mut().find(|(y, _)| *y == pixel.y) {
+            Some((_, xs)) => xs.push(pixel.x),
+            None => rows.push((pixel.y, vec![pixel.x])),
+        }
+    }
+
+    rows.sort_by_key(|(y, _)| *y);
+    rows.into_iter()
+        .filter_map(|(y, mut xs)| {
+            xs.sort_unstable();
+            xs.dedup();
+
+            // The first run's end and the last run's start.
+            let first = xs.windows(2).position(|pair| pair[1] > pair[0] + 1)?;
+            let last = xs.windows(2).rposition(|pair| pair[1] > pair[0] + 1)? + 1;
+
+            Some((y, xs[first] + 1, xs[last] - 1))
+        })
+        .collect()
 }
 
 /// The pixels of a 1 px circle of `radius` round `centre`, each once, in
@@ -1137,7 +1289,7 @@ fn balloon(item: usize, target: Point<i32>, offset: (i32, i32), tone: Tone, out:
         piece: Piece::path(shape::line(start, target), Stipple::Solid),
         tone: Tone::Line,
     });
-    out.push(dot(target, 3, Tone::Line));
+    out.push(dot(v(target.x as f32, target.y as f32), 3, Tone::Line));
     out.push(Inked {
         piece: Piece::Knockout(rect(
             centre.x - RADIUS,
@@ -1334,10 +1486,7 @@ mod tests {
         }
     }
 
-    const UNIT: Projection = Projection {
-        origin: (50.0, 50.0),
-        scale: 1.0,
-    };
+    const UNIT: Projection = Projection::new((50.0, 50.0), 1.0);
 
     #[test]
     fn the_model_is_drawn_y_up() {
@@ -1533,6 +1682,123 @@ mod tests {
                 "row {y} from {from} to {to} touches the edge"
             );
         }
+    }
+
+    /// The scales the sheets draw at, in the view and magnified, and some
+    /// that round a half either way.
+    const SCALES: [f32; 8] = [0.92, 1.0, 1.18, 1.25, 1.5, 1.64, 2.36, 3.28];
+
+    /// A figure set on the grid as one is drawn the same wherever it falls:
+    /// lines either side of its point the same distance from its pixel, and
+    /// a figure set inside it from a point and back on its own pixel.
+    #[test]
+    fn a_snapped_figure_is_drawn_alike_wherever_it_falls() {
+        for scale in SCALES {
+            let projection = Projection::new((50.0, 50.0), scale);
+            let mut shapes = Vec::new();
+
+            for k in 0..16 {
+                let at = v(100.0 + k as f32 * 0.37, -80.0 - k as f32 * 0.29);
+                let mut draft = Draft::new();
+
+                draft.snapped(at, |d| {
+                    d.line(at + v(-3.0, 2.0), at + v(30.0, 2.0), Line::Outline);
+                    d.line(at + v(-3.0, -2.0), at + v(30.0, -2.0), Line::Outline);
+                    d.snapped(at + v(4.5, -7.5), |d| {
+                        d.line(at, at + v(1.0, 0.0), Line::Outline);
+                    });
+                });
+
+                let centre = projection.px(at);
+                let relative: Vec<Vec<(i32, i32)>> = draft
+                    .marks()
+                    .iter()
+                    .map(|mark| {
+                        pixels(mark, &projection)
+                            .iter()
+                            .map(|p| (p.x - centre.x, p.y - centre.y))
+                            .collect()
+                    })
+                    .collect();
+
+                assert_eq!(relative[0][0].1, -relative[1][0].1, "at {scale}");
+                assert_eq!(relative[2][0], (0, 0), "at {scale}");
+                shapes.push(relative);
+            }
+
+            assert!(
+                shapes.windows(2).all(|pair| pair[0] == pair[1]),
+                "at {scale}"
+            );
+        }
+    }
+
+    /// A keyhole's outline is one closed stroke, the same either side of
+    /// its centre line, and what fills it stays inside it, filling every
+    /// row it crosses.
+    #[test]
+    fn a_keyhole_is_closed_symmetric_and_filled_inside() {
+        for scale in SCALES {
+            for (radius, half) in [(3.0, 2.0), (3.5, 1.5), (5.0, 2.0)] {
+                let projection = Projection::new((50.0, 50.0), scale);
+                let shape = Shape::Keyhole {
+                    centre: V2::ZERO,
+                    radius,
+                    half,
+                    length: 40.0,
+                };
+                let outline = stroke(&shape, &projection);
+                let at = format!("{radius}, {half} at {scale}");
+
+                for pair in outline
+                    .windows(2)
+                    .chain([[outline[outline.len() - 1], outline[0]].as_slice()])
+                {
+                    assert!(
+                        (pair[0].x - pair[1].x).abs() <= 1 && (pair[0].y - pair[1].y).abs() <= 1,
+                        "{at}: {:?} to {:?}",
+                        pair[0],
+                        pair[1]
+                    );
+                }
+
+                let mut sorted = outline.clone();
+                let mut mirrored: Vec<Point<i32>> =
+                    outline.iter().map(|p| Point::new(p.x, 100 - p.y)).collect();
+                sorted.sort_by_key(|p| (p.x, p.y));
+                mirrored.sort_by_key(|p| (p.x, p.y));
+                assert_eq!(sorted, mirrored, "{at}");
+
+                let rows = inside(&outline);
+                for &(y, from, to) in &rows {
+                    assert!(
+                        !outline
+                            .iter()
+                            .any(|p| p.y == y && (from..=to).contains(&p.x)),
+                        "{at}: row {y} touches the glass"
+                    );
+                    assert!(outline.iter().any(|p| p.y == y && p.x == from - 1), "{at}");
+                    assert!(outline.iter().any(|p| p.y == y && p.x == to + 1), "{at}");
+                }
+
+                let top = outline.iter().map(|p| p.y).min().unwrap();
+                assert_eq!(rows.len() as i32, 2 * (50 - top) - 1, "{at}");
+            }
+        }
+    }
+
+    /// A dot of an odd size is centred on its pixel; an even one is as
+    /// near its point as the grid allows.
+    #[test]
+    fn dots_are_centred_on_their_points() {
+        let block = |at: V2, size: i32| match dot(at, size, Tone::Live).piece {
+            Piece::Block(block) => block,
+            other => panic!("not a dot: {other:?}"),
+        };
+
+        assert_eq!(block(v(10.0, 20.0), 3), rect(9, 19, 3, 3));
+        assert_eq!(block(v(10.4, 19.6), 3), rect(9, 19, 3, 3));
+        assert_eq!(block(v(10.3, 20.7), 2), rect(10, 20, 2, 2));
     }
 
     #[test]
