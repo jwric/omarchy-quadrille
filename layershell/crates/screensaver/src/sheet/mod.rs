@@ -1000,42 +1000,32 @@ impl<'a> Scene<'a> {
         if view.focus.time >= MARK {
             let text = letter(view.focus.part).to_string();
             // Up and right, unless what the view draws or letters is in the
-            // way there and not at another corner; a circle that follows a
-            // moving part keeps to one.
-            let (corner, leader, at, anchor) = if view.detail.follows {
-                marker_letter(centre, radius, CORNERS[0])
+            // way there and not somewhere else round the circle; a circle
+            // that follows a moving part keeps to one place.
+            let ((corner, leader, at, anchor), clear) = if view.detail.follows {
+                (marker_letter(centre, radius, WAYS[0], 0), true)
             } else {
                 let pieces = pieces(self.shown(), None);
-                let drawing = self.layout.drawing();
+                let edges = outlines(self.shown());
 
-                CORNERS
-                    .iter()
-                    .map(|&way| marker_letter(centre, radius, way))
-                    .min_by_key(|&(corner, leader, at, anchor)| {
-                        let area = letter_area(corner, leader, &text, at, anchor);
-
-                        match raster::intersection(area, drawing) {
-                            Some(inside) if inside == area => crowding(&pieces, area),
-                            _ => usize::MAX,
-                        }
-                    })
-                    .expect("Four corners")
+                letter_place(
+                    centre,
+                    radius,
+                    &text,
+                    &pieces,
+                    &edges,
+                    self.layout.drawing(),
+                )
             };
 
-            // Over line work it cannot keep clear of, on the sheet's ground.
-            let top_left = raster::place(LETTERING, &text, at, anchor);
-            let cap_top = top_left.y + i32::from(LETTERING.cap_top());
-
             pen.line(corner, leader, palette.accent);
-            pen.fill(
-                rect(
-                    top_left.x - 1,
-                    cap_top - 1,
-                    i32::from(LETTERING.width(&text)) + 1,
-                    i32::from(LETTERING.cap()) + 2,
-                ),
-                palette.void,
-            );
+
+            // On the sheet's ground over line work it keeps clear of but
+            // for the odd pixel, never over an outline it would break.
+            if clear {
+                pen.fill(knockout(&text, at, anchor), palette.void);
+            }
+
             letters::set(pen, &text, at, anchor, palette.accent);
         }
     }
@@ -1138,33 +1128,145 @@ impl<'a> Scene<'a> {
     }
 }
 
-/// The corners of a detail's circle its letter may stand at, as the ways
-/// out from its centre, the first preferred.
-const CORNERS: [(i32, i32); 4] = [(1, -1), (-1, -1), (1, 1), (-1, 1)];
+/// The ways out from a detail's circle its letter may stand, the first
+/// preferred: its four corners, then its four sides.
+const WAYS: [(i32, i32); 8] = [
+    (1, -1),
+    (-1, -1),
+    (1, 1),
+    (-1, 1),
+    (1, 0),
+    (-1, 0),
+    (0, -1),
+    (0, 1),
+];
 
-/// A detail circle's letter at the corner `(x, y)` out from the circle at
-/// `centre` of `radius`: where its leader leaves the circle and ends, and
-/// where the letter is set from and how.
-fn marker_letter(
-    centre: Point<i32>,
-    radius: i32,
-    (x, y): (i32, i32),
-) -> (Point<i32>, Point<i32>, Point<i32>, Anchor) {
-    let reach = radius * 7 / 10;
-    let corner = Point::new(centre.x + x * reach, centre.y + y * reach);
-    let leader = Point::new(corner.x + x * 6, corner.y + y * 6);
-    let side = if x > 0 {
-        Horizontal::Left
+/// How much further than the least a letter's leader may run, to find a
+/// place clear of the view's outlines; how clear of them it keeps, and
+/// would rather keep, so it reads as the circle's and not as part of what
+/// is drawn beside it.
+const FURTHER: [i32; 3] = [0, 6, 12];
+const ROOM: i32 = 3;
+const ROOMY: i32 = 8;
+
+/// Where a detail circle's letter stands: where its leader leaves the
+/// circle and ends, and where the letter is set from and how.
+type Lettered = (Point<i32>, Point<i32>, Point<i32>, Anchor);
+
+/// A detail circle's letter the way `(x, y)` out from the circle at
+/// `centre` of `radius`, its leader `further` pixels longer than the
+/// least.
+fn marker_letter(centre: Point<i32>, radius: i32, (x, y): (i32, i32), further: i32) -> Lettered {
+    let reach = if x != 0 && y != 0 {
+        radius * 7 / 10
     } else {
-        Horizontal::Right
+        radius
+    };
+    let corner = Point::new(centre.x + x * reach, centre.y + y * reach);
+    let leader = Point::new(corner.x + x * (6 + further), corner.y + y * (6 + further));
+    let side = match x {
+        1 => Horizontal::Left,
+        -1 => Horizontal::Right,
+        _ => Horizontal::Centre,
+    };
+    let (at, height) = match y {
+        // Over or under the end of a leader up or down.
+        _ if x != 0 => (Point::new(leader.x + x * 2, leader.y), Vertical::Middle),
+        -1 => (Point::new(leader.x, leader.y - 2), Vertical::Baseline),
+        _ => (Point::new(leader.x, leader.y + 2), Vertical::CapTop),
     };
 
-    (
-        corner,
-        leader,
-        Point::new(leader.x + x * 2, leader.y),
-        Anchor::new(side, Vertical::Middle),
+    (corner, leader, at, Anchor::new(side, height))
+}
+
+/// Where a detail circle's letter `text` goes round the circle at `centre`
+/// of `radius`, given the view's `pieces` and the pixels of its `edges`,
+/// inside `drawing`; and whether it is clear of every edge (by [`ROOM`]),
+/// so that it can be set on the sheet's ground without breaking one or
+/// crowding it.
+///
+/// Clear of the edges first, then of lettering, then with room round it,
+/// then at a corner on the shortest leader, then where the least line work
+/// is, in the order of [`WAYS`].
+fn letter_place(
+    centre: Point<i32>,
+    radius: i32,
+    text: &str,
+    pieces: &[Inked],
+    edges: &std::collections::HashSet<(i32, i32)>,
+    drawing: Rectangle<i32>,
+) -> (Lettered, bool) {
+    let places = FURTHER.iter().flat_map(|&further| {
+        WAYS.iter()
+            .map(move |&way| (marker_letter(centre, radius, way, further), way, further))
+    });
+
+    places
+        .filter_map(|(place @ (corner, leader, at, anchor), (x, y), further)| {
+            let area = letter_area(corner, leader, text, at, anchor);
+
+            (raster::intersection(area, drawing) == Some(area)).then(|| {
+                let under = knockout(text, at, anchor);
+                let within = |room: i32| {
+                    let around = layout::inset(under, -room);
+
+                    edges
+                        .iter()
+                        .any(|&(x, y)| raster::contains(around, Point::new(x, y)))
+                };
+                let crowding = crowding(pieces, area);
+                let near = further == 0 && x != 0 && y != 0;
+
+                (
+                    place,
+                    (
+                        within(ROOM),
+                        crowding >= LETTERED,
+                        within(ROOMY),
+                        !near,
+                        crowding,
+                    ),
+                )
+            })
+        })
+        .min_by_key(|(_, key)| *key)
+        .map(|(place, (blocked, ..))| (place, !blocked))
+        .unwrap_or((marker_letter(centre, radius, WAYS[0], 0), false))
+}
+
+/// What a detail circle's letter is set on the sheet's ground over: its
+/// capitals and a pixel round them.
+fn knockout(text: &str, at: Point<i32>, anchor: Anchor) -> Rectangle<i32> {
+    let top_left = raster::place(LETTERING, text, at, anchor);
+    let cap_top = top_left.y + i32::from(LETTERING.cap_top());
+
+    rect(
+        top_left.x - 1,
+        cap_top - 1,
+        i32::from(LETTERING.width(text)) + 1,
+        i32::from(LETTERING.cap()) + 2,
     )
+}
+
+/// The pixels of the outlines among `marks`, each through its projection:
+/// the visible edges, which a detail's letter is never set over.
+fn outlines<'m>(
+    marks: impl Iterator<Item = (&'m Mark, &'m Projection)>,
+) -> std::collections::HashSet<(i32, i32)> {
+    let mut edges = std::collections::HashSet::new();
+    let mut buffer = Vec::new();
+
+    for (mark, projection) in marks.filter(|(mark, _)| mark.pass() == crate::draft::Pass::Edges) {
+        raster::rasterize(mark, projection, &mut buffer);
+
+        for inked in buffer.drain(..) {
+            if let raster::Piece::Path { pixels, .. } = inked.piece {
+                edges.extend(pixels.iter().map(|pixel| (pixel.x, pixel.y)));
+            }
+        }
+    }
+
+    edges
 }
 
 /// What a detail circle's letter and its leader take up.
@@ -1779,52 +1881,78 @@ mod tests {
     /// clear of lettering, and not at one that is lettered over.
     #[test]
     fn a_details_letter_keeps_clear_of_lettering() {
+        use std::collections::HashSet;
+
         let centre = Point::new(200, 200);
-        let choose = |pieces: &[Inked]| {
-            CORNERS
-                .iter()
-                .copied()
-                .min_by_key(|&way| {
-                    let (corner, leader, at, anchor) = marker_letter(centre, 40, way);
-                    crowding(pieces, letter_area(corner, leader, "B", at, anchor))
-                })
-                .unwrap()
+        let drawing = rect(0, 0, 400, 400);
+        let place = |way: (i32, i32)| marker_letter(centre, 40, way, 0);
+        let choose = |pieces: &[Inked], edges: &HashSet<(i32, i32)>| {
+            letter_place(centre, 40, "B", pieces, edges, drawing)
         };
         let lettered = |way: (i32, i32)| {
-            let (corner, leader, at, anchor) = marker_letter(centre, 40, way);
+            let (corner, leader, at, anchor) = place(way);
             Inked {
                 piece: raster::Piece::Knockout(letter_area(corner, leader, "B", at, anchor)),
                 tone: Tone::Ink,
             }
         };
-        // A line across where the letter goes up and right.
-        let (corner, ..) = marker_letter(centre, 40, CORNERS[0]);
-        let line = Inked {
-            piece: raster::Piece::path(
-                (150..260).map(|x| Point::new(x, corner.y - 3)).collect(),
-                raster::Stipple::of(Line::Outline),
-            ),
-            tone: Tone::Line,
-        };
+        let none = HashSet::new();
+        // An outline across where the letter goes up and right.
+        let (_, _, at, _) = place(WAYS[0]);
+        let line: HashSet<(i32, i32)> = (150..260).map(|x| (x, at.y)).collect();
 
-        assert_eq!(choose(&[]), CORNERS[0]);
-        assert_eq!(choose(&[lettered(CORNERS[0])]), CORNERS[1]);
+        assert_eq!(choose(&[], &none), (place(WAYS[0]), true));
+        assert_eq!(choose(&[lettered(WAYS[0])], &none).0, place(WAYS[1]));
         assert_eq!(
-            choose(&[lettered(CORNERS[0]), lettered(CORNERS[1])]),
-            CORNERS[2]
+            choose(&[lettered(WAYS[0]), lettered(WAYS[1])], &none).0,
+            place(WAYS[2])
         );
-        // A corner with line work in the way gives way to a clear one, and
-        // is taken before one with lettering in the way.
-        assert_eq!(choose(&[line.clone(), lettered(CORNERS[1])]), CORNERS[2]);
+        // A corner with an outline in the way gives way to a clear one;
+        // with every corner taken, a side is.
+        assert_eq!(choose(&[lettered(WAYS[1])], &line).0, place(WAYS[2]));
         assert_eq!(
-            choose(&[
-                line,
-                lettered(CORNERS[1]),
-                lettered(CORNERS[2]),
-                lettered(CORNERS[3])
-            ]),
-            CORNERS[0]
+            choose(
+                &[lettered(WAYS[1]), lettered(WAYS[2]), lettered(WAYS[3])],
+                &line
+            ),
+            (place(WAYS[4]), true)
         );
+    }
+
+    /// A detail's letter never breaks an outline: with outlines through
+    /// every place near the circle it goes further out, and with them
+    /// everywhere it is set without the ground behind it.
+    #[test]
+    fn a_details_letter_never_breaks_an_outline() {
+        use std::collections::HashSet;
+
+        let centre = Point::new(200, 200);
+        let drawing = rect(0, 0, 400, 400);
+        // Outlines round the circle wherever a letter could stand on the
+        // shortest leader: rings of pixels from 30 to 60 out.
+        let near: HashSet<(i32, i32)> = (100..300_i32)
+            .flat_map(|x| (100..300_i32).map(move |y| (x, y)))
+            .filter(|&(x, y)| {
+                let r = (((x - 200).pow(2) + (y - 200).pow(2)) as f32).sqrt();
+                (30.0..60.0).contains(&r) && (x + y) % 3 == 0
+            })
+            .collect();
+        let (place, clear) = letter_place(centre, 40, "B", &[], &near, drawing);
+        let (_, _, at, anchor) = place;
+
+        assert!(clear);
+        assert!(
+            !near
+                .iter()
+                .any(|&(x, y)| raster::contains(knockout("B", at, anchor), Point::new(x, y)))
+        );
+
+        let everywhere: HashSet<(i32, i32)> = (0..400)
+            .flat_map(|x| (0..400).map(move |y| (x, y)))
+            .filter(|&(x, y)| (x + y) % 3 == 0)
+            .collect();
+
+        assert!(!letter_place(centre, 40, "B", &[], &everywhere, drawing).1);
     }
 
     /// On the displays sheet no dimension's value is lettered over a
