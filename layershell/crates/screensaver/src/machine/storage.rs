@@ -29,6 +29,9 @@ pub enum DriveKind {
     Usb,
     /// A memory card or soldered eMMC.
     Mmc,
+    /// A virtual machine's disk: virtio's `vda`, Xen's `xvda`. It says it
+    /// is rotational, as virtio does unless told otherwise.
+    Virtual,
     Other,
 }
 
@@ -76,6 +79,8 @@ pub(super) fn drives(tree: &Tree) -> Vec<(Drive, Option<File>)> {
                 DriveKind::Usb
             } else if name.starts_with("sd") {
                 DriveKind::Sata
+            } else if name.starts_with("vd") || name.starts_with("xvd") {
+                DriveKind::Virtual
             } else {
                 DriveKind::Other
             };

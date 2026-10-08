@@ -63,7 +63,7 @@ impl Panel {
 }
 
 impl ConnectorKind {
-    fn of(name: &str) -> Self {
+    pub(super) fn of(name: &str) -> Self {
         let kind = name.split('-').next().unwrap_or_default();
 
         match kind {

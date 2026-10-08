@@ -242,7 +242,7 @@ impl Ids {
 }
 
 /// What `pci.ids` calls a base class.
-fn base_class(code: u8) -> Option<&'static str> {
+pub(super) fn base_class(code: u8) -> Option<&'static str> {
     Some(match code {
         0x00 => "Unclassified device",
         0x01 => "Mass storage controller",

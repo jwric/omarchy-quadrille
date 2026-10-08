@@ -696,11 +696,16 @@ fn sources(machine: &Machine) -> Vec<Source> {
         }
 
         let (kind, device) = match sensor.site {
-            Site::Processor => (Kind::Processor, None),
+            Site::Processor(_) => (Kind::Processor, None),
             Site::Module(module) => {
                 modules.push((module, index));
                 (Kind::Memory, None)
             }
+            // By the drive's controller, as the topology draws it.
+            Site::Drive(drive) => (
+                Kind::Drive,
+                machine.drives.get(drive).and_then(|drive| drive.pci),
+            ),
             Site::Board => (Kind::Board, None),
             Site::Device(address) => (device(machine, address), Some(address)),
         };

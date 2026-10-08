@@ -1401,6 +1401,153 @@ mod tests {
         (boxes, lines)
     }
 
+    /// What is wrong with the annotations the sheet placed itself: one
+    /// outside the view, or over another annotation's lettering, or with
+    /// its leader across it.
+    fn placed_faults(sheet: &Sheet<'_>, scene: &Scene<'_>) -> Vec<String> {
+        let mut recorded = Draft::new();
+        sheet.subject.draw(&mut recorded, sheet.showing.moment.run);
+
+        let annotations: Vec<(bool, &Mark)> = recorded
+            .marks()
+            .iter()
+            .zip(scene.draft.marks())
+            .filter(|(mark, _)| mark.shown_in(None) && mark.pass() >= Pass::Annotation)
+            .map(|(mark, placed)| {
+                let auto = matches!(
+                    mark.ink,
+                    Ink::Balloon {
+                        offset: Placement::Auto,
+                        ..
+                    } | Ink::Note {
+                        elbow: Placement::Auto,
+                        ..
+                    }
+                );
+
+                (auto, placed)
+            })
+            .collect();
+        let footprints: Vec<_> = annotations
+            .iter()
+            .map(|(_, mark)| footprint(mark, &scene.main))
+            .collect();
+        let clip = scene.layout.drawing();
+        let mut faults = Vec::new();
+
+        for (i, (auto, _)) in annotations.iter().enumerate() {
+            let (boxes, lines) = &footprints[i];
+
+            if !auto || boxes.is_empty() {
+                continue;
+            }
+
+            if !(boxes
+                .iter()
+                .all(|area| raster::intersection(*area, clip) == Some(*area))
+                && lines.iter().all(|pixel| raster::contains(clip, *pixel)))
+            {
+                faults.push(format!("annotation {i} leaves the view"));
+            }
+
+            for (j, (others, _)) in footprints.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+
+                for other in others {
+                    if boxes
+                        .iter()
+                        .any(|area| raster::intersection(*area, *other).is_some())
+                    {
+                        faults.push(format!("annotation {i} covers annotation {j}"));
+                    }
+                    if lines.iter().any(|pixel| raster::contains(*other, *pixel)) {
+                        faults.push(format!("annotation {i}'s leader crosses annotation {j}"));
+                    }
+                }
+            }
+        }
+
+        faults
+    }
+
+    /// The box a line of lettering takes.
+    fn text_box(at: Point<i32>, text: &str) -> Rectangle<i32> {
+        rect(
+            at.x,
+            at.y,
+            i32::from(LETTERING.width(text)),
+            i32::from(LETTERING.line()),
+        )
+    }
+
+    /// What is wrong with the lettering of the sheet's view and detail: a
+    /// line of the view's outside it, or over another mark's; a line of
+    /// the detail's own across the edge of its window, which cuts it.
+    fn lettering_faults(scene: &Scene<'_>) -> Vec<String> {
+        let drawing = scene.layout.drawing();
+        let mut faults = Vec::new();
+        let mut lettered: Vec<(usize, String, Rectangle<i32>)> = Vec::new();
+
+        for (index, mark) in scene.draft.marks().iter().enumerate() {
+            if !mark.shown_in(None) {
+                continue;
+            }
+
+            let mut pieces = Vec::new();
+            raster::rasterize(mark, &scene.main, &mut pieces);
+
+            for inked in pieces {
+                if let raster::Piece::Text { at, text } = inked.piece {
+                    let area = text_box(at, &text);
+
+                    if raster::intersection(area, drawing) != Some(area) {
+                        faults.push(format!("{text:?} leaves the view"));
+                    }
+                    lettered.push((index, text, area));
+                }
+            }
+        }
+
+        for (i, (mark, text, area)) in lettered.iter().enumerate() {
+            for (other_mark, other, other_area) in &lettered[i + 1..] {
+                if mark != other_mark && raster::intersection(*area, *other_area).is_some() {
+                    faults.push(format!("{text:?} is over {other:?}"));
+                }
+            }
+        }
+
+        if let Some(view) = &scene.detail {
+            let window = layout::inset(scene.layout.detail_window(), 1);
+
+            for mark in scene.draft.marks() {
+                if mark.scope != crate::draft::Scope::Detail || mark.part != Some(view.focus.part) {
+                    continue;
+                }
+
+                let mut pieces = Vec::new();
+                raster::rasterize(mark, &view.projection, &mut pieces);
+
+                for inked in pieces {
+                    if let raster::Piece::Text { at, text } = inked.piece {
+                        let area = text_box(at, &text);
+                        let shown = raster::intersection(area, window);
+
+                        if shown.is_some() && shown != Some(area) {
+                            faults.push(format!(
+                                "detail {}: {text:?} is cut",
+                                letter(view.focus.part)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        faults
+    }
+
     /// Every annotation the sheet places itself is inside the view, and
     /// neither it nor its leader covers another annotation's lettering, on
     /// both displays, for every subject, while it runs.
@@ -1417,78 +1564,108 @@ mod tests {
                 for local in [12.0, 20.0, 30.0, 40.0] {
                     let sheet = sheet(&subjects, index, output, local);
                     let scene = Scene::new(&sheet, width as i32, height as i32, &planned);
-                    let mut recorded = Draft::new();
-                    sheet.subject.draw(&mut recorded, sheet.showing.moment.run);
+                    let faults = placed_faults(&sheet, &scene);
 
-                    let annotations: Vec<(bool, &Mark)> = recorded
-                        .marks()
-                        .iter()
-                        .zip(scene.draft.marks())
-                        .filter(|(mark, _)| mark.shown_in(None) && mark.pass() >= Pass::Annotation)
-                        .map(|(mark, placed)| {
-                            let auto = matches!(
-                                mark.ink,
-                                Ink::Balloon {
-                                    offset: Placement::Auto,
-                                    ..
-                                } | Ink::Note {
-                                    elbow: Placement::Auto,
-                                    ..
-                                }
-                            );
+                    assert!(
+                        faults.is_empty(),
+                        "{} on the {} at {local} s: {}",
+                        subjects[index].name(),
+                        if output == Output::LAPTOP {
+                            "laptop"
+                        } else {
+                            "ultrawide"
+                        },
+                        faults.join("; ")
+                    );
+                }
+            }
+        }
+    }
 
-                            (auto, placed)
-                        })
-                        .collect();
-                    let footprints: Vec<_> = annotations
-                        .iter()
-                        .map(|(_, mark)| footprint(mark, &scene.main))
-                        .collect();
-                    let clip = scene.layout.drawing();
-                    let display = if output == Output::LAPTOP {
-                        "laptop"
-                    } else {
-                        "ultrawide"
-                    };
-                    let at = format!("{} on the {display} at {local} s", subjects[index].name());
+    /// The sheets of the computer read well whatever the computer: for
+    /// every kind of machine, on both outputs, at the moment each part is
+    /// in detail, the view's lettering is inside it and clear of other
+    /// lettering, what the sheet places is clear of it too, and no line of
+    /// a detail is cut by its window.
+    ///
+    /// The sheets that do not yet are [`KNOWN`], each with why; one that
+    /// reads well fails the test until it is taken off, so the list stays
+    /// true.
+    #[test]
+    fn every_machines_sheets_are_lettered_clear_on_both_outputs() {
+        use crate::machine::Fixture;
 
-                    for (i, (auto, _)) in annotations.iter().enumerate() {
-                        let (boxes, lines) = &footprints[i];
+        /// Machine, sheet and output.
+        const KNOWN: [(Fixture, &str, &str); 3] = [
+            // Its diagram is far larger than the view, as eight drives on
+            // their own root ports and six network ports cannot be folded,
+            // so it is drawn far below the scale its lettering is sized
+            // for.
+            (Fixture::Server, "topology", "laptop"),
+            (Fixture::Server, "topology", "ultrawide"),
+            // With no module to draw, the memory's detail lettering is
+            // anchored at the edge of a bank the detail magnifies past its
+            // window; the processor's title likewise.
+            (Fixture::Vm, "topology", "laptop"),
+        ];
 
-                        if !auto || boxes.is_empty() {
-                            continue;
-                        }
+        let mut wrong = Vec::new();
 
-                        assert!(
-                            boxes
-                                .iter()
-                                .all(|area| raster::intersection(*area, clip) == Some(*area))
-                                && lines.iter().all(|pixel| raster::contains(clip, *pixel)),
-                            "{at}: annotation {i} leaves the view"
+        for fixture in Fixture::ALL {
+            let machine = fixture.machine();
+            let subjects = subjects::all(&machine);
+
+            for index in 0..subjects.len() {
+                if subjects[index].card().domain != subjects::Domain::Computing {
+                    continue;
+                }
+
+                let parts = subjects[index].card().parts.len();
+                let name = subjects[index].name();
+
+                for (output, desk) in [(Output::LAPTOP, "laptop"), (Output::ULTRAWIDE, "ultrawide")]
+                {
+                    let (width, height) = output.virtual_size();
+                    let planned = Planned::default();
+                    let mut faults = Vec::new();
+
+                    // Each part in detail, settled.
+                    for part in 0..parts {
+                        let local = timeline::PLOT_START
+                            + timeline::PLOT
+                            + timeline::SETTLE
+                            + timeline::DETAIL * part as f32
+                            + MARK
+                            + timeline::DETAIL_PLOT
+                            + 1.0;
+                        let sheet = sheet(&subjects, index, output, local);
+                        let scene = Scene::new(&sheet, width as i32, height as i32, &planned);
+
+                        faults.extend(
+                            placed_faults(&sheet, &scene)
+                                .into_iter()
+                                .chain(lettering_faults(&scene))
+                                .map(|fault| format!("at {local:.1} s, {fault}")),
                         );
+                    }
 
-                        for (j, (others, _)) in footprints.iter().enumerate() {
-                            if i == j {
-                                continue;
-                            }
+                    let known = KNOWN.contains(&(fixture, name, desk));
 
-                            for other in others {
-                                assert!(
-                                    boxes
-                                        .iter()
-                                        .all(|area| raster::intersection(*area, *other).is_none()),
-                                    "{at}: annotation {i} covers annotation {j}"
-                                );
-                                assert!(
-                                    !lines.iter().any(|pixel| raster::contains(*other, *pixel)),
-                                    "{at}: annotation {i}'s leader crosses annotation {j}"
-                                );
-                            }
-                        }
+                    match (known, faults.is_empty()) {
+                        (false, false) => wrong.push(format!(
+                            "{fixture:?} {name} on the {desk}: {}",
+                            faults[..faults.len().min(4)].join("; ")
+                        )),
+                        (true, true) => wrong.push(format!(
+                            "{fixture:?} {name} on the {desk} reads well now: take it off KNOWN"
+                        )),
+                        _ => {}
                     }
                 }
             }
         }
+
+        assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
     }
 
     /// Every view the sheet shows is framed inside a cell of the main area
@@ -1552,11 +1729,16 @@ mod tests {
     }
 
     /// Every value in the title block fits its cell, on both of the desk's
-    /// displays, for every subject: a cut value reads as a different value.
+    /// displays, for every subject and every kind of machine: a cut value
+    /// reads as a different value.
     #[test]
     fn the_title_block_never_cuts_a_value() {
-        let subjects = subjects::all(&Machine::fixture());
+        for fixture in crate::machine::Fixture::ALL {
+            the_title_block_never_cuts_a_value_of(&subjects::all(&fixture.machine()));
+        }
+    }
 
+    fn the_title_block_never_cuts_a_value_of(subjects: &[Box<dyn Subject>]) {
         for output in [Output::LAPTOP, Output::ULTRAWIDE] {
             let (width, height) = output.virtual_size();
 
@@ -1647,15 +1829,27 @@ mod tests {
     }
 
     /// On the displays sheet no dimension's value is lettered over a
-    /// display's edge, on either display.
+    /// display's edge, on either display, whatever the machine's displays.
     #[test]
     fn the_displays_dimensions_clear_their_edges() {
-        let subjects = subjects::all(&Machine::fixture());
-        let index = subjects::find(&subjects, "displays").expect("The displays sheet");
+        let mut drawn = 0;
 
+        for fixture in crate::machine::Fixture::ALL {
+            let subjects = subjects::all(&fixture.machine());
+
+            if let Some(index) = subjects::find(&subjects, "displays") {
+                the_displays_dimensions_clear_their_edges_on(&subjects, index);
+                drawn += 1;
+            }
+        }
+
+        assert!(drawn >= 2);
+    }
+
+    fn the_displays_dimensions_clear_their_edges_on(subjects: &[Box<dyn Subject>], index: usize) {
         for output in [Output::LAPTOP, Output::ULTRAWIDE] {
             let (width, height) = output.virtual_size();
-            let sheet = sheet(&subjects, index, output, 12.0);
+            let sheet = sheet(subjects, index, output, 12.0);
             let scene = Scene::new(&sheet, width as i32, height as i32, &Planned::default());
             let mut values = Vec::new();
             let mut edges = Vec::new();

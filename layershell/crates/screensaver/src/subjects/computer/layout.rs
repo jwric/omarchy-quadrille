@@ -402,6 +402,8 @@ fn drive_kind(drive: &Drive) -> &'static str {
     match drive.kind {
         DriveKind::Nvme => "NVMe SSD",
         DriveKind::Mmc => "MMC",
+        // A virtual machine's disk says it spins whatever it is on.
+        DriveKind::Virtual => "VIRTUAL DISK",
         _ if drive.rotational => "HARD DISK",
         DriveKind::Sata => "SSD",
         _ => "DRIVE",

@@ -276,37 +276,104 @@ mod tests {
         assert_eq!(fit("WI-FI", 12), "WI-FI");
     }
 
+    /// A machine has the sheets it has something to show on, and no
+    /// others: a server with no display has no displays sheet, a virtual
+    /// machine with no monitor no cooling sheet, a display whose size is
+    /// not known is not drawn to scale, and a machine of which nothing is
+    /// known has none.
     #[test]
-    fn the_fixture_has_every_sheet() {
-        assert_eq!(sheets(&Machine::fixture()).len(), 3);
+    fn each_machine_has_the_sheets_it_has_something_for() {
+        use crate::machine::Fixture;
+        use crate::machine::tests::Fake;
+
+        for (fixture, expected) in [
+            (Fixture::Laptop, &["topology", "displays", "cooling"][..]),
+            (Fixture::Desktop, &["topology", "displays", "cooling"]),
+            (Fixture::Server, &["topology", "cooling"]),
+            (Fixture::Vm, &["topology"]),
+        ] {
+            let names: Vec<&str> = sheets(&fixture.machine())
+                .iter()
+                .map(|sheet| sheet.name())
+                .collect();
+
+            assert_eq!(names, expected, "{fixture:?}");
+        }
+
+        assert!(sheets(&Fake::new().read()).is_empty());
+    }
+
+    /// Whatever the machine, its sheets' titles fit the title block, part
+    /// names and values the parts list, and the specifications' rows their
+    /// column, no more of them than it has room for.
+    #[test]
+    fn every_machines_cards_fit_their_columns() {
+        for fixture in crate::machine::Fixture::ALL {
+            for sheet in sheets(&fixture.machine()) {
+                let card = sheet.card();
+                let at = format!("{fixture:?} {}", sheet.name());
+
+                assert!(card.title.chars().count() <= 24, "{at}: {}", card.title);
+
+                for part in &card.parts {
+                    assert!(part.name.chars().count() <= 14, "{at}: {}", part.name);
+                    assert!(
+                        part.material.chars().count() <= 10,
+                        "{at}: {}",
+                        part.material
+                    );
+                    assert!(part.spec.len() <= SPEC_ROWS, "{at}: {}", part.name);
+
+                    for (name, value) in &part.spec {
+                        assert!(
+                            name.chars().count() + value.chars().count() + 2 <= SPEC_ROOM,
+                            "{at}: {}: {name} {value}",
+                            part.name
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// A machine's serial numbers, addresses and names are in its tree
     /// beside what is read, and none of them is lettered on a sheet: not in
-    /// what is drawn as a sheet runs, its card or its readings.
+    /// what is drawn as a sheet runs, its card or its readings. Every kind
+    /// of machine is read from its tree, the laptop's with more planted.
     #[test]
     fn no_identifier_reaches_a_sheet() {
-        use crate::machine::tests::{IDENTIFIERS, laptop, plant};
+        use crate::machine::Fixture;
+        use crate::machine::tests::{Fake, IDENTIFIERS, plant};
 
-        let fake = laptop();
-        plant(&fake);
+        for fixture in Fixture::ALL {
+            let fake = Fake::new();
+            fixture.tree(&fake);
 
-        let machine = fake.read();
-        let sheets = sheets(&machine);
-
-        assert_eq!(sheets.len(), 3);
-
-        for sheet in &sheets {
-            let mut seen = format!("{:?}", sheet.card());
-
-            for t in [0.0, 11.5, 17.0, 24.0, 31.0, 38.0, 45.0, 52.0, 59.0, 66.0] {
-                let mut draft = Draft::new();
-                sheet.draw(&mut draft, t);
-                seen += &format!("{:?}{:?}", draft.marks(), sheet.readings(t));
+            if fixture == Fixture::Laptop {
+                plant(&fake);
             }
 
-            for secret in IDENTIFIERS {
-                assert!(!seen.contains(secret), "{secret} is on {}", sheet.name());
+            let machine = fake.read();
+            let sheets = sheets(&machine);
+
+            assert!(!sheets.is_empty());
+
+            for sheet in &sheets {
+                let mut seen = format!("{:?}", sheet.card());
+
+                for t in [0.0, 11.5, 17.0, 24.0, 31.0, 38.0, 45.0, 52.0, 59.0, 66.0] {
+                    let mut draft = Draft::new();
+                    sheet.draw(&mut draft, t);
+                    seen += &format!("{:?}{:?}", draft.marks(), sheet.readings(t));
+                }
+
+                for secret in IDENTIFIERS {
+                    assert!(
+                        !seen.contains(secret),
+                        "{secret} is on {fixture:?}'s {}",
+                        sheet.name()
+                    );
+                }
             }
         }
     }

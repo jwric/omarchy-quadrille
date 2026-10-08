@@ -90,7 +90,7 @@ impl Topology {
             parts,
         };
         let temperature = machine
-            .sensors_on(Site::Processor)
+            .sensors_on(Site::Processor(0))
             .filter(|(_, sensor)| sensor.kind == SensorKind::Temperature)
             .min_by_key(|(_, sensor)| {
                 !sensor

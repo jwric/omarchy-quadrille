@@ -285,16 +285,29 @@ mod tests {
     use crate::draft::raster::{Projection, rasterize, rect};
     use crate::draft::{Ink, Mark};
 
+    /// Every subject, and the sheets of every kind of machine.
+    fn every_machines_subjects() -> Vec<Vec<Box<dyn Subject>>> {
+        crate::machine::Fixture::ALL
+            .iter()
+            .map(|fixture| all(&fixture.machine()))
+            .collect()
+    }
+
     #[test]
     fn every_subject_is_named_once_and_documents_its_parts() {
-        let subjects = all(&Machine::fixture());
+        for subjects in every_machines_subjects() {
+            names_and_documents(&subjects);
+        }
+    }
+
+    fn names_and_documents(subjects: &[Box<dyn Subject>]) {
         let mut names: Vec<_> = subjects.iter().map(|s| s.name()).collect();
         names.sort();
         names.dedup();
 
         assert_eq!(names.len(), subjects.len());
 
-        for subject in &subjects {
+        for subject in subjects {
             let card = subject.card();
 
             assert!(!card.parts.is_empty(), "{} has no parts", subject.name());
@@ -343,7 +356,7 @@ mod tests {
 
     #[test]
     fn every_subject_draws_at_any_moment() {
-        for subject in all(&Machine::fixture()) {
+        for subject in every_machines_subjects().into_iter().flatten() {
             // The extent fitted to a laptop-sized view.
             let extent = subject.extent();
             let scale = (560.0 / extent.width()).min(400.0 / extent.height());

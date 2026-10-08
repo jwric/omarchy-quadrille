@@ -1,5 +1,5 @@
-//! What the machine is doing: its hardware monitors' temperatures, fan
-//! speeds and power, its batteries' charge and its I/O.
+//! What the machine is doing: its hardware monitors' temperatures and fan
+//! speeds, its batteries' charge and its I/O.
 //!
 //! The inventory says what is measured ([`Sensor`]); a [`Sampler`] says
 //! what it reads. On the machine a background thread reads every source
@@ -22,37 +22,53 @@ pub struct Sensor {
     /// The monitor's chip, as its driver names it: `coretemp`, `nvme`,
     /// `spd5118`.
     pub chip: String,
+    /// The chip's number for it: 2 for `fan2`, as `sensors` and a board's
+    /// headers count.
+    #[allow(dead_code, reason = "the cooling sheet will name fans by it")]
+    pub channel: u32,
     /// What the chip calls it: `Package id 0`, `Composite`.
     pub label: Option<String>,
     /// What it is on.
     pub site: Site,
 }
 
-/// What a sensor measures, and the unit its values are in.
+/// What a sensor measures, and the unit its values are in. A monitor's
+/// voltages, currents and power are not read: no sheet draws them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensorKind {
     /// In °C.
     Temperature,
     /// In revolutions a minute.
     Fan,
-    /// In watts.
-    Power,
-    /// In volts.
-    Voltage,
-    /// In amperes.
-    Current,
+}
+
+impl SensorKind {
+    /// Whether `value` is one a working sensor of the kind reads. A
+    /// monitor's input with nothing wired to it reads what its register
+    /// holds: -128 or 127 °C on a board's Super I/O chip, 0 °C on a
+    /// channel the firmware never fills. Those are no temperatures.
+    pub fn plausible(self, value: f32) -> bool {
+        match self {
+            Self::Temperature => value > 0.0 && value < 115.0,
+            Self::Fan => value >= 0.0,
+        }
+    }
 }
 
 /// What a sensor is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Site {
-    /// The processor package or one of its cores.
-    Processor,
+    /// Processor package `n` or one of its cores: the packages in the order
+    /// of their monitors (`coretemp.0` and `coretemp.1`, or a `k10temp` on
+    /// each package's 18.3 and 19.3 functions).
+    Processor(usize),
     /// Memory module `n`, in the order of
     /// [`Memory::modules`](super::Memory::modules).
     Module(usize),
-    /// A PCI device: a graphics card, a drive's controller, a network
-    /// adapter.
+    /// Drive `n`, in the order of [`Machine::drives`](super::Machine::drives):
+    /// an NVMe drive's controller, or the disk behind a SATA one.
+    Drive(usize),
+    /// A PCI device: a graphics card, a network adapter.
     Device(PciAddress),
     /// The board: the embedded controller's fans, the ACPI thermal zone.
     Board,
@@ -106,9 +122,9 @@ pub struct Traffic {
 /// What the hardware monitors offer.
 pub(super) struct Hwmon {
     pub sensors: Vec<Sensor>,
-    /// Each sensor's value file, from the root, and what its values are
-    /// divided by to be in the sensor's unit.
-    pub sources: Vec<(String, f64)>,
+    /// Each sensor's value file, from the root, what its values are
+    /// divided by to be in the sensor's unit, and its kind.
+    pub sources: Vec<(String, f64, SensorKind)>,
     pub modules: Vec<Module>,
 }
 
@@ -122,20 +138,21 @@ const MODULE_CHIPS: [(&str, Option<&str>); 2] = [("spd5118", Some("DDR5")), ("jc
 /// adapter.
 const WIRELESS_CHIPS: [&str; 4] = ["iwlwifi", "mt79", "ath1", "rtw"];
 
-/// The channels of a hardware monitor: prefix, kind, value suffixes in the
-/// order they are preferred, and what a value is in the kind's unit
-/// (millidegrees, microwatts, millivolts, milliamperes).
-const CHANNELS: [(&str, SensorKind, &[&str], f64); 5] = [
-    ("temp", SensorKind::Temperature, &["input"], 1e3),
-    ("fan", SensorKind::Fan, &["input"], 1.0),
-    ("power", SensorKind::Power, &["average", "input"], 1e6),
-    ("in", SensorKind::Voltage, &["input"], 1e3),
-    ("curr", SensorKind::Current, &["input"], 1e3),
+/// The channels of a hardware monitor that are read: prefix, kind, and
+/// what a value is in the kind's unit (millidegrees, revolutions a minute).
+const CHANNELS: [(&str, SensorKind, f64); 2] = [
+    ("temp", SensorKind::Temperature, 1e3),
+    ("fan", SensorKind::Fan, 1.0),
 ];
 
 /// Reads what every hardware monitor but the power supplies' measures (the
-/// batteries are read as batteries).
-pub(super) fn hwmon(tree: &Tree, pci: &[PciDevice]) -> Hwmon {
+/// batteries are read as batteries), placed on the PCI devices, and on the
+/// drives (by their kernel names).
+///
+/// A temperature that reads nonsense when the machine is read is an input
+/// with nothing on it, and is left out; a drive's is not read then, as it
+/// is a command to the drive.
+pub(super) fn hwmon(tree: &Tree, pci: &[PciDevice], drives: &[String]) -> Hwmon {
     const DIR: &str = "sys/class/hwmon";
 
     // Each chip's directory, name, the device it is on (an I²C address
@@ -168,7 +185,23 @@ pub(super) fn hwmon(tree: &Tree, pci: &[PciDevice]) -> Hwmon {
             Some((bus.as_str(), *generation))
         })
         .collect();
-    modules.sort_by_key(|(bus, _)| super::natural(bus));
+    modules.sort_by_key(|(bus, _)| (i2c(bus), super::natural(bus)));
+
+    // The processor's packages, by the devices their monitors are on.
+    let mut packages: Vec<&str> = chips
+        .iter()
+        .filter(|(_, chip, ..)| PROCESSOR_CHIPS.contains(&chip.as_str()))
+        .map(|(_, _, bus, _)| bus.as_str())
+        .collect();
+    packages.sort_by_key(|bus| super::natural(bus));
+    packages.dedup();
+
+    // What each drive's monitor would be on: an NVMe drive's controller, a
+    // SATA disk's SCSI device.
+    let devices: Vec<Option<std::path::PathBuf>> = drives
+        .iter()
+        .map(|name| std::fs::canonicalize(tree.path(format!("sys/block/{name}/device"))).ok())
+        .collect();
 
     let mut sensors = Vec::new();
     let mut sources = Vec::new();
@@ -179,41 +212,57 @@ pub(super) fn hwmon(tree: &Tree, pci: &[PciDevice]) -> Hwmon {
             .any(|(name, _)| name == chip)
             .then(|| modules.iter().position(|(on, _)| on == bus))
             .flatten();
-        let site = match module {
-            Some(module) => Site::Module(module),
-            None => site(chip, path, pci),
+        let on = std::fs::canonicalize(tree.path(format!("{DIR}/{entry}/device"))).ok();
+        let drive = on.as_ref().and_then(|on| {
+            devices
+                .iter()
+                .position(|device| device.as_ref() == Some(on))
+        });
+        let site = match (module, drive) {
+            (Some(module), _) => Site::Module(module),
+            (None, Some(drive)) => Site::Drive(drive),
+            _ if PROCESSOR_CHIPS.contains(&chip.as_str()) => Site::Processor(
+                packages
+                    .iter()
+                    .position(|package| package == bus)
+                    .unwrap_or(0),
+            ),
+            _ => site(chip, path, pci),
         };
+        let slow = SLOW_CHIPS.contains(&chip.as_str());
         let files = tree.entries(format!("{DIR}/{entry}"));
 
-        for (prefix, kind, suffixes, per_unit) in CHANNELS {
+        for (prefix, kind, per_unit) in CHANNELS {
             let mut numbers: Vec<u32> = files
                 .iter()
                 .filter_map(|file| {
                     let (channel, suffix) = file.strip_prefix(prefix)?.split_once('_')?;
-                    suffixes
-                        .contains(&suffix)
-                        .then(|| channel.parse().ok())
-                        .flatten()
+                    (suffix == "input").then(|| channel.parse().ok()).flatten()
                 })
                 .collect();
             numbers.sort();
             numbers.dedup();
 
             for n in numbers {
-                let Some(suffix) = suffixes
-                    .iter()
-                    .find(|suffix| files.contains(&format!("{prefix}{n}_{suffix}")))
-                else {
+                let source = format!("{DIR}/{entry}/{prefix}{n}_input");
+                let nonsense = kind == SensorKind::Temperature
+                    && !slow
+                    && tree
+                        .number::<f64>(&source)
+                        .is_some_and(|value| !kind.plausible((value / per_unit) as f32));
+
+                if nonsense {
                     continue;
-                };
+                }
 
                 sensors.push(Sensor {
                     kind,
                     chip: chip.clone(),
+                    channel: n,
                     label: tree.text(format!("{DIR}/{entry}/{prefix}{n}_label")),
                     site,
                 });
-                sources.push((format!("{DIR}/{entry}/{prefix}{n}_{suffix}"), per_unit));
+                sources.push((source, per_unit, kind));
             }
         }
     }
@@ -230,15 +279,22 @@ pub(super) fn hwmon(tree: &Tree, pci: &[PciDevice]) -> Hwmon {
     }
 }
 
-/// What a chip that is not on a memory module measures: by its name, or
-/// by the device it is on.
+/// Where an I²C device is, `1-001a`, as numbers to order by: its bus, and
+/// its address, which is in hex.
+fn i2c(name: &str) -> Option<(u32, u32)> {
+    let (bus, address) = name.split_once('-')?;
+
+    Some((bus.parse().ok()?, u32::from_str_radix(address, 16).ok()?))
+}
+
+/// What a chip that is not on the processor, a memory module or a drive
+/// measures: by the device it is on, or by its name.
 fn site(chip: &str, path: &[PciAddress], pci: &[PciDevice]) -> Site {
     let on = path
         .last()
         .and_then(|address| pci.iter().find(|device| device.address == *address));
 
     match on {
-        _ if PROCESSOR_CHIPS.contains(&chip) => Site::Processor,
         // A chip behind the board's own bridges (the embedded controller
         // behind the LPC bridge, the SMBus) measures the board.
         Some(device)
@@ -260,6 +316,8 @@ pub(super) struct Channel {
     pub file: File,
     /// What its values are divided by to be in its kind's unit.
     pub per_unit: f64,
+    /// What it measures: a value its kind does not read is no reading.
+    pub kind: SensorKind,
     /// Whether it is read only now and then ([`Sensor::slow`]).
     pub slow: bool,
 }
@@ -341,7 +399,8 @@ impl Gauges {
 
                     match held {
                         Some(held) if channel.slow => held.sensor(index),
-                        _ => Some((number(&channel.file)? / channel.per_unit) as f32),
+                        _ => Some((number(&channel.file)? / channel.per_unit) as f32)
+                            .filter(|value| channel.kind.plausible(*value)),
                     }
                 })
                 .collect(),
@@ -518,13 +577,13 @@ mod tests {
                     SensorKind::Temperature,
                     "cpu_thermal",
                     Some("Package"),
-                    Site::Processor
+                    Site::Processor(0)
                 ),
                 (
                     SensorKind::Temperature,
                     "nvme",
                     Some("Composite"),
-                    Site::Device(PciAddress::new(0, 1, 0, 0))
+                    Site::Drive(0)
                 ),
                 (SensorKind::Temperature, "spd5118", None, Site::Module(0)),
                 (SensorKind::Temperature, "spd5118", None, Site::Module(1)),
@@ -537,7 +596,168 @@ mod tests {
         assert_eq!(snapshot.sensor(1), Some(52.0));
         assert_eq!(snapshot.sensor(5), Some(2200.0));
         assert_eq!(machine.fans().count(), 2);
-        assert_eq!(machine.sensors_on(Site::Processor).count(), 1);
+        assert_eq!(machine.sensors_on(Site::Processor(0)).count(), 1);
+    }
+
+    /// A temperature input with nothing wired to it reads its register's
+    /// limits, or the 0 a firmware never filled in: it is left out when
+    /// the machine is read, and a reading that turns to nonsense later is
+    /// no reading.
+    #[test]
+    fn an_unwired_input_is_no_temperature() {
+        let fake = Fake::new();
+        let at = "sys/class/hwmon/hwmon0";
+        fake.file(&format!("{at}/name"), "nct6799\n");
+
+        for (n, millidegrees) in [
+            (1, "32000"),
+            (2, "127000"),
+            (3, "-128000"),
+            (4, "0"),
+            (5, "41500"),
+        ] {
+            fake.file(&format!("{at}/temp{n}_input"), format!("{millidegrees}\n"));
+        }
+
+        let machine = fake.read();
+        let channels: Vec<u32> = machine.sensors.iter().map(|s| s.channel).collect();
+
+        assert_eq!(channels, [1, 5]);
+        assert_eq!(machine.sample(0.0).sensors, [Some(32.0), Some(41.5)]);
+
+        let (_, gauges) = super::super::Machine::inventory(fake.root(), &Default::default());
+        fake.file(&format!("{at}/temp5_input"), "-128000\n");
+
+        assert_eq!(gauges.sample(None, None).0.sensors, [Some(32.0), None]);
+    }
+
+    /// Only temperatures and fan speeds are read: no sheet draws a
+    /// monitor's voltages, currents or power. A fan keeps the chip's number
+    /// for it.
+    #[test]
+    fn only_temperatures_and_fans_are_read() {
+        let fake = Fake::new();
+        let at = "sys/class/hwmon/hwmon0";
+        fake.file(&format!("{at}/name"), "nct6799\n")
+            .file(&format!("{at}/in0_input"), "1368\n")
+            .file(&format!("{at}/curr1_input"), "500\n")
+            .file(&format!("{at}/power1_average"), "21000000\n")
+            .file(&format!("{at}/fan2_input"), "1180\n")
+            .file(&format!("{at}/fan7_input"), "0\n")
+            .file(&format!("{at}/temp1_input"), "32000\n");
+
+        let machine = fake.read();
+        let found: Vec<_> = machine
+            .sensors
+            .iter()
+            .map(|s| (s.kind, s.channel))
+            .collect();
+
+        assert_eq!(
+            found,
+            [
+                (SensorKind::Temperature, 1),
+                (SensorKind::Fan, 2),
+                (SensorKind::Fan, 7)
+            ]
+        );
+        assert_eq!(
+            machine.sample(0.0).sensors,
+            [Some(32.0), Some(1180.0), Some(0.0)]
+        );
+    }
+
+    /// Each package of a processor has its monitor, on a device of its
+    /// own: `coretemp.0` and `coretemp.1`, or `k10temp` on each package's
+    /// function 3 of devices 18 and 19.
+    #[test]
+    fn each_package_has_its_monitor() {
+        let fake = Fake::new();
+
+        for (n, device) in ["platform/coretemp.1", "platform/coretemp.0"]
+            .iter()
+            .enumerate()
+        {
+            fake.dir(&format!("sys/devices/{device}"))
+                .file(&format!("sys/class/hwmon/hwmon{n}/name"), "coretemp\n")
+                .file(&format!("sys/class/hwmon/hwmon{n}/temp1_input"), "50000\n")
+                .points(
+                    &format!("sys/class/hwmon/hwmon{n}/device"),
+                    &format!("sys/devices/{device}"),
+                );
+        }
+
+        let sites: Vec<Site> = fake.read().sensors.iter().map(|s| s.site).collect();
+        assert_eq!(sites, [Site::Processor(1), Site::Processor(0)]);
+
+        let fake = Fake::new();
+
+        for (n, function) in ["0000:00:19.3", "0000:00:18.3"].iter().enumerate() {
+            let device = format!("sys/devices/pci0000:00/{function}");
+            fake.file(&format!("{device}/class"), "0x060000\n")
+                .file(&format!("{device}/vendor"), "0x0f0f\n")
+                .file(&format!("{device}/device"), "0x0018\n")
+                .points(&format!("sys/bus/pci/devices/{function}"), &device)
+                .file(&format!("sys/class/hwmon/hwmon{n}/name"), "k10temp\n")
+                .file(&format!("sys/class/hwmon/hwmon{n}/temp1_input"), "50000\n")
+                .points(&format!("sys/class/hwmon/hwmon{n}/device"), &device);
+        }
+
+        let sites: Vec<Site> = fake.read().sensors.iter().map(|s| s.site).collect();
+        assert_eq!(sites, [Site::Processor(1), Site::Processor(0)]);
+    }
+
+    /// A drive's monitor is placed on the drive, not on the controller it
+    /// is behind: two SATA disks on one controller are two drives.
+    #[test]
+    fn a_drives_monitor_is_on_its_drive() {
+        let fake = Fake::new();
+        super::super::Fixture::Desktop.tree(&fake);
+        let machine = fake.read();
+        let on_drives: Vec<(&str, Site)> = machine
+            .sensors
+            .iter()
+            .filter_map(|s| match s.site {
+                Site::Drive(n) => Some((machine.drives[n].name.as_str(), s.site)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            on_drives,
+            [
+                ("nvme0n1", Site::Drive(0)),
+                ("nvme0n1", Site::Drive(0)),
+                ("nvme0n1", Site::Drive(0)),
+                ("sda", Site::Drive(1)),
+                ("sdb", Site::Drive(2)),
+            ]
+        );
+    }
+
+    /// Modules are in the order of their addresses, which are in hex:
+    /// 0x18 before 0x1a, and bus 0's before bus 1's.
+    #[test]
+    fn modules_are_in_the_order_of_their_addresses() {
+        let fake = Fake::new();
+        let smbus = "sys/devices/pci0000:00/0000:00:1f.4";
+
+        for (n, (bus, address)) in [(1, 0x18), (0, 0x1a), (0, 0x18)].iter().enumerate() {
+            let device = format!("{smbus}/i2c-{bus}/{bus}-{address:04x}");
+            fake.dir(&device)
+                .file(&format!("sys/class/hwmon/hwmon{n}/name"), "jc42\n")
+                .file(
+                    &format!("sys/class/hwmon/hwmon{n}/temp1_input"),
+                    format!("{}\n", 40_000 + n),
+                )
+                .points(&format!("sys/class/hwmon/hwmon{n}/device"), &device);
+        }
+
+        let sites: Vec<Site> = fake.read().sensors.iter().map(|s| s.site).collect();
+
+        assert_eq!(sites, [Site::Module(2), Site::Module(1), Site::Module(0)]);
+        assert_eq!(i2c("1-001a"), Some((1, 0x1a)));
+        assert_eq!(i2c("nvme0"), None);
     }
 
     #[test]

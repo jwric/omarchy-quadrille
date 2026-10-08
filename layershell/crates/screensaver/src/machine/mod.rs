@@ -15,6 +15,8 @@
 //!
 //! [`Machine::fixture`] is a made-up laptop with the same shape, whose
 //! values are a function of time: what tests and committed images draw.
+//! [`Fixture`] has it and the other kinds of machine the sheets are tried
+//! on: a desktop tower, a server and a virtual machine.
 
 mod buses;
 mod displays;
@@ -34,6 +36,7 @@ use quadrille_desktop::physical::Overrides;
 
 pub use buses::{PciAddress, PciDevice, PciKind, UsbDevice};
 pub use displays::{Connector, ConnectorKind, Panel};
+pub use fixture::Fixture;
 pub use network::{Interface, Link};
 pub use power::{Battery, Charge, ChargeState, Charger, ChargerKind};
 pub use processor::{Cache, CacheKind, CoreKind, Cores, Cpu, Memory, Module};
@@ -83,8 +86,9 @@ impl Machine {
     fn inventory(root: &Path, overrides: &Overrides) -> (Self, sensors::Gauges) {
         let tree = Tree::new(root);
         let pci = buses::pci(&tree);
-        let hwmon = sensors::hwmon(&tree, &pci);
-        let (drives, drive_gauges) = storage::drives(&tree).into_iter().unzip();
+        let (drives, drive_gauges): (Vec<Drive>, _) = storage::drives(&tree).into_iter().unzip();
+        let names: Vec<String> = drives.iter().map(|drive| drive.name.clone()).collect();
+        let hwmon = sensors::hwmon(&tree, &pci, &names);
         let (batteries, battery_gauges) = power::batteries(&tree).into_iter().unzip();
         let (chargers, charger_gauges) = power::chargers(&tree).into_iter().unzip();
         let (interfaces, interface_gauges) = network::interfaces(&tree).into_iter().unzip();
@@ -93,10 +97,11 @@ impl Machine {
                 .sources
                 .iter()
                 .zip(&hwmon.sensors)
-                .map(|((path, per_unit), sensor)| {
+                .map(|((path, per_unit, kind), sensor)| {
                     Some(sensors::Channel {
                         file: tree.open(path)?,
                         per_unit: *per_unit,
+                        kind: *kind,
                         slow: sensor.slow(),
                     })
                 })
@@ -127,7 +132,7 @@ impl Machine {
     /// The made-up laptop: an external display, two fans, an NVMe drive,
     /// Wi-Fi and ethernet.
     pub fn fixture() -> Self {
-        fixture::machine()
+        Fixture::Laptop.machine()
     }
 
     /// What the machine is doing `t` seconds into a sheet: the latest
@@ -199,6 +204,8 @@ pub struct Chassis {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ChassisKind {
     Desktop,
+    /// A small box: a mini PC, a lunch box or a stick.
+    Mini,
     Laptop,
     Tablet,
     AllInOne,
@@ -231,7 +238,8 @@ impl ChassisKind {
     /// The kind of an SMBIOS chassis type (DSP0134, 7.4.1).
     fn from_smbios(code: u32) -> Self {
         match code {
-            3..=7 | 15 | 16 | 24 | 34..=36 => Self::Desktop,
+            3..=7 | 15 | 24 | 34 => Self::Desktop,
+            16 | 35 | 36 => Self::Mini,
             8..=10 | 14 | 31 | 32 => Self::Laptop,
             11 | 30 => Self::Tablet,
             13 => Self::AllInOne,
@@ -243,6 +251,7 @@ impl ChassisKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Desktop => "DESKTOP",
+            Self::Mini => "MINI PC",
             Self::Laptop => "LAPTOP",
             Self::Tablet => "TABLET",
             Self::AllInOne => "ALL-IN-ONE",
@@ -479,6 +488,19 @@ pub(crate) mod tests {
             self
         }
 
+        /// Makes `path` a link to `target`, both from the root, written
+        /// relative to the link as sysfs writes its links.
+        pub fn points(&self, path: &str, target: &str) -> &Self {
+            let from: Vec<&str> = path.split('/').collect();
+            let to: Vec<&str> = target.split('/').collect();
+            let dir = &from[..from.len() - 1];
+            let shared = dir.iter().zip(&to).take_while(|(a, b)| a == b).count();
+            let mut steps = vec![".."; dir.len() - shared];
+
+            steps.extend(&to[shared..]);
+            self.link(path, &steps.join("/"))
+        }
+
         pub fn read(&self) -> Machine {
             Machine::read(self.root(), &Overrides::default())
         }
@@ -521,6 +543,19 @@ pub(crate) mod tests {
         assert_eq!(chassis.board, None);
         assert_eq!(chassis.board_vendor, None);
         assert_eq!(chassis.bios.as_deref(), Some("1.07"));
+    }
+
+    /// A mini PC, a lunch box or a stick is a small box of its own, not a
+    /// desktop: it is cooled as a laptop is, by a blower.
+    #[test]
+    fn small_boxes_are_mini_pcs() {
+        for code in [16, 35, 36] {
+            assert_eq!(ChassisKind::from_smbios(code), ChassisKind::Mini);
+        }
+        for code in [3, 6, 7] {
+            assert_eq!(ChassisKind::from_smbios(code), ChassisKind::Desktop);
+        }
+        assert_eq!(ChassisKind::Mini.label(), "MINI PC");
     }
 
     /// What identifies a machine or its owner, planted in a tree by
@@ -669,11 +704,10 @@ pub(crate) mod tests {
         println!("{:#?}", machine.sample(0.0));
     }
 
-    /// The tree of a laptop much like the fixture: what the parsing tests
-    /// read.
+    /// The tree of the fixture laptop: what the parsing tests read.
     pub fn laptop() -> Fake {
         let fake = Fake::new();
-        fixture::tree(&fake);
+        Fixture::Laptop.tree(&fake);
         fake
     }
 }

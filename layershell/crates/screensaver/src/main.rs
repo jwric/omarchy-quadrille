@@ -17,7 +17,7 @@ use iced_core::Backend;
 use quadrille_desktop::theme;
 
 use headless::{Output, Stage, Studio};
-use machine::Machine;
+use machine::{Fixture, Machine};
 use saver::{Options, Saver};
 use subjects::Subject;
 
@@ -116,6 +116,13 @@ enum Source {
     Live,
     /// A made-up laptop, the same every time: what committed images show.
     Fixture,
+    /// A made-up desktop tower: a graphics card with two displays, case
+    /// fans, three drives, no battery.
+    FixtureDesktop,
+    /// A made-up two-socket server: many cores and drives, no display.
+    FixtureServer,
+    /// A made-up virtual machine, with almost nothing.
+    FixtureVm,
 }
 
 /// A subject's index from its name.
@@ -133,6 +140,9 @@ fn main() {
     let machine = match cli.machine {
         Source::Live => Machine::live(),
         Source::Fixture => Machine::fixture(),
+        Source::FixtureDesktop => Fixture::Desktop.machine(),
+        Source::FixtureServer => Fixture::Server.machine(),
+        Source::FixtureVm => Fixture::Vm.machine(),
     };
     let result = match cli.command {
         Some(Command::Render(render)) => draw(render, &machine),
