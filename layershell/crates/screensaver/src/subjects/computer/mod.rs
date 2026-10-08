@@ -9,6 +9,8 @@
 //! in capitals, as the rest of a sheet is, and never lettered whole where
 //! they would not fit: the parts list carries a short name and the
 //! specification as much of the full one as its column holds.
+use textwrap::WordSplitter;
+
 use crate::draft::geom::{along, length};
 use crate::draft::{Draft, Tone, V2};
 use crate::machine::Machine;
@@ -53,7 +55,11 @@ fn rows(name: &str, value: &str) -> Vec<(String, String)> {
         return vec![(name.into(), value.into())];
     }
 
-    textwrap::wrap(value, room)
+    // Broken only between words: never inside one at its hyphen, which
+    // would part HDMI-A-1.
+    let options = textwrap::Options::new(room).word_splitter(WordSplitter::NoHyphenation);
+
+    textwrap::wrap(value, options)
         .into_iter()
         .take(2)
         .enumerate()
@@ -202,6 +208,56 @@ fn lettered(name: &str) -> String {
         .fold(name, |name, (capitals, term)| cased(&name, capitals, term))
 }
 
+/// A name from `pci.ids` as a sheet letters it (see [`lettered`]), with
+/// what reads as noise on a sheet taken out:
+///
+/// - a chip's code followed by its marketing name in brackets, `GX107M
+///   [Generic RTX 400]`, is the marketing name; a name of its own followed
+///   by a code name in brackets, `Wi-Fi 6E WX210 2x2 [Generic Peak]`, is
+///   the name;
+/// - a list of the models that share the device's id, `WX1775*/WX1790*`,
+///   is the first of them, and a model's wildcard star is dropped;
+/// - `PCI Express` is `PCIe`.
+fn cleaned(name: &str) -> String {
+    let name = match (name.find('['), name.rfind(']')) {
+        (Some(open), Some(close)) if open < close => {
+            let before = name[..open].trim();
+            let inside = name[open + 1..close].trim();
+
+            if before.split_whitespace().count() <= 3 && !inside.is_empty() {
+                inside
+            } else {
+                before
+            }
+        }
+        _ => name,
+    };
+    // Models in a list each have a number; the first has a letter, which
+    // tells a list of models from `10/100/1000` or `802.11a/b/g`.
+    let words: Vec<&str> = name
+        .split_whitespace()
+        .map(|word| {
+            let models: Vec<&str> = word.split('/').collect();
+            let numbered = |model: &str| model.chars().any(|c| c.is_ascii_digit());
+
+            if models.len() > 1
+                && models.iter().all(|model| numbered(model))
+                && models[0].chars().any(char::is_alphabetic)
+            {
+                models[0]
+            } else {
+                word
+            }
+        })
+        .collect();
+    let name = words
+        .join(" ")
+        .replace('*', "")
+        .replace("PCI Express", "PCIe");
+
+    lettered(&name)
+}
+
 /// `text` with every `capitals` that is a word of its own (not a part of
 /// a longer one) written `term`.
 fn cased(text: &str, capitals: &str, term: &str) -> String {
@@ -277,6 +333,66 @@ mod tests {
         assert_eq!(lettered("NVMEXPRESS PCIE4"), "NVMEXPRESS PCIE4");
         assert_eq!(fit("GIGABIT ETHERNET CONTROLLER", 12), "GIGABIT ETH…");
         assert_eq!(fit("WI-FI", 12), "WI-FI");
+    }
+
+    /// Names from `pci.ids` lose what reads as noise, and keep what tells
+    /// a device from another.
+    #[test]
+    fn device_names_are_cleaned_of_noise() {
+        for (name, cleaned_as) in [
+            (
+                "GX107M [Generic RTX 400 Max-Q / Mobile]",
+                "GENERIC RTX 400 MAX-Q / MOBILE",
+            ),
+            (
+                "Generic Lake-P [Generic Arc Graphics]",
+                "GENERIC ARC GRAPHICS",
+            ),
+            (
+                "Wi-Fi 6E(802.11ax) WX210/WX1675* 2x2 [Generic Peak]",
+                "WI-FI 6E(802.11AX) WX210 2X2",
+            ),
+            (
+                "Wi-Fi 7(802.11be) WX1775*/WX1790*/BE20*/BE401/BE1750* 2x2",
+                "WI-FI 7(802.11BE) WX1775 2X2",
+            ),
+            (
+                "NVMe SSD Controller SM981/PM981/PM983",
+                "NVMe SSD CONTROLLER SM981",
+            ),
+            (
+                "RTL8111/8168/8211/8411 PCI Express Gigabit Ethernet Controller",
+                "RTL8111 PCIe GIGABIT ETHERNET CONTROLLER",
+            ),
+            // Not lists of models: speeds, standards, code names.
+            (
+                "10/100/1000 Ethernet Adapter",
+                "10/100/1000 ETHERNET ADAPTER",
+            ),
+            (
+                "802.11a/b/g/n Wireless Adapter",
+                "802.11A/B/G/N WIRELESS ADAPTER",
+            ),
+            ("Generic Lake-P/U/H Audio", "GENERIC LAKE-P/U/H AUDIO"),
+            ("Ethernet Controller I225-V", "ETHERNET CONTROLLER I225-V"),
+        ] {
+            assert_eq!(cleaned(name), cleaned_as, "{name}");
+        }
+    }
+
+    /// A specification's long value is carried onto a second row between
+    /// words, never inside a connector's name at its hyphen.
+    #[test]
+    fn specification_rows_break_between_words() {
+        let carried = rows("OUTPUTS", "DP-1, DP-2, DP-3, HDMI-A-1, HDMI-A-2");
+
+        assert_eq!(carried.len(), 2);
+        assert!(
+            carried
+                .iter()
+                .all(|(_, value)| value.split(", ").all(|name| name.contains('-'))),
+            "{carried:?}"
+        );
     }
 
     /// A machine has the sheets it has something to show on, and no

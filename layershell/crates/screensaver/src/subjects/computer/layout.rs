@@ -32,7 +32,7 @@ use crate::machine::{
     PciDevice, PciKind, UsbDevice,
 };
 
-use super::{binary, bits, counted, decimal, fit, lettered};
+use super::{binary, bits, cleaned, counted, decimal, fit, lettered};
 
 /// The laptop's main view, in its virtual pixels: a diagram no larger is
 /// drawn at the laptop's scale or larger, its lettering inside its blocks.
@@ -76,6 +76,9 @@ const COLUMNS: usize = 3;
 /// The squares a die has of each kind of core, at most, and to a row.
 const MOST_SQUARES: u32 = 32;
 const ACROSS: u32 = 8;
+/// The last cache's band across a die: a line of lettering with a little
+/// room over and under it.
+const BAND: f32 = 12.0;
 /// The memory modules drawn, at most.
 const MOST_MODULES: usize = 16;
 /// In a detail, lettering is at least twice its size in the view: a line
@@ -329,20 +332,74 @@ fn block(machine: &Machine, device: &PciDevice) -> Option<Node> {
     }
 }
 
-/// What a PCI device says it is: its name, or its class.
+/// What a PCI device says it is: its name, cleaned, or its class.
 pub fn named(device: &PciDevice) -> String {
-    let name = device
-        .name
-        .as_deref()
-        .or(device.class_name.as_deref())
-        .unwrap_or("PCI DEVICE");
-
-    lettered(name)
+    match (&device.name, &device.class_name) {
+        (Some(name), _) => cleaned(name),
+        (None, Some(class)) => lettered(class),
+        (None, None) => "PCI DEVICE".into(),
+    }
 }
 
-/// What a PCI device is, as much as a detail's line holds.
+/// What a PCI device is, as much as a detail's line holds: without the
+/// platform it is a part of (`… SERIES PROCESSORS`) or the word
+/// `CONTROLLER`, which every device is, and where it is too long without
+/// the standard it keeps in brackets, so its model is kept.
 fn called(device: &PciDevice) -> String {
-    fit(&named(device), DETAIL_ROOM)
+    let name = named(device);
+    let mut words: Vec<&str> = name.split_whitespace().collect();
+
+    if let Some(series) = words.iter().position(|word| *word == "SERIES") {
+        let mut part = series + 1;
+
+        while words
+            .get(part)
+            .is_some_and(|word| ["PROCESSOR", "PROCESSORS", "CHIPSET"].contains(word))
+        {
+            part += 1;
+        }
+
+        if part < words.len() {
+            words.drain(..part);
+        }
+    }
+
+    words.retain(|word| *word != "CONTROLLER");
+    let mut name = match words.as_slice() {
+        [] => name.clone(),
+        words => words.join(" "),
+    };
+
+    while name.chars().count() > DETAIL_ROOM
+        && let (Some(open), Some(close)) = (name.find('('), name.find(')'))
+        && open < close
+    {
+        name.replace_range(open..=close, " ");
+        name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    }
+
+    fit(&name, DETAIL_ROOM)
+}
+
+/// What a bridge on the root bus is, by where it is rather than by the
+/// platform's long name for it: a root port or a bridge; a device that is
+/// not a bridge (a VMD controller, which drives sit behind) by its name.
+pub fn bridged(device: &PciDevice) -> String {
+    if device.kind() != PciKind::Bridge {
+        return named(device);
+    }
+
+    let name = device.name.as_deref().unwrap_or_default().to_lowercase();
+    let express = device.driver.as_deref() == Some("pcieport")
+        || ["pcie", "pci express", "root port"]
+            .iter()
+            .any(|word| name.contains(word));
+
+    match (express, device.parent) {
+        (true, None) => "PCIe ROOT PORT".into(),
+        (true, Some(_)) => "PCIe BRIDGE".into(),
+        (false, _) => "PCI BRIDGE".into(),
+    }
 }
 
 /// Its address and driver, for a detail.
@@ -735,11 +792,9 @@ fn merge(nodes: &mut Vec<Node>) {
 /// The device on the root bus that `nodes` are reached through, drawn on
 /// the wire to them.
 fn bridge(machine: &Machine, root: PciAddress, nodes: impl Iterator<Item = Node>) -> Node {
-    let device = machine.pci_device(root);
-    let what = match device.map(PciDevice::kind) {
-        Some(PciKind::Bridge) | None => "PCI BRIDGE".to_owned(),
-        Some(_) => device.map_or_else(String::new, |device| fit(&called(device), 16)),
-    };
+    let what = machine
+        .pci_device(root)
+        .map_or("PCI BRIDGE".into(), |device| fit(&bridged(device), 16));
 
     Node {
         children: nodes.collect(),
@@ -1673,7 +1728,7 @@ fn package(cpu: &Cpu) -> (V2, impl Fn(V2, f32) -> Package) {
         .map(|kind| kind.squares.div_ceil(ACROSS) as f32 * (kind.side + 2.0) - 2.0)
         .sum::<f32>()
         + 2.0 * (squares.len() as f32 - 1.0);
-    let band = if cache.is_some() { 2.0 + 14.0 } else { 0.0 };
+    let band = if cache.is_some() { 2.0 + BAND } else { 0.0 };
     // Dies one over another, or two to a row when there are more than two,
     // as wide as their cores and cache need and filling the frame.
     let across = if packages > 2 { 2 } else { 1 };
@@ -1735,7 +1790,7 @@ fn package(cpu: &Cpu) -> (V2, impl Fn(V2, f32) -> Package) {
                 }
 
                 let cache = cache.clone().map(|text| {
-                    let top = die.min.y + 4.0 + 14.0;
+                    let top = die.min.y + 4.0 + BAND;
                     (
                         Extent::new(v(die.min.x + 4.0, die.min.y + 4.0), v(die.max.x - 4.0, top)),
                         text,
@@ -2190,6 +2245,29 @@ mod tests {
 
         assert_eq!(drive.more.len(), 3);
         assert!(drive.more[2].starts_with("PCI 01:00.0"), "{:?}", drive.more);
+    }
+
+    /// A detail's line names a device by what tells it from another: not
+    /// the platform it is part of, not the word every device has, not the
+    /// standard where the model would not fit beside it.
+    #[test]
+    fn a_detail_names_a_device_by_its_model() {
+        let mut device = Machine::fixture().pci[0].clone();
+        let mut called_as = |name: &str| {
+            device.name = Some(name.into());
+            called(&device)
+        };
+
+        assert_eq!(
+            called_as("Generic 200 Series Processors USB 3.2 xHCI Host Controller"),
+            "USB 3.2 XHCI HOST"
+        );
+        assert_eq!(called_as("Ethernet Controller I225-V"), "ETHERNET I225-V");
+        assert_eq!(
+            called_as("Wi-Fi 7(802.11be) WX1775*/WX1790* 2x2"),
+            "WI-FI 7 WX1775 2X2"
+        );
+        assert_eq!(called_as("SATA Controller"), "SATA");
     }
 
     #[test]

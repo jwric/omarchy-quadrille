@@ -11,10 +11,22 @@ const SMBUS: At = (0, 0x1f, 4);
 
 const PCI: [Pci; 11] = [
     Pci::new((0, 0, 0), 0x060000, 0x0001, "Host Bridge"),
-    Pci::new(GPU, 0x030000, 0x0002, "Integrated Graphics"),
+    // Named as pci.ids names many: a chip's code with its marketing name
+    // in brackets, and a family of models sharing an id listed.
+    Pci::new(
+        GPU,
+        0x030000,
+        0x0002,
+        "Generic Lake-P [Integrated Graphics]",
+    ),
     Pci::new((0, 6, 0), 0x060400, 0x0006, "PCIe Root Port").driver("pcieport"),
     Pci::new(USB, 0x0c0330, 0x000d, "USB 3.2 Controller").driver("xhci_hcd"),
-    Pci::new((0, 0x14, 3), 0x028000, 0x0014, "Wi-Fi 6E Adapter"),
+    Pci::new(
+        (0, 0x14, 3),
+        0x028000,
+        0x0014,
+        "Wi-Fi 6E(802.11ax) WX210/WX211* 2x2 [Generic Peak]",
+    ),
     Pci::new((0, 0x1c, 0), 0x060400, 0x001c, "PCIe Root Port").driver("pcieport"),
     Pci::new(LPC, 0x060100, 0x001f, "LPC Bridge"),
     Pci::new((0, 0x1f, 3), 0x040300, 0x0020, "HD Audio Controller").driver("snd_hda_intel"),

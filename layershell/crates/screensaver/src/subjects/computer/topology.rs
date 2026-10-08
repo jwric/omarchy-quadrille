@@ -8,14 +8,14 @@ use quadrille::draw::Anchor;
 use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, v};
 use crate::machine::{
-    CoreKind, Drive, DriveKind, Interface, Link, Machine, Panel, PciAddress, PciDevice, PciKind,
-    SensorKind, Site, UsbDevice,
+    CoreKind, Drive, DriveKind, Interface, Link, Machine, Panel, PciAddress, PciDevice, SensorKind,
+    Site, UsbDevice,
 };
 
 use super::super::schematic::Schematic;
 use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
 use super::layout::{
-    Bank, Diagram, Form, Gauge, Group, Package, Placed, Source, named, short, version,
+    Bank, Diagram, Form, Gauge, Group, Package, Placed, Source, bridged, named, short, version,
 };
 use super::{SPEC_ROWS, binary, bits, counted, decimal, fit, flow, lettered, rate, rows};
 
@@ -160,8 +160,9 @@ impl Topology {
 
             // What the detail of the first die has room to say: the kind of
             // every core where there are two kinds, or how many cores a
-            // square stands for, the processor over it (where a window is
-            // tall enough: the laptop's holds the die alone) and the cache.
+            // square stands for, and the cache. The laptop's window holds
+            // the cores and cache alone, so the processor in full is the
+            // specification's.
             if n > 0 {
                 continue;
             }
@@ -177,21 +178,6 @@ impl Topology {
 
                     d.label(core.square.centre(), letter).tone(Tone::Faint);
                 }
-
-                let what = match package.dies.len() {
-                    1 => format!(
-                        "CPU, {}, {} THREADS",
-                        counted(cpu.cores as usize, "CORE", "CORES"),
-                        cpu.threads
-                    ),
-                    dies => format!(
-                        "CPU 1 OF {dies}, {}",
-                        counted((cpu.cores as usize).div_ceil(dies), "CORE", "CORES")
-                    ),
-                };
-
-                d.label(v(die.frame.centre().x, title), what)
-                    .tone(Tone::Ink);
 
                 if let Some((band, text)) = &die.cache {
                     d.label(band.centre(), format!("{text} CACHE"));
@@ -855,12 +841,7 @@ fn part(machine: &Machine, diagram: &Diagram, item: Item) -> Part {
                         let Some(device) = pci(block) else {
                             continue;
                         };
-                        let name = match device.kind() {
-                            PciKind::Bridge => {
-                                device.name.as_deref().map_or("PCI BRIDGE".into(), lettered)
-                            }
-                            _ => named(device),
-                        };
+                        let name = bridged(device);
                         let address = match block.merged.len() {
                             0 => short(device.address),
                             more => format!("{} +{more}", short(device.address)),
@@ -1146,9 +1127,12 @@ mod tests {
         let (centre, _) = processor_ring(package);
         let (width, height) = Output::LAPTOP.virtual_size();
         let layout = Layout::new(width as i32, height as i32, topology.card());
-        let extent = topology.extent();
-        let main = (layout.view.width as f32 / extent.width())
-            .min(layout.view.height as f32 / extent.height());
+        let (main, _) = crate::sheet::fit(
+            topology.card(),
+            topology.extent(),
+            layout.view,
+            Output::LAPTOP.display,
+        );
         let window = inset(layout.detail_window(), 2);
         // What the window shows round the circle's centre at twice the
         // view's scale, the least a diagram's detail magnifies.
