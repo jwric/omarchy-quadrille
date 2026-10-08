@@ -11,7 +11,7 @@ use crate::machine::{Connector, ConnectorKind, Machine, Panel, SensorKind, Site}
 
 use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
 use super::layout::short;
-use super::{SPEC_ROOM, counted, fit, lettered};
+use super::{SPEC_ROOM, chain, counted, fit, lettered};
 
 /// The room the drawing leaves round and between the displays, in units of
 /// the row's length over `UNIT`: room for the dimensions and their values.
@@ -218,62 +218,87 @@ impl Displays {
 
     /// What the detail of `screen` shows: its corner, the frame beyond it,
     /// the pixels from (0, 0) with their centres, and their pitch.
+    ///
+    /// The grid is set on the sheet's pixels a pixel of the display at a
+    /// time from the corner, so each is as many of the sheet's across and
+    /// down as the next, its centre in the same place in it, and the pitch
+    /// is dimensioned from one centre to the next as they are set.
     fn corner(&self, d: &mut Draft, index: usize, screen: &Screen) {
         let origin = screen.origin();
         let pitch = screen.pitch();
+        let (across, down) = (v(pitch.x, 0.0), v(0.0, -pitch.y));
         let (_, radius) = screen.detail();
         let reach = GRID * radius;
         let columns = (reach / pitch.x).ceil() as usize;
         let rows = (reach / pitch.y).ceil() as usize;
         let (right, bottom) = (origin.x + reach, origin.y - reach);
-        let first = origin + v(pitch.x, -pitch.y) / 2.0;
+        let first = origin + (across + down) / 2.0;
 
         d.in_detail(|d| {
-            // Outside the active area, the frame round it.
-            d.area(
-                &[
-                    origin + v(-reach, reach),
-                    v(right, origin.y + reach),
-                    v(right, origin.y),
-                    origin,
-                    v(origin.x, bottom),
-                    v(origin.x - reach, bottom),
-                ],
-                Fill::Tint(2),
-            );
+            d.snapped(origin, |d| {
+                // Outside the active area, the frame round it.
+                d.area(
+                    &[
+                        origin + v(-reach, reach),
+                        v(right, origin.y + reach),
+                        v(right, origin.y),
+                        origin,
+                        v(origin.x, bottom),
+                        v(origin.x - reach, bottom),
+                    ],
+                    Fill::Tint(2),
+                );
+
+                d.part(index, |d| {
+                    d.line(origin, v(right, origin.y), Line::Outline);
+                    d.line(origin, v(origin.x, bottom), Line::Outline);
+                });
+            });
 
             for column in 1..=columns {
-                let x = origin.x + column as f32 * pitch.x;
-                d.line(v(x, origin.y), v(x, bottom), Line::Thin);
+                chain(d, origin, across, column, |d| {
+                    let x = origin.x + column as f32 * pitch.x;
+                    d.line(v(x, origin.y), v(x, bottom), Line::Thin);
+                });
             }
 
             for row in 1..=rows {
-                let y = origin.y - row as f32 * pitch.y;
-                d.line(v(origin.x, y), v(right, y), Line::Thin);
+                chain(d, origin, down, row, |d| {
+                    let y = origin.y - row as f32 * pitch.y;
+                    d.line(v(origin.x, y), v(right, y), Line::Thin);
+                });
             }
 
             for column in 0..columns {
-                for row in 0..rows {
-                    let at = first + v(column as f32 * pitch.x, -(row as f32) * pitch.y);
-                    d.dot(at, 2).tone(Tone::Muted);
-                }
+                let top = origin + across * column as f32;
+
+                chain(d, origin, across, column, |d| {
+                    for row in 0..rows {
+                        let corner = top + down * row as f32;
+
+                        chain(d, top, down, row, |d| {
+                            d.dot(corner + (across + down) / 2.0, 3).tone(Tone::Muted);
+                        });
+                    }
+                });
             }
 
             d.part(index, |d| {
-                d.line(origin, v(right, origin.y), Line::Outline);
-                d.line(origin, v(origin.x, bottom), Line::Outline);
+                d.snapped(origin, |d| {
+                    d.snapped(first, |d| {
+                        // From the centre of pixel (0, 0) to the next
+                        // one's, over the edge.
+                        d.dim_h(first, first + across, 1.1 * pitch.y)
+                            .text(format!("{:.3}", pitch.x));
 
-                // From the centre of pixel (0, 0) to the next one's, over
-                // the edge.
-                d.dim_h(first, first + v(pitch.x, 0.0), 1.1 * pitch.y)
-                    .text(format!("{:.3}", pitch.x));
-
-                // Most pixels are square; a pitch down that differs from
-                // the pitch across is dimensioned too.
-                if (pitch.x - pitch.y).abs() > pitch.x * 0.005 {
-                    d.dim_v(first - v(0.0, pitch.y), first, -1.1 * pitch.x)
-                        .text(format!("{:.3}", pitch.y));
-                }
+                        // Most pixels are square; a pitch down that differs
+                        // from the pitch across is dimensioned too.
+                        if (pitch.x - pitch.y).abs() > pitch.x * 0.005 {
+                            d.dim_v(first + down, first, -1.1 * pitch.x)
+                                .text(format!("{:.3}", pitch.y));
+                        }
+                    });
+                });
             });
         });
     }
@@ -660,5 +685,96 @@ mod tests {
         // 60 Hz: a sweep every 4 s.
         let monitor = &displays.screens[1].area;
         assert!((line(1, 2.0) - monitor.centre().y).abs() < 1e-3);
+    }
+
+    /// The detail's pixel grid is set a pixel of the display at a time: at
+    /// any magnification, wherever it falls on the sheet's grid, its pixels
+    /// are as many of the sheet's as each other, each centre's dot is in
+    /// the same place in its pixel, and the pitch is dimensioned from the
+    /// middle of one dot to the middle of the next.
+    #[test]
+    fn the_detail_grid_is_even_at_any_magnification() {
+        use std::collections::HashSet;
+
+        use crate::draft::Ink;
+        use crate::draft::raster::{Piece, Projection, rasterize};
+
+        let displays = Displays::new(&Machine::fixture()).unwrap();
+
+        for (index, screen) in displays.screens.iter().enumerate() {
+            let mut draft = Draft::new();
+            displays.corner(&mut draft, index, screen);
+
+            let (origin, pitch) = (screen.origin(), screen.pitch().x);
+
+            for (across, shift) in [
+                (9.3, 0.3),
+                (14.6, 0.5),
+                (15.5, 0.8),
+                (19.3, 0.1),
+                (63.7, 0.6),
+            ] {
+                let scale = across / pitch;
+                let projection = Projection::new(
+                    (
+                        100.0 + shift - origin.x * scale,
+                        50.0 + shift + origin.y * scale,
+                    ),
+                    scale,
+                );
+                let (mut lines, mut dots, mut extensions) = (Vec::new(), Vec::new(), Vec::new());
+
+                for mark in draft.marks() {
+                    let mut pieces = Vec::new();
+                    rasterize(mark, &projection, &mut pieces);
+
+                    for inked in pieces {
+                        let upright = |pixels: &[iced_core::Point<i32>]| {
+                            pixels.len() > 1 && pixels.iter().all(|pixel| pixel.x == pixels[0].x)
+                        };
+
+                        match (&mark.ink, inked.piece) {
+                            (Ink::Stroke { .. }, Piece::Path { pixels, .. })
+                                if upright(&pixels) =>
+                            {
+                                lines.push(pixels[0].x);
+                            }
+                            (Ink::Dot { .. }, Piece::Block(block)) => dots.push(block),
+                            (Ink::Dimension { .. }, Piece::Path { pixels, .. })
+                                if upright(&pixels) =>
+                            {
+                                extensions.push(pixels[0].x);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                lines.sort_unstable();
+                lines.dedup();
+                extensions.sort_unstable();
+
+                let at = format!("{} at {across} pixels a pixel", screen.connector.name);
+                let steps: HashSet<i32> = lines.windows(2).map(|pair| pair[1] - pair[0]).collect();
+                let top = dots.iter().map(|dot| dot.y).min().expect("Dots");
+                let mut first: Vec<_> = dots.iter().filter(|dot| dot.y == top).collect();
+                first.sort_by_key(|dot| dot.x);
+                let places: HashSet<i32> = first
+                    .iter()
+                    .map(|dot| {
+                        let before = lines.iter().filter(|&&x| x < dot.x).max().expect("A line");
+                        dot.x - before
+                    })
+                    .collect();
+
+                assert_eq!(steps.len(), 1, "{at}: {lines:?}");
+                assert_eq!(places.len(), 1, "{at}: {first:?}");
+                assert_eq!(
+                    extensions,
+                    [first[0].x + 1, first[1].x + 1],
+                    "{at}: {first:?}"
+                );
+            }
+        }
     }
 }
