@@ -1688,27 +1688,9 @@ mod tests {
     /// in detail, the view's lettering is inside it and clear of other
     /// lettering, what the sheet places is clear of it too, and no line of
     /// a detail is cut by its window.
-    ///
-    /// The sheets that do not yet are [`KNOWN`], each with why; one that
-    /// reads well fails the test until it is taken off, so the list stays
-    /// true.
     #[test]
     fn every_machines_sheets_are_lettered_clear_on_both_outputs() {
         use crate::machine::Fixture;
-
-        /// Machine, sheet and output.
-        const KNOWN: [(Fixture, &str, &str); 3] = [
-            // Its diagram is far larger than the view, as eight drives on
-            // their own root ports and six network ports cannot be folded,
-            // so it is drawn far below the scale its lettering is sized
-            // for.
-            (Fixture::Server, "topology", "laptop"),
-            (Fixture::Server, "topology", "ultrawide"),
-            // With no module to draw, the memory's detail lettering is
-            // anchored at the edge of a bank the detail magnifies past its
-            // window; the processor's title likewise.
-            (Fixture::Vm, "topology", "laptop"),
-        ];
 
         let mut wrong = Vec::new();
 
@@ -1750,17 +1732,11 @@ mod tests {
                         );
                     }
 
-                    let known = KNOWN.contains(&(fixture, name, desk));
-
-                    match (known, faults.is_empty()) {
-                        (false, false) => wrong.push(format!(
+                    if !faults.is_empty() {
+                        wrong.push(format!(
                             "{fixture:?} {name} on the {desk}: {}",
                             faults[..faults.len().min(4)].join("; ")
-                        )),
-                        (true, true) => wrong.push(format!(
-                            "{fixture:?} {name} on the {desk} reads well now: take it off KNOWN"
-                        )),
-                        _ => {}
+                        ));
                     }
                 }
             }

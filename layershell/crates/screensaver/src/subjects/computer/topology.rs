@@ -8,13 +8,15 @@ use quadrille::draw::Anchor;
 use crate::draft::Placement::Auto;
 use crate::draft::{Draft, Extent, Fill, Line, Tone, V2, v};
 use crate::machine::{
-    CoreKind, Drive, DriveKind, Interface, Link, Machine, PciDevice, PciKind, SensorKind, Site,
-    UsbDevice,
+    CoreKind, Drive, DriveKind, Interface, Link, Machine, Panel, PciAddress, PciDevice, PciKind,
+    SensorKind, Site, UsbDevice,
 };
 
 use super::super::schematic::Schematic;
 use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
-use super::layout::{Diagram, Form, Gauge, Group, Package, Placed, Source, named, short, version};
+use super::layout::{
+    Bank, Diagram, Form, Gauge, Group, Package, Placed, Source, named, short, version,
+};
 use super::{SPEC_ROWS, binary, bits, counted, decimal, fit, flow, lettered, rate, rows};
 
 /// A dot of traffic every so many units along a wire, running so fast.
@@ -117,7 +119,8 @@ impl Topology {
             .expect("Every item drawn is listed")
     }
 
-    /// The CPU package: its die, cores and last cache.
+    /// The processor: a die for each package, with its cores and last
+    /// cache.
     fn package(&self, d: &mut Draft) {
         let package = &self.diagram.package;
         let cpu = self.machine.cpu.as_ref().expect("A diagram has a CPU");
@@ -125,7 +128,6 @@ impl Topology {
         let title = frame.max.y - 10.0;
 
         d.rect(frame.min, frame.max, Line::Outline);
-        d.rect(package.die.min, package.die.max, Line::Thin);
         d.label(v(frame.min.x + 6.0, title), "CPU")
             .anchor(Anchor::LEFT)
             .tone(Tone::Ink);
@@ -135,51 +137,67 @@ impl Topology {
         )
         .anchor(Anchor::RIGHT);
 
-        for (core, kind) in &package.cores {
-            d.rect(core.min, core.max, Line::Outline);
+        for (n, die) in package.dies.iter().enumerate() {
+            d.rect(die.frame.min, die.frame.max, Line::Thin);
 
-            // The efficient cores tinted on the view; a detail letters each
-            // core's kind, and a tint would show only round the letter.
-            if *kind == CoreKind::Efficient {
-                d.in_main(|d| {
-                    d.area(&corners(*core), Fill::Tint(4));
-                });
+            for core in &die.cores {
+                d.rect(core.square.min, core.square.max, Line::Outline);
+
+                // The efficient cores tinted on the view; a detail letters
+                // each core's kind, and a tint would show only round the
+                // letter.
+                if core.kind == Some(CoreKind::Efficient) {
+                    d.in_main(|d| {
+                        d.area(&corners(core.square), Fill::Tint(4));
+                    });
+                }
             }
-        }
 
-        if let Some((band, text)) = &package.cache {
-            d.rect(band.min, band.max, Line::Thin);
-            d.label(band.centre(), text.as_str());
-        }
+            if let Some((band, text)) = &die.cache {
+                d.rect(band.min, band.max, Line::Thin);
+                d.label(band.centre(), text.as_str());
+            }
 
-        // What a detail has room to say: the kind of every core, the
-        // processor in full over the die (where a window is tall enough: the
-        // laptop's holds the die alone), and the cache.
-        d.in_detail(|d| {
-            for (core, kind) in &package.cores {
-                let letter = match kind {
-                    CoreKind::Performance => "P",
-                    CoreKind::Efficient => "E",
+            // What the detail of the first die has room to say: the kind of
+            // every core where there are two kinds, or how many cores a
+            // square stands for, the processor over it (where a window is
+            // tall enough: the laptop's holds the die alone) and the cache.
+            if n > 0 {
+                continue;
+            }
+
+            d.in_own_detail(|d| {
+                for core in &die.cores {
+                    let letter = match (core.kind, core.cores) {
+                        (_, cores) if cores > 1 => cores.to_string(),
+                        (Some(CoreKind::Performance), _) => "P".into(),
+                        (Some(CoreKind::Efficient), _) => "E".into(),
+                        (None, _) => continue,
+                    };
+
+                    d.label(core.square.centre(), letter).tone(Tone::Faint);
+                }
+
+                let what = match package.dies.len() {
+                    1 => format!(
+                        "CPU, {}, {} THREADS",
+                        counted(cpu.cores as usize, "CORE", "CORES"),
+                        cpu.threads
+                    ),
+                    dies => format!(
+                        "CPU 1 OF {dies}, {}",
+                        counted((cpu.cores as usize).div_ceil(dies), "CORE", "CORES")
+                    ),
                 };
 
-                d.label(core.centre(), letter).tone(Tone::Faint);
-            }
+                d.label(v(die.frame.centre().x, title), what)
+                    .tone(Tone::Ink);
 
-            d.label(
-                v(frame.min.x + 3.0, title),
-                format!(
-                    "CPU, {}, {} THREADS",
-                    counted(cpu.cores as usize, "CORE", "CORES"),
-                    cpu.threads
-                ),
-            )
-            .anchor(Anchor::LEFT)
-            .tone(Tone::Ink);
-
-            if let Some((band, text)) = &package.cache {
-                d.label(band.centre(), format!("{text} CACHE"));
-            }
-        });
+                if let Some((band, text)) = &die.cache {
+                    d.label(band.centre(), format!("{text} CACHE"));
+                }
+            });
+        }
     }
 
     /// The memory: its modules as sticks, and its bus to the package.
@@ -217,11 +235,16 @@ impl Topology {
                 .anchor(Anchor::LEFT);
         }
 
-        // The memory chips on the sticks, and the bank in full.
+        // The memory chips on the sticks, as many as a stick has room for;
+        // and in its own detail the bank in full, over its sticks or in its
+        // middle where the kernel shows no module.
         d.in_detail(|d| {
             for stick in &bank.sticks {
-                for chip in 0..4 {
-                    let x = stick.min.x + 3.0 + chip as f32 * 9.0;
+                let chips = ((stick.width() - 2.0) / 9.0).floor();
+                let left = stick.min.x + (stick.width() - (chips * 9.0 - 2.0)) / 2.0;
+
+                for chip in 0..chips as usize {
+                    let x = left + chip as f32 * 9.0;
                     d.rect(
                         v(x, stick.min.y + 2.0),
                         v(x + 7.0, stick.max.y - 2.0),
@@ -229,14 +252,23 @@ impl Topology {
                     );
                 }
             }
+        });
 
-            let generation = bank.generation.as_deref().unwrap_or_default();
-            d.label(
-                v(frame.min.x + 3.0, title),
-                format!("MEMORY {size} {generation}"),
-            )
-            .anchor(Anchor::LEFT)
-            .tone(Tone::Ink);
+        d.in_own_detail(|d| match &bank.generation {
+            _ if bank.sticks.is_empty() => {
+                d.label(frame.centre(), format!("MEMORY {size}, MODULES NOT SHOWN"))
+                    .tone(Tone::Ink);
+            }
+            generation => {
+                let what: Vec<&str> = ["MEMORY", &size]
+                    .into_iter()
+                    .chain(generation.as_deref())
+                    .collect();
+
+                d.label(v(frame.min.x + 3.0, title), what.join(" "))
+                    .anchor(Anchor::LEFT)
+                    .tone(Tone::Ink);
+            }
         });
     }
 
@@ -284,7 +316,7 @@ impl Topology {
                 // The converter: a square crossed by its diagonal.
                 d.rect(frame.min, frame.max, Line::Outline);
                 d.line(frame.min, frame.max, Line::Outline);
-                d.in_detail(|d| {
+                self.in_its_detail(d, block, |d| {
                     for (k, line) in block.more.iter().rev().enumerate() {
                         d.label(
                             v(frame.centre().x, frame.max.y + 5.0 + 6.0 * k as f32),
@@ -316,7 +348,7 @@ impl Topology {
             _ => frame.max.y - 5.0,
         };
 
-        d.in_detail(|d| {
+        self.in_its_detail(d, block, |d| {
             for (k, line) in block.more.iter().enumerate() {
                 d.label(v(frame.min.x + 4.0, first - 6.0 * k as f32), line.as_str())
                     .anchor(Anchor::LEFT)
@@ -325,26 +357,42 @@ impl Topology {
         });
     }
 
+    /// Records what `draw` makes for the detail of `block`'s part, if that
+    /// detail is of `block`: the first block of a part, which carries its
+    /// balloon and which its detail is centred on. Another block in the
+    /// detail's window is shown without, so nothing is lettered across the
+    /// window's edge.
+    fn in_its_detail(&self, d: &mut Draft, block: &Placed, draw: impl FnOnce(&mut Draft)) {
+        if block.balloon {
+            d.in_own_detail(draw);
+        }
+    }
+
     /// The traffic on every route, at the rates measured at `t`.
     fn traffic(&self, d: &mut Draft, t: f32) {
         let snapshot = self.machine.sample(t);
 
         for route in &self.diagram.routes {
-            let (inward, outward) = match route.gauge {
-                Gauge::Drive(index) => snapshot
-                    .drives
-                    .get(index)
-                    .copied()
-                    .flatten()
-                    .map(|transfer| (transfer.read, transfer.written)),
-                Gauge::Interface(index) => snapshot
-                    .interfaces
-                    .get(index)
-                    .copied()
-                    .flatten()
-                    .map(|traffic| (traffic.received, traffic.sent)),
-            }
-            .unwrap_or_default();
+            let (inward, outward) = route
+                .gauges
+                .iter()
+                .filter_map(|gauge| match *gauge {
+                    Gauge::Drive(index) => snapshot
+                        .drives
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .map(|transfer| (transfer.read, transfer.written)),
+                    Gauge::Interface(index) => snapshot
+                        .interfaces
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .map(|traffic| (traffic.received, traffic.sent)),
+                })
+                .fold((0.0, 0.0), |(inward, outward), (into, out)| {
+                    (inward + into, outward + out)
+                });
 
             dots(d, &route.pieces, inward, true, t, Tone::Live);
             dots(d, &route.pieces, outward, false, t, Tone::Accent);
@@ -404,27 +452,40 @@ fn ring(block: &Placed) -> (V2, f32) {
     }
 }
 
-/// The circle a detail of the processor magnifies: its cores and its
-/// cache, the middle of the die, which is all the laptop's short detail
-/// window has room for at twice the view's scale.
+/// The circle a detail of the processor magnifies: the cores and the cache
+/// of its first die, which is all the laptop's short detail window has
+/// room for at twice the view's scale.
 fn processor_ring(package: &Package) -> (V2, f32) {
-    let die = package.die;
-    let mut top = die.min.y;
-    let mut bottom = die.max.y;
+    let die = &package.dies[0];
+    let mut top = die.frame.min.y;
+    let mut bottom = die.frame.max.y;
 
-    for extent in package
+    for extent in die
         .cores
         .iter()
-        .map(|(core, _)| core)
-        .chain(package.cache.as_ref().map(|(band, _)| band))
+        .map(|core| &core.square)
+        .chain(die.cache.as_ref().map(|(band, _)| band))
     {
         top = top.max(extent.max.y);
         bottom = bottom.min(extent.min.y);
     }
 
     (
-        v(die.centre().x, ((top + bottom) / 2.0).round()),
-        (die.width() / 2.0 + 2.0).round(),
+        v(die.frame.centre().x, ((top + bottom) / 2.0).round()),
+        (die.frame.width() / 2.0 + 2.0).round(),
+    )
+}
+
+/// The circle a detail of the memory magnifies: the bank, or where it is
+/// taller than the laptop's short detail window holds at twice the view's
+/// scale, its lettering and its first rows of sticks.
+fn memory_ring(bank: &Bank) -> (V2, f32) {
+    let frame = bank.frame;
+    let middle = frame.centre().y.max(frame.max.y - 22.0);
+
+    (
+        v(frame.centre().x, middle.round()),
+        (frame.width() / 2.0 + 2.0).round(),
     )
 }
 
@@ -446,6 +507,12 @@ fn part(machine: &Machine, diagram: &Diagram, item: Item) -> Part {
             let cpu = machine.cpu.as_ref().expect("A diagram has a CPU");
             let model = cpu.model.as_deref().map_or("PROCESSOR".into(), lettered);
             let cores = match cpu.kinds.as_slice() {
+                [] if cpu.packages > 1 => format!(
+                    "{} ({} × {})",
+                    cpu.cores,
+                    cpu.packages,
+                    cpu.cores / cpu.packages
+                ),
                 [] => cpu.cores.to_string(),
                 kinds => kinds
                     .iter()
@@ -527,10 +594,7 @@ fn part(machine: &Machine, diagram: &Diagram, item: Item) -> Part {
                 "MEMORY",
                 modules.max(1) as u32,
                 installed,
-                (
-                    bank.frame.centre(),
-                    (bank.frame.width() / 2.0 + 2.0).round(),
-                ),
+                memory_ring(bank),
             )
         }
         Item::Blocks(group) => {
@@ -566,35 +630,49 @@ fn part(machine: &Machine, diagram: &Diagram, item: Item) -> Part {
                     )
                 }
                 Group::Display => {
-                    let mut displays: usize = 0;
+                    // Every display on the graphics drawn, whether its block
+                    // is drawn or counted.
+                    let gpus: Vec<PciAddress> = diagram
+                        .blocks
+                        .iter()
+                        .filter(|block| block.group == Group::Graphics)
+                        .filter_map(|block| match block.source {
+                            Source::Pci(address) => Some(address),
+                            _ => None,
+                        })
+                        .collect();
+                    let panels: Vec<(&str, &Panel)> = machine
+                        .connectors
+                        .iter()
+                        .filter(|c| c.gpu.is_some_and(|gpu| gpus.contains(&gpu)))
+                        .filter_map(|c| Some((c.name.as_str(), c.panel.as_ref()?)))
+                        .collect();
                     // The diagonals measured: a size guessed from the pixels
                     // alone is not given.
-                    let mut inches = Vec::new();
+                    let inches: Vec<f64> = panels
+                        .iter()
+                        .filter(|(_, panel)| !panel.size.estimated)
+                        .map(|(_, panel)| panel.inches())
+                        .collect();
 
-                    for block in &blocks {
-                        if let Source::Connector(index) = block.source
-                            && let Some(connector) = machine.connectors.get(index)
-                            && let Some(panel) = &connector.panel
-                        {
-                            let refresh = panel.refresh.map(|hz| format!("{} Hz", hz.round()));
-                            let pixels = format!("{} × {}", panel.pixels.0, panel.pixels.1);
-                            let (size, pitch) = if panel.size.estimated {
-                                (pixels, "SIZE UNKNOWN".to_owned())
-                            } else {
-                                inches.push(panel.inches());
-                                (
-                                    format!("{:.1}\" {pixels}", panel.inches()),
-                                    format!("PITCH {:.3} mm", panel.pitch_mm()),
-                                )
-                            };
-                            let second: Vec<String> = refresh.into_iter().chain([pitch]).collect();
+                    for (name, panel) in &panels {
+                        let refresh = panel.refresh.map(|hz| format!("{} Hz", hz.round()));
+                        let pixels = format!("{} × {}", panel.pixels.0, panel.pixels.1);
+                        let (size, pitch) = if panel.size.estimated {
+                            (pixels, "SIZE UNKNOWN".to_owned())
+                        } else {
+                            (
+                                format!("{:.1}\" {pixels}", panel.inches()),
+                                format!("PITCH {:.3} mm", panel.pitch_mm()),
+                            )
+                        };
+                        let second: Vec<String> = refresh.into_iter().chain([pitch]).collect();
 
-                            displays += 1;
-                            spec.push((connector.name.clone(), size));
-                            spec.push((String::new(), second.join(", ")));
-                        }
+                        spec.push(((*name).to_owned(), size));
+                        spec.push((String::new(), second.join(", ")));
                     }
 
+                    let displays = panels.len();
                     let sizes: Vec<String> = inches
                         .iter()
                         .map(|inches| inches.round().to_string())
@@ -624,11 +702,17 @@ fn part(machine: &Machine, diagram: &Diagram, item: Item) -> Part {
                                 .map(str::to_uppercase)
                                 .collect();
 
-                            spec.extend(rows(&drive.name, model.as_deref().unwrap_or("")));
+                            // Drives alike drawn as one are one entry.
+                            let (name, each) = match block.merged.len() {
+                                0 => (drive.name.clone(), ""),
+                                more => (format!("{} +{more}", drive.name), " EACH"),
+                            };
+
+                            spec.extend(rows(&name, model.as_deref().unwrap_or("")));
                             spec.push((
                                 String::new(),
                                 format!(
-                                    "{}, {}",
+                                    "{}{each}, {}",
                                     decimal(drive.bytes),
                                     counted(drive.partitions.len(), "PARTITION", "PARTITIONS")
                                 ),
@@ -663,34 +747,57 @@ fn part(machine: &Machine, diagram: &Diagram, item: Item) -> Part {
                 Group::Network => {
                     let mut links = Vec::new();
 
-                    for device in &devices {
-                        let interface = machine
-                            .interfaces
-                            .iter()
-                            .find(|i| i.pci == Some(device.address) && !i.usb);
-                        let state = match interface {
-                            Some(Interface {
-                                up: true,
-                                speed: Some(speed),
-                                ..
-                            }) => format!("{}, ", bits(*speed as f32)),
-                            Some(Interface { up: true, .. }) => "UP, ".into(),
-                            Some(Interface { up: false, .. }) => "DOWN, ".into(),
-                            None => String::new(),
+                    for block in &blocks {
+                        let functions: Vec<&PciDevice> = std::iter::once(&block.source)
+                            .chain(&block.merged)
+                            .filter_map(|source| match source {
+                                Source::Pci(address) => machine.pci_device(*address),
+                                _ => None,
+                            })
+                            .collect();
+                        let Some(device) = functions.first() else {
+                            continue;
                         };
-                        let link = interface.map(|i| i.link);
+                        let interfaces: Vec<Option<&Interface>> = functions
+                            .iter()
+                            .map(|function| {
+                                machine
+                                    .interfaces
+                                    .iter()
+                                    .find(|i| i.pci == Some(function.address) && !i.usb)
+                            })
+                            .collect();
+                        let up = interfaces.iter().flatten().filter(|i| i.up).count();
+                        let state = match interfaces.as_slice() {
+                            [
+                                Some(Interface {
+                                    up: true,
+                                    speed: Some(speed),
+                                    ..
+                                }),
+                            ] => format!("{}, ", bits(*speed as f32)),
+                            [Some(Interface { up: true, .. })] => "UP, ".into(),
+                            [Some(Interface { up: false, .. })] => "DOWN, ".into(),
+                            [None] => String::new(),
+                            all => format!("{up} OF {} UP, ", all.len()),
+                        };
+                        let link = interfaces[0].map(|i| i.link);
                         let kind = match link {
                             Some(Link::Wireless) => "WI-FI",
                             Some(Link::Ethernet) => "ETHERNET",
                             _ => "NETWORK",
                         };
+                        let (kind, address) = match functions.len() {
+                            1 => (kind.to_owned(), short(device.address)),
+                            n => (
+                                format!("{kind} ×{n}"),
+                                format!("{} +{}", short(device.address), n - 1),
+                            ),
+                        };
 
-                        links.push(link);
-                        spec.extend(rows(kind, &named(device)));
-                        spec.push((
-                            String::new(),
-                            format!("{state}PCI {}", short(device.address)),
-                        ));
+                        links.extend(interfaces.iter().map(|i| i.map(|i| i.link)));
+                        spec.extend(rows(&kind, &named(device)));
+                        spec.push((String::new(), format!("{state}PCI {address}")));
                     }
 
                     let value = match links.as_slice() {
@@ -744,18 +851,30 @@ fn part(machine: &Machine, diagram: &Diagram, item: Item) -> Part {
                     ("USB", devices.len() as u32, value, ring)
                 }
                 Group::Bridge => {
-                    for device in &devices {
+                    for block in &blocks {
+                        let Some(device) = pci(block) else {
+                            continue;
+                        };
                         let name = match device.kind() {
                             PciKind::Bridge => {
                                 device.name.as_deref().map_or("PCI BRIDGE".into(), lettered)
                             }
                             _ => named(device),
                         };
+                        let address = match block.merged.len() {
+                            0 => short(device.address),
+                            more => format!("{} +{more}", short(device.address)),
+                        };
 
-                        spec.extend(rows(&short(device.address), &name));
+                        spec.extend(rows(&address, &name));
                     }
 
-                    ("PCIe BRIDGE", blocks.len() as u32, "PCIe".into(), ring)
+                    let ports = blocks
+                        .iter()
+                        .map(|block| 1 + block.merged.len())
+                        .sum::<usize>();
+
+                    ("PCIe BRIDGE", ports as u32, "PCIe".into(), ring)
                 }
             }
         }
@@ -1035,11 +1154,13 @@ mod tests {
         // view's scale, the least a diagram's detail magnifies.
         let half = v(window.width as f32, window.height as f32) / (4.0 * main);
 
-        for extent in package
+        let die = &package.dies[0];
+
+        for extent in die
             .cores
             .iter()
-            .map(|(core, _)| core)
-            .chain(package.cache.as_ref().map(|(band, _)| band))
+            .map(|core| &core.square)
+            .chain(die.cache.as_ref().map(|(band, _)| band))
         {
             // A unit to spare for the outlines' pixels.
             for corner in [extent.min, extent.max] {
@@ -1081,6 +1202,121 @@ mod tests {
         assert_eq!(display.spec[3].1, "60 Hz, SIZE UNKNOWN");
         assert_eq!(monitor.lines[0], "SIZE UNKNOWN");
         assert!(!monitor.more.iter().any(|line| line.contains("PITCH")));
+    }
+
+    /// A graphics card with more displays than the view holds: those not
+    /// drawn are counted in a block, and the parts list still has them all.
+    #[test]
+    fn every_display_is_listed_when_some_are_counted() {
+        use crate::machine::Fixture;
+
+        let mut machine = Fixture::Desktop.machine();
+        let monitor = machine.connectors[0].clone();
+
+        for n in 2..=7 {
+            machine.connectors.push(crate::machine::Connector {
+                name: format!("DP-{n}"),
+                ..monitor.clone()
+            });
+        }
+
+        let topology = Topology::new(&machine).unwrap();
+        let display = topology
+            .card()
+            .parts
+            .iter()
+            .find(|part| part.name == "DISPLAY")
+            .unwrap();
+        let drawn = topology
+            .diagram
+            .blocks
+            .iter()
+            .filter(|block| matches!(block.form, Form::Screen { .. }))
+            .count();
+
+        assert!(drawn < 8, "{drawn} drawn");
+        assert_eq!(display.quantity, 8);
+        assert_eq!(display.spec[0].0, "DP-1");
+    }
+
+    /// Cores all alike are not lettered with a kind, which means something
+    /// only beside another; a hybrid processor's are.
+    #[test]
+    fn only_a_hybrid_processors_cores_are_lettered_by_kind() {
+        use crate::draft::{Ink, Scope};
+        use crate::machine::Fixture;
+
+        for (fixture, lettered) in [(Fixture::Laptop, true), (Fixture::Desktop, false)] {
+            let topology = Topology::new(&fixture.machine()).unwrap();
+            let mut draft = Draft::new();
+
+            topology.draw(&mut draft, 20.0);
+
+            let kinds = draft
+                .marks()
+                .iter()
+                .filter(|mark| mark.scope == Scope::Own)
+                .filter(|mark| matches!(&mark.ink, Ink::Label { text, .. } if text == "P" || text == "E"))
+                .count();
+
+            assert_eq!(kinds > 0, lettered, "{fixture:?}");
+        }
+    }
+
+    /// A processor of several packages has a die for each, its cores and
+    /// its share of the last cache on it: a server's two of 32 cores, a
+    /// virtual machine's four of one.
+    #[test]
+    fn each_package_has_a_die() {
+        use crate::machine::Fixture;
+
+        for (fixture, dies, cores, cache) in [
+            (Fixture::Server, 2, 32, "L3 48 MiB"),
+            (Fixture::Vm, 4, 1, "L3 16 MiB"),
+            (Fixture::Desktop, 1, 8, "L3 32 MiB"),
+        ] {
+            let topology = Topology::new(&fixture.machine()).unwrap();
+            let package = &topology.diagram.package;
+
+            assert_eq!(package.dies.len(), dies, "{fixture:?}");
+
+            for die in &package.dies {
+                let drawn: u32 = die.cores.iter().map(|core| core.cores).sum();
+
+                assert_eq!(drawn, cores, "{fixture:?}");
+                assert_eq!(die.cache.as_ref().unwrap().1, cache, "{fixture:?}");
+                let (outer, inner) = (package.frame, die.frame);
+
+                assert!(outer.min.cmple(inner.min).all() && inner.max.cmple(outer.max).all());
+            }
+        }
+    }
+
+    /// A package with more cores than a die has room for draws a square
+    /// for each cluster sharing a cache, lettered with how many it stands
+    /// for.
+    #[test]
+    fn a_processor_with_many_cores_draws_their_clusters() {
+        use crate::machine::{Cache, CacheKind};
+
+        let mut machine = crate::machine::Fixture::Desktop.machine();
+        let cpu = machine.cpu.as_mut().unwrap();
+
+        cpu.cores = 128;
+        cpu.threads = 256;
+        cpu.caches = vec![Cache {
+            level: 3,
+            kind: CacheKind::Unified,
+            bytes: 32 << 20,
+            instances: 16,
+        }];
+
+        let topology = Topology::new(&machine).unwrap();
+        let die = &topology.diagram.package.dies[0];
+
+        assert_eq!(die.cores.len(), 16);
+        assert!(die.cores.iter().all(|core| core.cores == 8));
+        assert_eq!(die.cache.as_ref().unwrap().1, "L3 512 MiB");
     }
 
     #[test]

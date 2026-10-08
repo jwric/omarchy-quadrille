@@ -11,9 +11,18 @@
 //! The units are the laptop's virtual pixels at full size. Lettering is a
 //! whole number of pixels at any scale, so a block is made wide enough for
 //! its lettering at the laptop's scale, the smallest the sheet draws the
-//! diagram at, and [`Diagram::new`] folds a large tree (open connectors left
-//! out, the last devices on a busy hub or controller counted rather than
-//! drawn) until it fits the laptop's view at that scale or larger.
+//! diagram at, and [`Diagram::new`] folds a large tree until it fits the
+//! laptop's view at that scale or larger: open connectors left out, alike
+//! devices drawn as one (a server's eight NVMe drives, each on a root port
+//! of its own, as one port and one block), then the last devices on a busy
+//! hub, controller or bridge counted rather than drawn, displays last, and
+//! at last the spine's last attachments.
+//!
+//! The processor is a die for each package, its cores drawn one by one up
+//! to four rows, as clusters past that, and lettered by kind only on a
+//! hybrid processor, where a kind means something beside the other.
+use std::cmp::Reverse;
+
 use quadrille::draw::{Anchor, Horizontal, Vertical};
 
 use crate::draft::raster::LETTERING;
@@ -64,11 +73,16 @@ const BUS: f32 = 18.0;
 /// The columns of blocks right of the spine: what is on the root bus, what
 /// is on that, and one more.
 const COLUMNS: usize = 3;
-/// The cores drawn of each kind, at most.
-const MOST_CORES: u32 = 64;
+/// The squares a die has of each kind of core, at most, and to a row.
+const MOST_SQUARES: u32 = 32;
+const ACROSS: u32 = 8;
+/// The memory modules drawn, at most.
+const MOST_MODULES: usize = 16;
 /// In a detail, lettering is at least twice its size in the view: a line
 /// every half line, half a character's advance for every character.
 const DETAIL_LINE: f32 = LINE / 2.0;
+/// What a network adapter whose link is down is lettered.
+const NO_LINK: &str = "NO LINK";
 /// The characters of a detail's line: a block is made wide enough for
 /// them, so they are fewer than a name may have (the specification has the
 /// whole of it).
@@ -136,13 +150,16 @@ pub struct Node {
     pub group: Group,
     pub form: Form,
     pub source: Source,
+    /// What else it stands for: devices alike merged into it.
+    pub merged: Vec<Source>,
     /// Lettered in it in the view...
     pub lines: Vec<String>,
     /// ...and in a detail, where there is room for more.
     pub more: Vec<String>,
     /// The connector the wire to it is, lettered on the wire.
     pub via: Option<String>,
-    pub gauge: Option<Gauge>,
+    /// What measures the traffic to it: more than one for devices merged.
+    pub gauges: Vec<Gauge>,
     /// How many devices it stands for.
     pub count: usize,
     /// Whether it carries its part's balloon: the first block of a part.
@@ -156,10 +173,11 @@ impl Node {
             group,
             form,
             source,
+            merged: Vec::new(),
             lines,
             more: Vec::new(),
             via: None,
-            gauge: None,
+            gauges: Vec::new(),
             count: 1,
             balloon: false,
             children: Vec::new(),
@@ -206,9 +224,24 @@ impl Node {
         }
     }
 
-    /// The devices in it and under it.
+    /// The devices in it and under it: a bridge is the way to them, not one
+    /// of them.
     fn devices(&self) -> usize {
-        self.count + self.children.iter().map(Node::devices).sum::<usize>()
+        let own = if self.form == Form::Bridge {
+            0
+        } else {
+            self.count
+        };
+
+        own + self.children.iter().map(Node::devices).sum::<usize>()
+    }
+
+    /// What it is on the sheet: a bridge is the first thing behind it.
+    fn kind(&self) -> Group {
+        match (self.form, self.children.first()) {
+            (Form::Bridge, Some(first)) => first.kind(),
+            _ => self.group,
+        }
     }
 }
 
@@ -427,7 +460,7 @@ fn drive(index: usize, drive: &Drive) -> Node {
         .collect();
 
     Node {
-        gauge: Some(Gauge::Drive(index)),
+        gauges: vec![Gauge::Drive(index)],
         ..Node::new(
             Group::Drive,
             Form::Block,
@@ -514,15 +547,17 @@ fn network(machine: &Machine, device: &PciDevice) -> Node {
             ..
         } => bits(*speed as f32),
         Interface { up: true, .. } => "LINK UP".into(),
-        Interface { up: false, .. } => "NO LINK".into(),
+        Interface { up: false, .. } => NO_LINK.into(),
     });
     let mut lines = vec![name.to_owned()];
     lines.extend(state.clone());
 
     Node {
-        gauge: interfaces
+        gauges: interfaces
             .first()
-            .map(|(index, _)| Gauge::Interface(*index)),
+            .map(|(index, _)| Gauge::Interface(*index))
+            .into_iter()
+            .collect(),
         ..Node::new(
             Group::Network,
             Form::Block,
@@ -678,8 +713,8 @@ fn merge(nodes: &mut Vec<Node>) {
                 && node.children.is_empty()
                 && other.form == node.form
                 && other.lines == node.lines
-                && other.gauge.is_none()
-                && node.gauge.is_none()
+                && other.gauges.is_empty()
+                && node.gauges.is_empty()
         });
 
         match alike {
@@ -748,30 +783,224 @@ fn walk(nodes: &mut [Node], column: usize, visit: &mut impl FnMut(&mut Node, usi
     }
 }
 
-/// The way down `nodes` to the block with the most blocks hanging off it,
-/// three or more, and how many: a USB host or hub, a controller with its
-/// drives. What is behind a bridge is the bridge's to show.
-fn busiest(nodes: &[Node], path: &mut Vec<usize>, best: &mut Option<(usize, Vec<usize>)>) {
+/// The order in which busy blocks have what hangs off them counted when a
+/// diagram is too tall: a USB host's or hub's devices first, then a
+/// controller's drives, network adapters, what is behind a bridge, and a
+/// graphics card's displays last, as a sheet that leaves a display out
+/// says less about the machine than one that counts a keyboard.
+fn fold_order(group: Group) -> u8 {
+    match group {
+        Group::Usb => 0,
+        Group::Drive => 1,
+        Group::Network => 2,
+        Group::Bridge => 3,
+        Group::Graphics | Group::Display => 4,
+    }
+}
+
+/// How a busy block ranks for folding: by [`fold_order`], then the
+/// busiest, then the deepest.
+type Busy = (u8, Reverse<usize>, Reverse<usize>);
+
+/// The way down `nodes`, `depth` from the spine, to the block whose last
+/// children are counted first: of those with three or more blocks hanging
+/// off them, the first by [`Busy`].
+fn busiest(
+    nodes: &[Node],
+    depth: usize,
+    path: &mut Vec<usize>,
+    best: &mut Option<(Busy, Vec<usize>)>,
+) {
     for (index, node) in nodes.iter().enumerate() {
         path.push(index);
 
         let many = node.children.len();
+        let rank = (fold_order(node.group), Reverse(many), Reverse(depth));
 
-        if node.form == Form::Block
+        if matches!(node.form, Form::Block | Form::Bridge)
             && many >= 3
-            && best.as_ref().is_none_or(|(most, _)| many > *most)
+            && best.as_ref().is_none_or(|(other, _)| rank < *other)
         {
-            *best = Some((many, path.clone()));
+            *best = Some((rank, path.clone()));
         }
 
-        busiest(&node.children, path, best);
+        busiest(&node.children, depth + 1, path, best);
         path.pop();
+    }
+}
+
+/// Whether `a` and `b` can be drawn as one block standing for both: blocks
+/// with nothing hanging off them, lettered alike (two disks of one model
+/// and size) or functions of one network adapter.
+fn alike(a: &Node, b: &Node) -> bool {
+    let function = |node: &Node| match node.source {
+        Source::Pci(address) => Some((address.domain, address.bus, address.device)),
+        _ => None,
+    };
+
+    a.children.is_empty()
+        && b.children.is_empty()
+        && a.form == Form::Block
+        && b.form == Form::Block
+        && a.group == b.group
+        && a.source != Source::Summary
+        && b.source != Source::Summary
+        && (a.lines == b.lines
+            || (a.group == Group::Network && function(a).is_some() && function(a) == function(b)))
+}
+
+/// The one block that `alike` blocks are drawn as: the first, standing for
+/// them all, with their traffic together.
+fn combined(mut alike: Vec<Node>) -> Node {
+    let rest = alike.split_off(1);
+    let mut node = alike.pop().expect("One at least");
+
+    if rest.is_empty() {
+        return node;
+    }
+
+    let states: Vec<Option<String>> = std::iter::once(&node)
+        .chain(&rest)
+        .map(|node| node.lines.get(1).cloned())
+        .collect();
+
+    for other in rest {
+        node.count += other.count;
+        node.gauges.extend(other.gauges);
+        node.merged.push(other.source);
+        node.merged.extend(other.merged);
+    }
+
+    let count = node.count;
+    node.lines[0] = format!("{} ×{count}", node.lines[0]);
+
+    match node.group {
+        // A network adapter's ports may each be up or down.
+        Group::Network if states.iter().any(|state| *state != states[0]) => {
+            let up = states
+                .iter()
+                .filter(|state| state.as_deref().is_some_and(|state| state != NO_LINK))
+                .count();
+
+            node.lines.truncate(1);
+            node.lines.push(format!("{up} OF {count} UP"));
+        }
+        Group::Drive => {
+            if let Some(size) = node.lines.get_mut(1) {
+                size.push_str(" EACH");
+            }
+        }
+        _ => {}
+    }
+
+    node
+}
+
+/// Merges the alike blocks of `nodes` (see [`alike`]); whether any were.
+fn merge_alike(nodes: &mut Vec<Node>) -> bool {
+    let mut sets: Vec<Vec<Node>> = Vec::new();
+
+    for node in nodes.drain(..) {
+        match sets.iter_mut().find(|set| alike(&set[0], &node)) {
+            Some(set) => set.push(node),
+            None => sets.push(vec![node]),
+        }
+    }
+
+    let merged = sets.iter().any(|set| set.len() > 1);
+
+    *nodes = sets.into_iter().map(combined).collect();
+    merged
+}
+
+/// Merges the bridges on the spine that each have one block behind them,
+/// alike (an NVMe drive on each of a server's root ports), into the first:
+/// one bridge standing for them all, with the blocks merged behind it.
+/// Whether any were.
+fn merge_ports(tree: &mut Vec<Node>) -> bool {
+    let lone = |node: &Node| match (node.form, node.children.as_slice()) {
+        (Form::Bridge, [only]) => Some(only.clone()),
+        _ => None,
+    };
+    let mut sets: Vec<Vec<Node>> = Vec::new();
+
+    for node in tree.drain(..) {
+        let set = sets.iter_mut().find(|set| {
+            lone(&set[0])
+                .zip(lone(&node))
+                .is_some_and(|(a, b)| alike(&a, &b))
+        });
+
+        match set {
+            Some(set) => set.push(node),
+            None => sets.push(vec![node]),
+        }
+    }
+
+    let merged = sets.iter().any(|set| set.len() > 1);
+
+    *tree = sets
+        .into_iter()
+        .map(|mut set| {
+            if set.len() == 1 {
+                return set.pop().expect("One");
+            }
+
+            let behind: Vec<Node> = set
+                .iter_mut()
+                .map(|port| port.children.pop().expect("One behind each"))
+                .collect();
+            let ports = set.len();
+            let mut first = set.remove(0);
+
+            first.merged.extend(set.into_iter().map(|port| port.source));
+            first.count = ports;
+            first.lines = vec![counted(ports, "PORT", "PORTS")];
+
+            if let Some(what) = first.more.first_mut() {
+                *what = format!("{what} ×{ports}");
+            }
+
+            first.children = vec![combined(behind)];
+            first
+        })
+        .collect();
+
+    merged
+}
+
+/// A block counting `count` devices of `group` not drawn, which carries no
+/// traffic of its own.
+fn summary(group: Group, count: usize) -> Node {
+    let (one, many) = match group {
+        Group::Drive => ("MORE DRIVE", "MORE DRIVES"),
+        Group::Display => ("MORE DISPLAY", "MORE DISPLAYS"),
+        _ => ("MORE DEVICE", "MORE DEVICES"),
+    };
+
+    Node {
+        count,
+        ..Node::new(
+            group,
+            Form::Block,
+            Source::Summary,
+            vec![format!("+{count} MORE")],
+        )
+        .more(vec![counted(count, one, many)])
+    }
+}
+
+/// How many devices `node` stands for, counted in a summary.
+fn counted_in(node: &Node) -> usize {
+    match node.source {
+        Source::Summary => node.count,
+        _ => node.devices(),
     }
 }
 
 /// Folds the tree a step smaller: `wide` when it is too wide, else too
 /// tall. Whether there was anything left to fold.
-fn fold(tree: &mut [Node], wide: bool) -> bool {
+fn fold(tree: &mut Vec<Node>, wide: bool) -> bool {
     let mut folded = false;
 
     // Too wide: no last column, what would be on it counted in its hubs.
@@ -798,43 +1027,51 @@ fn fold(tree: &mut [Node], wide: bool) -> bool {
         return true;
     }
 
-    // ...then the last two devices on the busiest block counted in one,
-    // which carries no traffic of its own.
-    let mut best = None;
-    busiest(tree, &mut Vec::new(), &mut best);
+    // ...then blocks alike drawn as one, which loses nothing but their
+    // traffic apart...
+    folded = merge_ports(tree) | merge_alike(tree);
+    walk(tree, 0, &mut |node, _| {
+        folded |= merge_alike(&mut node.children)
+    });
 
-    let Some((_, path)) = best else {
-        return false;
-    };
-    let mut node = &mut tree[path[0]];
-
-    for &index in &path[1..] {
-        node = &mut node.children[index];
+    if folded {
+        return true;
     }
 
-    let counted_in = |node: &Node| match node.source {
-        Source::Summary => node.count,
-        _ => node.devices(),
-    };
-    let last = node.children.pop().expect("Three or more");
-    let before = node.children.pop().expect("Three or more");
-    let count = counted_in(&last) + counted_in(&before);
-    let (one, many) = match before.group {
-        Group::Drive => ("MORE DRIVE", "MORE DRIVES"),
-        Group::Display => ("MORE DISPLAY", "MORE DISPLAYS"),
-        _ => ("MORE DEVICE", "MORE DEVICES"),
-    };
+    // ...then the last two blocks off the busiest counted in one...
+    let mut best = None;
+    busiest(tree, 0, &mut Vec::new(), &mut best);
 
-    node.children.push(Node {
-        count,
-        ..Node::new(
-            before.group,
-            Form::Block,
-            Source::Summary,
-            vec![format!("+{count} MORE")],
-        )
-        .more(vec![counted(count, one, many)])
-    });
+    if let Some((_, path)) = best {
+        let mut node = &mut tree[path[0]];
+
+        for &index in &path[1..] {
+            node = &mut node.children[index];
+        }
+
+        let last = node.children.pop().expect("Three or more");
+        let before = node.children.pop().expect("Three or more");
+
+        node.children.push(summary(
+            before.kind(),
+            counted_in(&last) + counted_in(&before),
+        ));
+
+        return true;
+    }
+
+    // ...and at last the spine's last two attachments.
+    if tree.len() < 2 {
+        return false;
+    }
+
+    let last = tree.pop().expect("Two or more");
+    let before = tree.pop().expect("Two or more");
+
+    tree.push(summary(
+        before.kind(),
+        counted_in(&last) + counted_in(&before),
+    ));
 
     true
 }
@@ -845,6 +1082,8 @@ pub struct Placed {
     pub group: Group,
     pub form: Form,
     pub source: Source,
+    /// What else it stands for: devices alike merged into it.
+    pub merged: Vec<Source>,
     /// Its outline: a screen's without its stand, a bridge's symbol.
     pub frame: Extent,
     /// Where its wire meets it.
@@ -867,18 +1106,37 @@ pub struct Legend {
 /// runs along: broken where it passes through a block on the way.
 #[derive(Debug, Clone)]
 pub struct Route {
-    pub gauge: Gauge,
+    /// What measures it: the traffic is theirs together.
+    pub gauges: Vec<Gauge>,
     pub pieces: Vec<Vec<V2>>,
 }
 
-/// The processor package: the die with its cores and its last cache.
+/// A square on a die: a core, or where a package has more cores of a kind
+/// than a die has room for, a cluster of them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Core {
+    pub square: Extent,
+    /// Its kind on a hybrid processor; none where the cores are all alike.
+    pub kind: Option<CoreKind>,
+    /// The cores it stands for.
+    pub cores: u32,
+}
+
+/// A package's die: its cores and its share of the last cache.
+#[derive(Debug, Clone)]
+pub struct Die {
+    pub frame: Extent,
+    pub cores: Vec<Core>,
+    /// The last cache's band across the die, and its level and size.
+    pub cache: Option<(Extent, String)>,
+}
+
+/// The processor: a die for each package, side by side or one over the
+/// other, in one frame.
 #[derive(Debug, Clone)]
 pub struct Package {
     pub frame: Extent,
-    pub die: Extent,
-    pub cores: Vec<(Extent, CoreKind)>,
-    /// The largest cache's band across the die, and its level and size.
-    pub cache: Option<(Extent, String)>,
+    pub dies: Vec<Die>,
     /// Where the spine's wire leaves it.
     pub port: V2,
 }
@@ -1146,6 +1404,7 @@ impl Grid {
             group: node.group,
             form: node.form,
             source: node.source,
+            merged: node.merged.clone(),
             frame,
             port: v(frame.min.x, port),
             lines: node.lines.clone(),
@@ -1193,6 +1452,7 @@ impl Grid {
             group: node.group,
             form: node.form,
             source: node.source,
+            merged: node.merged.clone(),
             frame,
             port: v(x, port),
             lines: node.lines.clone(),
@@ -1200,9 +1460,9 @@ impl Grid {
             balloon: node.balloon,
         });
 
-        if let Some(gauge) = node.gauge {
+        if !node.gauges.is_empty() {
             self.routes.push(Route {
-                gauge,
+                gauges: node.gauges.clone(),
                 pieces: incoming.clone(),
             });
         }
@@ -1312,110 +1572,187 @@ impl Grid {
     }
 }
 
+/// The cores of one kind on a die, as they are drawn: how many, the
+/// squares for them and the cores each stands for, and their side.
+struct Squares {
+    kind: Option<CoreKind>,
+    cores: u32,
+    squares: u32,
+    each: u32,
+    side: f32,
+}
+
+/// A core's side on a die: an efficient core's smaller, and every core's
+/// on a die with many.
+fn side(kind: Option<CoreKind>, squares: u32) -> f32 {
+    if kind == Some(CoreKind::Efficient) || squares > 2 * ACROSS {
+        7.0
+    } else {
+        10.0
+    }
+}
+
+/// The width of a row of `n` squares of `kind`: efficient cores come in
+/// clusters of four, a gap between.
+fn row_width(kind: Option<CoreKind>, side: f32, n: u32) -> f32 {
+    let n = n.min(ACROSS) as f32;
+    let clusters = if kind == Some(CoreKind::Efficient) {
+        ((n - 1.0) / 4.0).floor()
+    } else {
+        0.0
+    };
+
+    n * (side + 2.0) - 2.0 + clusters * 4.0
+}
+
+/// How many cores a square stands for, of `n` of a kind on a die whose
+/// last cache is shared by `sharing` cores: one, unless there are more
+/// than [`MOST_SQUARES`]; then the cores sharing a cache, if they are few
+/// enough, else as many as it takes.
+fn cluster(n: u32, sharing: u32) -> u32 {
+    if n <= MOST_SQUARES {
+        1
+    } else if sharing > 1 && n.is_multiple_of(sharing) && n / sharing <= MOST_SQUARES {
+        sharing
+    } else {
+        n.div_ceil(MOST_SQUARES)
+    }
+}
+
 /// The size of `cpu`'s package, and how to lay it out with its top left
 /// at a point and its wire to the spine at a height.
 fn package(cpu: &Cpu) -> (V2, impl Fn(V2, f32) -> Package) {
-    // Each kind of core: its size, and a gap after every so many.
-    let per_package = (cpu.cores / cpu.packages.max(1)).max(1);
-    let kinds: Vec<(CoreKind, u32)> = if cpu.kinds.is_empty() {
-        vec![(CoreKind::Performance, per_package)]
+    let packages = cpu.packages.max(1);
+    // The last cache: each package's share of it, and how many cores share
+    // one.
+    let last = cpu
+        .caches
+        .iter()
+        .max_by_key(|cache| (cache.level, cache.bytes));
+    let instances = last.map_or(1, |cache| (cache.instances / packages).max(1));
+    let cache = last.map(|cache| {
+        format!(
+            "L{} {}",
+            cache.level,
+            binary(cache.bytes * u64::from(instances))
+        )
+    });
+    let kinds: Vec<(Option<CoreKind>, u32)> = if cpu.kinds.is_empty() {
+        vec![(None, cpu.cores / packages)]
     } else {
         cpu.kinds
             .iter()
-            .map(|cores| (cores.kind, cores.cores.min(MOST_CORES)))
+            .map(|cores| (Some(cores.kind), cores.cores / packages))
             .collect()
     };
-    // A core's side, and the width of a row of `n` (eight at most):
-    // efficient cores come in clusters of four, a gap between.
-    fn size(kind: CoreKind) -> f32 {
-        match kind {
-            CoreKind::Performance => 10.0,
-            CoreKind::Efficient => 7.0,
-        }
-    }
+    let squares: Vec<Squares> = kinds
+        .into_iter()
+        .map(|(kind, cores)| {
+            let cores = cores.max(1);
+            let each = cluster(cores, cpu.cores / packages / instances);
+            let squares = cores.div_ceil(each);
 
-    fn row_width(kind: CoreKind, n: u32) -> f32 {
-        let n = n.min(8) as f32;
-        let clusters = if kind == CoreKind::Efficient {
-            ((n - 1.0) / 4.0).floor()
-        } else {
-            0.0
-        };
-
-        n * (size(kind) + 2.0) - 2.0 + clusters * 4.0
-    }
-    let rows = |n: u32| n.div_ceil(8) as f32;
-    let cores_width = kinds
+            Squares {
+                kind,
+                cores,
+                squares,
+                each,
+                side: side(kind, squares),
+            }
+        })
+        .collect();
+    let cores_width = squares
         .iter()
-        .map(|&(kind, n)| row_width(kind, n))
+        .map(|kind| row_width(kind.kind, kind.side, kind.squares))
         .fold(0.0, f32::max);
     // Every row of cores as far from the next, of whichever kind: the die
     // kept short, for the laptop's detail window to hold its cores and
     // cache at twice the view's scale.
-    let cores_height: f32 = kinds
+    let cores_height: f32 = squares
         .iter()
-        .map(|&(kind, n)| rows(n) * (size(kind) + 2.0) - 2.0)
+        .map(|kind| kind.squares.div_ceil(ACROSS) as f32 * (kind.side + 2.0) - 2.0)
         .sum::<f32>()
-        + 2.0 * (kinds.len() as f32 - 1.0);
-    let cache = cpu
-        .caches
-        .iter()
-        .max_by_key(|cache| (cache.level, cache.bytes))
-        .map(|cache| {
-            format!(
-                "L{} {}",
-                cache.level,
-                binary(cache.bytes * u64::from(cache.instances))
-            )
-        });
+        + 2.0 * (squares.len() as f32 - 1.0);
     let band = if cache.is_some() { 2.0 + 14.0 } else { 0.0 };
-    let width = (cores_width + 16.0).max(96.0).ceil();
-    let height = (18.0 + 4.0 + cores_height + band + 4.0 + 4.0).ceil();
+    // Dies one over another, or two to a row when there are more than two,
+    // as wide as their cores and cache need and filling the frame.
+    let across = if packages > 2 { 2 } else { 1 };
+    let rows = packages.div_ceil(across) as f32;
+    let across = across as f32;
+    let needed = (cores_width + 8.0).max(match (&cache, packages) {
+        (_, 1) => 0.0,
+        (Some(cache), _) => letters(cache.chars().count()) + 12.0,
+        (None, _) => 0.0,
+    });
+    let die_width = needed
+        .max((96.0 - 8.0 - (across - 1.0) * 4.0) / across)
+        .ceil();
+    let die_height = (4.0 + cores_height + band + 4.0).ceil();
+    let width = across * die_width + (across - 1.0) * 4.0 + 8.0;
+    let height = 18.0 + rows * die_height + (rows - 1.0) * 4.0 + 4.0;
 
     let layout = move |corner: V2, port: f32| {
         let frame = Extent::new(
             v(corner.x, corner.y - height),
             v(corner.x + width, corner.y),
         );
-        let die = Extent::new(
-            frame.min + v(4.0, 4.0),
-            v(frame.max.x - 4.0, frame.max.y - 18.0),
-        );
-        let mut cores = Vec::new();
-        let mut y = die.max.y - 4.0;
+        let dies = (0..packages)
+            .map(|n| {
+                let (row, column) = ((n / across as u32) as f32, (n % across as u32) as f32);
+                let left = frame.min.x + 4.0 + column * (die_width + 4.0);
+                let top = frame.max.y - 18.0 - row * (die_height + 4.0);
+                let die = Extent::new(v(left, top - die_height), v(left + die_width, top));
+                let mut cores = Vec::new();
+                let mut y = die.max.y - 4.0;
 
-        for &(kind, n) in &kinds {
-            let side = size(kind);
+                for kind in &squares {
+                    let side = kind.side;
 
-            for row in 0..n.div_ceil(8) {
-                let in_row = (n - row * 8).min(8);
-                let mut x = (frame.centre().x - row_width(kind, 8.min(n)) / 2.0).round();
+                    for row in 0..kind.squares.div_ceil(ACROSS) {
+                        let in_row = (kind.squares - row * ACROSS).min(ACROSS);
+                        let mut x = (die.centre().x
+                            - row_width(kind.kind, side, kind.squares) / 2.0)
+                            .round();
 
-                for i in 0..in_row {
-                    if kind == CoreKind::Efficient && i > 0 && i % 4 == 0 {
-                        x += 4.0;
+                        for i in 0..in_row {
+                            if kind.kind == Some(CoreKind::Efficient) && i > 0 && i % 4 == 0 {
+                                x += 4.0;
+                            }
+
+                            // The last square stands for those left.
+                            let before = (row * ACROSS + i) * kind.each;
+
+                            cores.push(Core {
+                                square: Extent::new(v(x, y - side), v(x + side, y)),
+                                kind: kind.kind,
+                                cores: kind.each.min(kind.cores - before),
+                            });
+                            x += side + 2.0;
+                        }
+
+                        y -= side + 2.0;
                     }
-                    cores.push((Extent::new(v(x, y - side), v(x + side, y)), kind));
-                    x += side + 2.0;
                 }
 
-                y -= side + 2.0;
-            }
-        }
+                let cache = cache.clone().map(|text| {
+                    let top = die.min.y + 4.0 + 14.0;
+                    (
+                        Extent::new(v(die.min.x + 4.0, die.min.y + 4.0), v(die.max.x - 4.0, top)),
+                        text,
+                    )
+                });
 
-        let cache = cache.clone().map(|text| {
-            let top = die.min.y + 4.0 + 14.0;
-            (
-                Extent::new(v(die.min.x + 4.0, die.min.y + 4.0), v(die.max.x - 4.0, top)),
-                text,
-            )
-        });
+                Die {
+                    frame: die,
+                    cores,
+                    cache,
+                }
+            })
+            .collect();
 
         Package {
             frame,
-            die,
-            cores,
-            cache,
+            dies,
             port: v(frame.max.x, port),
         }
     };
@@ -1423,29 +1760,41 @@ fn package(cpu: &Cpu) -> (V2, impl Fn(V2, f32) -> Package) {
     (v(width, height), layout)
 }
 
-/// The memory's size with `modules` sticks in it, two to a row.
+/// The modules a row of a bank has, of `modules`: two, or four when there
+/// are more than eight.
+fn per_row(modules: usize) -> usize {
+    if modules > 8 { 4 } else { 2 }
+}
+
+/// The memory's size with `modules` sticks in it.
 fn bank(modules: usize) -> V2 {
-    let rows = modules.min(8).div_ceil(2) as f32;
+    let modules = modules.min(MOST_MODULES);
+    let rows = modules.div_ceil(per_row(modules)) as f32;
 
     v(96.0, 20.0 + rows * 12.0)
 }
 
-/// The sticks of `modules` modules in a bank framed by `frame`.
+/// The sticks of `modules` modules in a bank framed by `frame`: rows of
+/// them across its middle, the last row centred if it is short.
 fn sticks(frame: Extent, modules: usize) -> Vec<Extent> {
-    let modules = modules.min(8);
+    let modules = modules.min(MOST_MODULES);
+    let across = per_row(modules);
+    // Two sticks 40 wide 6 apart, or four 20 wide 2 apart: 86 either way.
+    let (width, gap) = if across == 2 {
+        (40.0, 6.0)
+    } else {
+        (20.0, 2.0)
+    };
 
     (0..modules)
         .map(|i| {
-            let (row, column) = ((i / 2) as f32, (i % 2) as f32);
-            // Two to a row, or one alone in the middle.
-            let x = if i + 1 == modules && i % 2 == 0 {
-                frame.centre().x - 20.0
-            } else {
-                frame.centre().x - 43.0 + column * 46.0
-            };
-            let top = frame.max.y - 20.0 - row * 12.0;
+            let (row, column) = (i / across, i % across);
+            let in_row = (modules - row * across).min(across) as f32;
+            let left = frame.centre().x - (in_row * width + (in_row - 1.0) * gap) / 2.0;
+            let x = left + column as f32 * (width + gap);
+            let top = frame.max.y - 20.0 - row as f32 * 12.0;
 
-            Extent::new(v(x, top - 8.0), v(x + 40.0, top))
+            Extent::new(v(x, top - 8.0), v(x + width, top))
         })
         .collect()
 }
@@ -1653,20 +2002,22 @@ mod tests {
 
         let diagram = Diagram::new(&machine).unwrap();
 
-        assert_eq!(diagram.package.cores.len(), 12);
+        // Cores all alike are of no kind, one square each.
+        let cores = &diagram.package.dies[0].cores;
+
+        assert_eq!(cores.len(), 12);
         assert!(
-            diagram
-                .package
-                .cores
+            cores
                 .iter()
-                .all(|(_, kind)| *kind == CoreKind::Performance)
+                .all(|core| core.kind.is_none() && core.cores == 1)
         );
         assert_eq!(diagram.routes.len(), 5);
         assert_apart(&diagram);
     }
 
-    /// A controller with more drives than the laptop's view holds: its
-    /// last drives are counted in a block of their own, with no traffic.
+    /// A controller with more drives than the laptop's view holds, none
+    /// alike: its last drives are counted in a block of their own, with no
+    /// traffic.
     #[test]
     fn a_controller_with_many_drives_is_folded_to_fit() {
         let mut machine = Machine::fixture();
@@ -1684,6 +2035,7 @@ mod tests {
             drive.kind = DriveKind::Sata;
             drive.rotational = true;
             drive.pci = Some(sata);
+            drive.bytes = (u64::from(n) + 1) * 1_000_000_000_000;
             machine.drives.push(drive);
         }
 
@@ -1710,6 +2062,113 @@ mod tests {
         // The NVMe drive's route, and those of the SATA drives drawn.
         assert_eq!(diagram.routes.len(), drawn + 2);
         assert_apart(&diagram);
+    }
+
+    /// The two-socket server: its alike drives, its root ports with a
+    /// drive each and its network adapters' ports drawn as one block each,
+    /// standing for them all with their traffic together, until it fits.
+    #[test]
+    fn a_servers_alike_devices_are_drawn_as_one() {
+        let machine = crate::machine::Fixture::Server.machine();
+        let diagram = Diagram::new(&machine).unwrap();
+        let size = v(diagram.extent.width(), diagram.extent.height());
+        let lettered = |first: &str| {
+            diagram
+                .blocks
+                .iter()
+                .find(|block| block.lines[0] == first)
+                .unwrap_or_else(|| panic!("{first}"))
+        };
+
+        assert!(size.x <= BUDGET.x && size.y <= BUDGET.y, "{size}");
+        assert!(!diagram.blocks.iter().any(|b| b.source == Source::Summary));
+        assert_apart(&diagram);
+
+        let nvme = lettered("NVMe SSD ×8");
+        let disks = lettered("HARD DISK ×8");
+        let ports = lettered("8 PORTS");
+
+        assert_eq!(nvme.lines[1], "3.8 TB EACH");
+        assert_eq!((nvme.merged.len(), disks.merged.len()), (7, 7));
+        assert_eq!((ports.form, ports.merged.len()), (Form::Bridge, 7));
+        assert_eq!(lettered("ETHERNET ×4").lines[1], "1 OF 4 UP");
+        assert_eq!(lettered("ETHERNET ×2").lines[1], "10 GBIT/S");
+
+        // Every drive's traffic runs to the block it is drawn in.
+        let gauged: usize = diagram.routes.iter().map(|route| route.gauges.len()).sum();
+        assert_eq!(gauged, machine.drives.len() + 6);
+    }
+
+    /// A machine with a graphics card driving three displays and a USB
+    /// host as busy: the USB host's devices are counted before a display
+    /// is, so every display is drawn.
+    #[test]
+    fn displays_are_the_last_folded() {
+        use crate::machine::Fixture;
+
+        let mut machine = Fixture::Desktop.machine();
+        let monitor = machine
+            .connectors
+            .iter()
+            .find_map(|connector| connector.panel.clone())
+            .unwrap();
+
+        for connector in &mut machine.connectors {
+            connector.panel.get_or_insert_with(|| monitor.clone());
+        }
+
+        // As many devices on the USB host's root hub as displays on the
+        // graphics card, none alike.
+        let template = machine
+            .usb
+            .iter()
+            .find(|d| d.parent.is_some())
+            .unwrap()
+            .clone();
+
+        for (n, class) in [0x01, 0x0e].into_iter().enumerate() {
+            machine.usb.push(UsbDevice {
+                port: format!("{}{n}", template.port),
+                class,
+                ..template.clone()
+            });
+        }
+
+        let (tree, _) = tree(&machine);
+        let screens = |diagram: &Diagram| {
+            diagram
+                .blocks
+                .iter()
+                .filter(|b| matches!(b.form, Form::Screen { .. }))
+                .count()
+        };
+        let diagram = Diagram::new(&machine).unwrap();
+        let size = v(diagram.extent.width(), diagram.extent.height());
+
+        fn find(nodes: &[Node], group: Group) -> Option<&Node> {
+            nodes.iter().find_map(|node| {
+                (node.group == group)
+                    .then_some(node)
+                    .or_else(|| find(&node.children, group))
+            })
+        }
+
+        assert_eq!(find(&tree, Group::Usb).unwrap().children.len(), 4);
+        assert_eq!(find(&tree, Group::Graphics).unwrap().children.len(), 4);
+        assert!(
+            Diagram::of(&machine, machine.cpu.as_ref().unwrap(), &tree, 0)
+                .extent
+                .height()
+                > BUDGET.y
+        );
+        assert!(size.x <= BUDGET.x && size.y <= BUDGET.y, "{size}");
+        assert_eq!(screens(&diagram), machine.displays().count());
+        assert!(
+            diagram
+                .blocks
+                .iter()
+                .any(|b| b.source == Source::Summary && b.group == Group::Usb)
+        );
     }
 
     /// An NVMe drive with nothing on it mounted (a second system's, a
