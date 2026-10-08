@@ -40,7 +40,7 @@ pub use fixture::Fixture;
 pub use network::{Interface, Link};
 pub use power::{Battery, Charge, ChargeState, Charger, ChargerKind};
 pub use processor::{Cache, CacheKind, CoreKind, Cores, Cpu, Memory, Module};
-pub use sensors::{Sampler, Sensor, SensorKind, Site, Snapshot, Traffic, Transfer};
+pub use sensors::{HISTORY, Sampler, Sensor, SensorKind, Site, Snapshot, Traffic, Transfer};
 pub use storage::{Drive, DriveKind, Partition};
 
 /// A computer, as far as it says without root.
@@ -140,6 +140,12 @@ impl Machine {
     /// at `t`.
     pub fn sample(&self, t: f32) -> Arc<Snapshot> {
         self.sampler.at(t)
+    }
+
+    /// What the machine has done up to `t`: its samples a second apart,
+    /// the oldest first, for up to two minutes (see [`Sampler::history`]).
+    pub fn history(&self, t: f32) -> Vec<Arc<Snapshot>> {
+        self.sampler.history(t)
     }
 
     /// The displays connected, and the outputs they are on.

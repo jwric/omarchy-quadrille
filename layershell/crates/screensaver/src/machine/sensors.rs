@@ -8,6 +8,7 @@
 //! command to the drive, which can keep it from its deepest sleep or, a
 //! hard disk's, from spinning down: those are read once a minute, and not
 //! before the first frame. The fixture's snapshot is a function of time.
+use std::collections::VecDeque;
 use std::fs::File;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
@@ -447,6 +448,8 @@ pub(super) fn reread(file: &File) -> Option<String> {
 /// How often the machine is sampled, and its slow sensors.
 const PERIOD: Duration = Duration::from_secs(1);
 const SLOW_PERIOD: Duration = Duration::from_secs(60);
+/// How many of the latest samples are kept, a second apart: two minutes.
+pub const HISTORY: usize = 120;
 
 /// Where a machine's live values come from.
 #[derive(Clone)]
@@ -463,6 +466,8 @@ enum Source {
 /// What the sampling thread shares with the frames.
 struct Shared {
     latest: Mutex<Arc<Snapshot>>,
+    /// The latest samples, oldest first, the latest last.
+    history: Mutex<VecDeque<Arc<Snapshot>>>,
     /// The gauges, until the thread that reads them is started.
     idle: Mutex<Option<(Gauges, Counters, Instant)>>,
 }
@@ -473,9 +478,11 @@ impl Sampler {
     /// holds it.
     pub(super) fn live(gauges: Gauges) -> Self {
         let (snapshot, counters) = gauges.sample(None, Some(&Snapshot::default()));
+        let snapshot = Arc::new(snapshot);
 
         Self(Source::Live(Arc::new(Shared {
-            latest: Mutex::new(Arc::new(snapshot)),
+            latest: Mutex::new(snapshot.clone()),
+            history: Mutex::new(VecDeque::from([snapshot])),
             idle: Mutex::new(Some((gauges, counters, Instant::now()))),
         })))
     }
@@ -511,6 +518,32 @@ impl Sampler {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .clone()
+            }
+        }
+    }
+
+    /// The samples up to `t`, a second apart and at most [`HISTORY`] of
+    /// them, the oldest first: those a live machine has been read for so
+    /// far; the fixture's at the whole seconds up to `t`.
+    pub fn history(&self, t: f32) -> Vec<Arc<Snapshot>> {
+        match &self.0 {
+            Source::Made(at) => {
+                let now = t.floor();
+
+                (0..HISTORY)
+                    .rev()
+                    .map(|ago| Arc::new(at(now - ago as f32)))
+                    .collect()
+            }
+            Source::Live(shared) => {
+                self.at(t);
+                shared
+                    .history
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .iter()
+                    .cloned()
+                    .collect()
             }
         }
     }
@@ -550,7 +583,19 @@ fn keep_sampling(
             slow = Some(now);
         }
 
-        *shared.latest.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(snapshot);
+        let snapshot = Arc::new(snapshot);
+        let mut history = shared
+            .history
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+
+        if history.len() == HISTORY {
+            history.pop_front();
+        }
+
+        history.push_back(snapshot.clone());
+        drop(history);
+        *shared.latest.lock().unwrap_or_else(PoisonError::into_inner) = snapshot;
         (counters, then) = (next, now);
     }
 }

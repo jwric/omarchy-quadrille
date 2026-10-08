@@ -37,11 +37,11 @@ use crate::draft::Placement::Auto;
 use crate::draft::raster::LETTERING;
 use crate::draft::{Draft, Extent, Fill, Line, Shape, Tone, V2, arc_points, polar, v};
 use crate::machine::{
-    ChargeState, ChargerKind, ChassisKind, Drive, DriveKind, Link, Machine, PciAddress, PciKind,
-    Sensor, SensorKind, Site, Snapshot,
+    ChargeState, ChargerKind, ChassisKind, Drive, DriveKind, HISTORY, Link, Machine, PciAddress,
+    PciKind, Sensor, SensorKind, Site, Snapshot,
 };
 
-use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
+use super::super::{Card, Domain, Part, Place, Reading, Revision, Subject, Unit, View};
 use super::layout::{BUDGET, named, short};
 use super::{SPEC_ROWS, binary, counted, decimal, fit, flow, lettered, rows};
 
@@ -174,6 +174,23 @@ const HEADER_CHIPS: [&str; 8] = [
 
 /// Room round the drawing for the balloons to line up in.
 const MARGIN: f32 = 22.0;
+
+/// The chart of the last two minutes under the plan: its height; the room
+/// either side of its plot for its scales, over it for its key and under
+/// it for its times.
+const CHART: f32 = 80.0;
+const CHART_SIDE: f32 = 34.0;
+const CHART_KEY: f32 = 14.0;
+const CHART_TIME: f32 = 12.0;
+/// How much wider than tall a wide display's view is, about: a plan that
+/// wide for its height and the chart's leaves room for the chart under it
+/// there, which a sheet adds on a wide display only, at whatever scale
+/// fits both.
+const WIDE_VIEW: f32 = 1.3;
+/// Its temperatures' grid, every 20 °C, and its fans' speed grid, in steps
+/// of 1000 rpm.
+const CHART_STEP: f32 = 20.0;
+const RPM_STEP: f32 = 1000.0;
 
 /// What a heat source is, in the order the parts list documents them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -606,6 +623,16 @@ struct Plan {
     /// Where the pipe is named, if it has room.
     legend: Option<V2>,
     extent: Extent,
+}
+
+/// A trace of the chart: what it follows, its value now and the height of
+/// that, its tone, and its height at each sample, if there was one.
+struct Trace {
+    name: String,
+    value: String,
+    height: Option<f32>,
+    tone: Tone,
+    points: Vec<Option<f32>>,
 }
 
 /// The heat a source gives the air: an arrow from its block into the air
@@ -1218,6 +1245,9 @@ pub struct Cooling {
     turned: RefCell<Vec<Option<(f64, f64)>>>,
     /// Whether each fan has been seen turning.
     seen: RefCell<Vec<bool>>,
+    /// The samples the chart was last drawn from, and the second they end
+    /// at: drawn again a second later.
+    history: RefCell<Option<(i64, Vec<std::sync::Arc<Snapshot>>)>>,
 }
 
 impl Cooling {
@@ -1351,6 +1381,7 @@ impl Cooling {
             rotor,
             turned: RefCell::new(vec![None; fans.len()]),
             seen: RefCell::new(vec![false; fans.len()]),
+            history: RefCell::new(None),
             sources,
             fans,
             plan,
@@ -2028,6 +2059,216 @@ impl Cooling {
             .collect()
     }
 
+    /// Whether the plan is wide enough for the chart under it.
+    fn charted(&self) -> bool {
+        let extent = self.plan.extent;
+
+        (extent.height() + CHART) * WIDE_VIEW <= extent.width()
+    }
+
+    /// The chart's plot, under the plan and as wide as its case.
+    fn plot(&self) -> Extent {
+        let case = self.plan.case;
+
+        Extent::new(
+            v(case.min.x + CHART_SIDE, CHART_TIME),
+            v(case.max.x - CHART_SIDE, CHART - CHART_KEY),
+        )
+    }
+
+    /// The chart's frame, grid and fixed lettering: the temperatures up its
+    /// left, the minutes along its foot.
+    fn chart(&self, d: &mut Draft) {
+        let plot = self.plot();
+        let height =
+            |celsius: f32| plot.min.y + (celsius - COLDEST) / (HOTTEST - COLDEST) * plot.height();
+
+        d.rect(plot.min, plot.max, Line::Thin);
+
+        let mut celsius = COLDEST;
+
+        while celsius <= HOTTEST {
+            let y = height(celsius);
+
+            if celsius > COLDEST && celsius < HOTTEST {
+                d.line(v(plot.min.x, y), v(plot.max.x, y), Line::Path)
+                    .tone(Tone::Faint);
+            }
+
+            d.label(v(plot.min.x - 4.0, y), format!("{celsius:.0}"))
+                .anchor(Anchor::RIGHT)
+                .tone(Tone::Muted);
+            celsius += CHART_STEP;
+        }
+
+        let minute = plot.max.x - plot.width() * 60.0 / (HISTORY - 1) as f32;
+
+        d.line(v(minute, plot.min.y), v(minute, plot.max.y), Line::Path)
+            .tone(Tone::Faint);
+
+        for (x, text, anchor) in [
+            (plot.min.x, "2 MIN AGO", Anchor::LEFT),
+            (minute, "1 MIN", Anchor::CENTRE),
+            (plot.max.x, "NOW", Anchor::RIGHT),
+        ] {
+            d.label(v(x, plot.min.y - 7.0), text)
+                .anchor(anchor)
+                .tone(Tone::Muted);
+        }
+    }
+
+    /// The chart's traces from the samples up to `t`: the processor's
+    /// temperature, the graphics' or else the hottest of the rest, and the
+    /// first turning fan's speed on a scale of its own, each keyed over the
+    /// plot in its tone with its value now.
+    fn traces(&self, d: &mut Draft, now: &Snapshot, t: f32, seen: &[bool]) {
+        let second = t.floor() as i64;
+        let mut cached = self.history.borrow_mut();
+
+        if cached.as_ref().is_none_or(|(at, _)| *at != second) {
+            *cached = Some((second, self.machine.history(t)));
+        }
+
+        let Some((_, history)) = cached.as_ref().filter(|(_, history)| !history.is_empty()) else {
+            return;
+        };
+        let plot = self.plot();
+        let x = |k: usize| {
+            plot.max.x - (history.len() - 1 - k) as f32 * plot.width() / (HISTORY - 1) as f32
+        };
+        let hottest = |kind: Kind, snapshot: &Snapshot| {
+            self.sources
+                .iter()
+                .filter(|source| source.kind == kind)
+                .filter_map(|source| source.hottest(snapshot))
+                .reduce(f32::max)
+        };
+        // The second temperature: the graphics', or that of whatever else
+        // has run hottest over the chart.
+        let other = if self.sources.iter().any(|s| s.kind == Kind::Graphics) {
+            Some(Kind::Graphics)
+        } else {
+            self.sources
+                .iter()
+                .filter(|source| !matches!(source.kind, Kind::Processor | Kind::Battery))
+                .filter_map(|source| {
+                    let hottest = history
+                        .iter()
+                        .filter_map(|snapshot| source.hottest(snapshot))
+                        .reduce(f32::max)?;
+
+                    Some((source.kind, hottest))
+                })
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(kind, _)| kind)
+        };
+        let fan = (0..self.fans.len()).find(|&k| seen[k]);
+        let fastest = fan.map_or(0.0, |k| {
+            history
+                .iter()
+                .map(|snapshot| rpm(snapshot, self.fans[k].sensor))
+                .fold(0.0, f32::max)
+        });
+        let top = (fastest / RPM_STEP).ceil().max(1.0) * RPM_STEP;
+        let warmth = |celsius: f32| {
+            plot.min.y + ((celsius - COLDEST) / (HOTTEST - COLDEST)).clamp(0.0, 1.0) * plot.height()
+        };
+        let speed = |rpm: f32| plot.min.y + (rpm / top).clamp(0.0, 1.0) * plot.height();
+        let mut traces: Vec<Trace> = Vec::new();
+
+        for (kind, tone) in [(Some(Kind::Processor), Tone::Accent), (other, Tone::Ink)] {
+            let Some(kind) = kind else {
+                continue;
+            };
+            let name = match kind {
+                Kind::Processor => "CPU",
+                Kind::Graphics => "GPU",
+                kind => kind.part(),
+            };
+            let values: Vec<Option<f32>> = history
+                .iter()
+                .map(|snapshot| hottest(kind, snapshot).map(warmth))
+                .collect();
+
+            let celsius = hottest(kind, now);
+
+            traces.push(Trace {
+                name: name.into(),
+                value: degrees(celsius),
+                height: celsius.map(warmth),
+                tone,
+                points: values,
+            });
+        }
+
+        if let Some(k) = fan {
+            let values = history
+                .iter()
+                .map(|snapshot| Some(speed(rpm(snapshot, self.fans[k].sensor))))
+                .collect();
+
+            let turning = rpm(now, self.fans[k].sensor);
+
+            traces.push(Trace {
+                name: self.fans[k].name.into(),
+                value: format!("{turning:.0} rpm"),
+                height: Some(speed(turning)),
+                tone: Tone::Live,
+                points: values,
+            });
+
+            // Its scale up the right.
+            for step in [0.0, 0.5, 1.0] {
+                d.label(
+                    v(plot.max.x + 4.0, plot.min.y + step * plot.height()),
+                    format!("{:.0}", top * step),
+                )
+                .anchor(Anchor::LEFT)
+                .tone(Tone::Live);
+            }
+        }
+
+        let mut key = plot.min.x;
+
+        for Trace {
+            name,
+            value,
+            height,
+            tone,
+            points,
+        } in traces
+        {
+            // A trace broken where its source read nothing.
+            for run in points
+                .iter()
+                .enumerate()
+                .collect::<Vec<_>>()
+                .split(|(_, value)| value.is_none())
+            {
+                let points: Vec<V2> = run
+                    .iter()
+                    .filter_map(|&(k, value)| Some(v(x(k), (*value)?)))
+                    .collect();
+
+                if points.len() > 1 {
+                    d.polyline(&points, Line::Trace).tone(tone);
+                }
+            }
+
+            // Where it is now, even before there is a trace to it.
+            if let Some(y) = height {
+                d.dot(v(plot.max.x, y), 3).tone(tone);
+            }
+
+            let text = format!("{name} {value}");
+
+            d.label(v(key, plot.max.y + 7.0), text.as_str())
+                .anchor(Anchor::LEFT)
+                .tone(tone);
+            key += letters(text.chars().count() + 3);
+        }
+    }
+
     /// Where fan `fan` is in the case, in words: `LEFT`, `TOP RIGHT`.
     fn position(&self, fan: &Fan) -> String {
         let side = if fan.mirrored { "RIGHT" } else { "LEFT" };
@@ -2387,6 +2628,23 @@ impl Subject for Cooling {
         self.plan.extent
     }
 
+    /// Under a plan wide enough for it, the temperatures and a fan's speed
+    /// over the last two minutes: where a wide display has room for it
+    /// without drawing the plan much smaller. Under a tall plan it would.
+    fn views(&self) -> Vec<View> {
+        let case = self.plan.case;
+
+        if !self.charted() {
+            return Vec::new();
+        }
+
+        vec![View {
+            name: "LAST 2 MINUTES".into(),
+            place: Place::Under,
+            extent: Extent::new(v(case.min.x, 0.0), v(case.max.x, CHART)),
+        }]
+    }
+
     fn draw(&self, d: &mut Draft, t: f32) {
         let snapshot = self.machine.sample(t);
         let seen = self.seen(&snapshot);
@@ -2427,7 +2685,15 @@ impl Subject for Cooling {
             if !self.fans.is_empty() {
                 self.flows(d, &snapshot, &turns, &seen, t);
             }
+
+            if self.charted() {
+                d.in_view(0, |d| self.traces(d, &snapshot, t, &seen));
+            }
         });
+
+        if self.charted() {
+            d.in_view(0, |d| self.chart(d));
+        }
 
         // A balloon for each item, on the first of its blocks or fans: a
         // block under the pipe at its top corner, by the room beside the
@@ -2807,7 +3073,7 @@ mod tests {
             !draft
                 .marks()
                 .iter()
-                .any(|mark| matches!(mark.ink, Ink::Dot { .. }))
+                .any(|mark| mark.view.is_none() && matches!(mark.ink, Ink::Dot { .. }))
         );
         assert!(!cooling.card().parts.iter().any(|part| part.name == "FAN"));
 
@@ -3161,6 +3427,46 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Under the plan, the chart runs over the last two minutes: the
+    /// processor's temperature, the next source's and a fan's speed, from
+    /// the left of its plot to now at its right.
+    #[test]
+    fn the_chart_runs_over_the_last_two_minutes() {
+        let machine = Machine::fixture();
+        let cooling = Cooling::new(&machine).unwrap();
+        let history = machine.history(40.5);
+        let mut draft = Draft::new();
+
+        assert_eq!(history.len(), HISTORY);
+        assert_eq!(*history[HISTORY - 1], *machine.sample(40.0));
+        assert_eq!(*history[0], *machine.sample(40.0 - (HISTORY - 1) as f32));
+
+        cooling.draw(&mut draft, 40.5);
+
+        let plot = cooling.plot();
+        let traces: Vec<(f32, f32, Tone)> = draft
+            .marks()
+            .iter()
+            .filter(|mark| mark.view == Some(0))
+            .filter_map(|mark| match &mark.ink {
+                Ink::Stroke {
+                    shape: Shape::Polyline { points, .. },
+                    line: Line::Trace,
+                } => Some((points[0].x, points[points.len() - 1].x, mark.tone)),
+                _ => None,
+            })
+            .collect();
+        let tones: Vec<Tone> = traces.iter().map(|trace| trace.2).collect();
+
+        assert_eq!(tones, [Tone::Accent, Tone::Ink, Tone::Live]);
+        assert!(
+            traces
+                .iter()
+                .all(|&(from, to, _)| from == plot.min.x && to == plot.max.x)
+        );
+        assert_eq!(cooling.views()[0].extent.width(), cooling.plan.case.width());
     }
 
     #[test]
