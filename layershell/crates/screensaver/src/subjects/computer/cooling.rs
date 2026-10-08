@@ -87,11 +87,13 @@ const CELL: f32 = 44.0;
 const CELL_HALF: f32 = 3.5;
 const TERMINAL: f32 = 2.5;
 const TERMINAL_HALF: f32 = 1.5;
-/// In a detail, the room over a block's first bulb for its name, and after
-/// a tube for its temperature: `100 °C` four units after it at twice the
-/// laptop's view.
+/// In a block's detail: the room over its first bulb for its name and
+/// left of its bulbs; after a tube, the gap to its temperature and the
+/// room for it, `100 °C` at twice the laptop's view.
 const DETAIL_NAME: f32 = 6.0;
-const DETAIL_VALUE: f32 = 4.0 + 36.0 / 2.36;
+const DETAIL_LEFT: f32 = 2.0;
+const DETAIL_GAP: f32 = 4.0;
+const DETAIL_VALUE: f32 = DETAIL_GAP + 36.0 / 2.36;
 
 /// Between blocks across and down.
 const ACROSS: f32 = 14.0;
@@ -353,7 +355,7 @@ impl Source {
         };
         let top = first.y + BULB_RADIUS + DETAIL_NAME;
         let (left, right) = (
-            first.x - BULB_RADIUS - 2.0,
+            first.x - BULB_RADIUS - DETAIL_LEFT,
             first.x + BULB_RADIUS + TUBE + DETAIL_VALUE,
         );
         let half = v(right - left, top - bottom) / 2.0;
@@ -692,7 +694,7 @@ fn plan(sources: &mut [Source], fans: &mut [Fan], rotor: Rotor, columns: usize) 
     let span = width(first.len()).max(width(columns));
     let centre = middle + span / 2.0;
     // What a desktop's heatsinks take over their blocks.
-    let fins = if piped { 0.0 } else { HEATSINK };
+    let heatsinks = if piped { 0.0 } else { HEATSINK };
 
     // What has fins of its own, side by side under the top...
     let mut x = middle + (span - width(first.len())) / 2.0;
@@ -801,12 +803,13 @@ fn plan(sources: &mut [Source], fans: &mut [Fan], rotor: Rotor, columns: usize) 
 
     // The pipe from the fins at one end to those at the other, over every
     // block it drops to.
-    let drops: Vec<f32> = match piped {
-        true => first
+    let drops: Vec<f32> = if piped {
+        first
             .iter()
             .map(|&index| sources[index].frame.centre().x)
-            .collect(),
-        false => Vec::new(),
+            .collect()
+    } else {
+        Vec::new()
     };
     let pipe = (!drops.is_empty() && !vents.is_empty()).then(|| {
         let ends = vents
@@ -857,7 +860,7 @@ fn plan(sources: &mut [Source], fans: &mut [Fan], rotor: Rotor, columns: usize) 
             if fans.is_empty() {
                 let x = frame.centre().x;
                 let room = if sources[source].kind.finned() {
-                    fins
+                    heatsinks
                 } else {
                     0.0
                 };
@@ -1280,13 +1283,11 @@ impl Cooling {
         let mut listed: Vec<(usize, &Sensor)> = Vec::new();
 
         for (index, sensor) in machine.fans() {
-            let turning = rpm(&first, index) > 0.0;
-
             if matches!(sensor.site, Site::Device(_)) {
                 continue;
             }
 
-            if !turning
+            if rpm(&first, index) <= 0.0
                 && HEADER_CHIPS
                     .iter()
                     .any(|chip| sensor.chip.starts_with(chip))
@@ -1845,9 +1846,12 @@ impl Cooling {
                 }
 
                 in_its_detail(d, source, |d| {
-                    d.label(v(at.x + BULB_RADIUS + TUBE + 4.0, at.y), degrees(reading))
-                        .anchor(Anchor::LEFT)
-                        .tone(Tone::Ink);
+                    d.label(
+                        v(at.x + BULB_RADIUS + TUBE + DETAIL_GAP, at.y),
+                        degrees(reading),
+                    )
+                    .anchor(Anchor::LEFT)
+                    .tone(Tone::Ink);
                 });
             });
         }
