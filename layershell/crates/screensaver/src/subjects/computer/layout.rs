@@ -12,7 +12,8 @@
 //! whole number of pixels at any scale, so a block is made wide enough for
 //! its lettering at the laptop's scale, the smallest the sheet draws the
 //! diagram at, and [`Diagram::new`] folds a large tree until it fits the
-//! laptop's view at that scale or larger: open connectors left out, alike
+//! laptop's view at that scale or larger (and [`Diagram::within`] until it
+//! fits a smaller view, as far as it can): open connectors left out, alike
 //! devices drawn as one (a server's eight NVMe drives, each on a root port
 //! of its own, as one port and one block), then the last devices on a busy
 //! hub, controller or bridge counted rather than drawn, displays last, and
@@ -1256,6 +1257,13 @@ impl Diagram {
     /// The diagram of `machine`, if it has a processor and something on
     /// its root bus to show; folded until it fits [`BUDGET`], if it can be.
     pub fn new(machine: &Machine) -> Option<Self> {
+        Self::within(machine, BUDGET)
+    }
+
+    /// The diagram of `machine` folded until it fits `budget` instead: a
+    /// view smaller than the laptop's, where a diagram any larger would be
+    /// drawn smaller than its lettering.
+    pub fn within(machine: &Machine, budget: V2) -> Option<Self> {
         let cpu = machine.cpu.as_ref()?;
         let (mut tree, shown) = tree(machine);
 
@@ -1268,15 +1276,15 @@ impl Diagram {
 
             let mut diagram = Self::of(machine, cpu, &tree, shown);
             let size = v(diagram.extent.width(), diagram.extent.height());
-            let folded = (size.x > BUDGET.x && fold(&mut tree, true))
-                || (size.y > BUDGET.y && fold(&mut tree, false));
+            let folded = (size.x > budget.x && fold(&mut tree, true))
+                || (size.y > budget.y && fold(&mut tree, false));
 
             if !folded {
                 // A diagram smaller than the budget is given the room of
                 // one as large, so the laptop draws it at a pixel to a unit
                 // as its lettering is sized for, and what its details show
                 // is the same however much is on its buses.
-                let room = (BUDGET - size).max(V2::ZERO) / 2.0;
+                let room = (budget - size).max(V2::ZERO) / 2.0;
 
                 diagram.extent.min -= room.floor();
                 diagram.extent.max += room.ceil();

@@ -80,9 +80,11 @@ pub trait Subject {
     /// The subject laid out for the room its front view has on an output,
     /// if it lays itself out for that rather than once for every output: a
     /// drawing to scale whose lettering takes room in pixels round what it
-    /// draws is drawn larger with that room taken in the output's pixels.
-    /// What it returns is drawn instead of it, and its card says the same
-    /// but where its details are.
+    /// draws is drawn larger with that room taken in the output's pixels,
+    /// and a diagram folds to fit a view smaller than it is made for. What
+    /// it returns is drawn instead of it, and its card takes the sheet's
+    /// room as the subject's does: as many parts, notes no longer, no more
+    /// rows of specification.
     fn fitted(&self, _room: Room) -> Option<Rc<dyn Subject>> {
         None
     }

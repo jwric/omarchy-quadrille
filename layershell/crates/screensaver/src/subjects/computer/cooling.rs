@@ -30,6 +30,7 @@
 //! on every side, and the heat pipe meeting what it runs into.
 use std::cell::RefCell;
 use std::f32::consts::{PI, TAU};
+use std::rc::Rc;
 
 use quadrille::draw::{Anchor, Horizontal, Vertical};
 
@@ -41,9 +42,9 @@ use crate::machine::{
     PciKind, Sensor, SensorKind, Site, Snapshot,
 };
 
-use super::super::{Card, Domain, Part, Place, Reading, Revision, Subject, Unit, View};
+use super::super::{Card, Domain, Part, Place, Reading, Revision, Room, Subject, Unit, View};
 use super::layout::{BUDGET, named};
-use super::{SPEC_ROWS, binary, chain, counted, decimal, fit, flow, lettered, rows, set};
+use super::{SPEC_ROWS, alike, binary, chain, counted, decimal, fit, flow, lettered, rows, set};
 
 /// A heat source's block: wide enough for its name and a temperature...
 const BLOCK: f32 = 108.0;
@@ -1245,11 +1246,20 @@ pub struct Cooling {
     /// The samples the chart was last drawn from, and the second they end
     /// at: drawn again a second later.
     history: RefCell<Option<(i64, Vec<std::sync::Arc<Snapshot>>)>>,
+    /// The plan laid out for each view smaller than the laptop's that a
+    /// sheet has asked for, if it reads the same there.
+    fitted: RefCell<Vec<(V2, Option<Rc<Cooling>>)>>,
 }
 
 impl Cooling {
     /// The cooling of `machine`, if it measures a temperature.
     pub fn new(machine: &Machine) -> Option<Self> {
+        Self::within(machine, BUDGET)
+    }
+
+    /// The cooling of `machine` laid out to fit `budget` best (see
+    /// [`Cooling::fold`]).
+    fn within(machine: &Machine, budget: V2) -> Option<Self> {
         if !machine
             .sensors
             .iter()
@@ -1318,7 +1328,7 @@ impl Cooling {
                 low: false,
             })
             .collect();
-        let (sources, fans, plan) = Self::fold(sources(machine), fans, rotor);
+        let (sources, fans, plan) = Self::fold(sources(machine), fans, rotor, budget);
 
         let mut items: Vec<Item> = Vec::new();
 
@@ -1385,6 +1395,7 @@ impl Cooling {
             turned: RefCell::new(vec![None; fans.len()]),
             seen: RefCell::new(vec![false; fans.len()]),
             history: RefCell::new(None),
+            fitted: RefCell::default(),
             sources,
             fans,
             plan,
@@ -1400,18 +1411,23 @@ impl Cooling {
         Some(cooling)
     }
 
-    /// `sources` and `fans` laid out in as many columns as fit the
-    /// laptop's view best: two, a side each, when there are fans on both
-    /// sides; one by the fans on one side; up to three, the air rising,
-    /// with none.
-    fn fold(sources: Vec<Source>, fans: Vec<Fan>, rotor: Rotor) -> (Vec<Source>, Vec<Fan>, Plan) {
+    /// `sources` and `fans` laid out in as many columns as fit `budget`
+    /// (the laptop's view, or a smaller one) best: two, a side each, when
+    /// there are fans on both sides; one by the fans on one side; up to
+    /// three, the air rising, with none.
+    fn fold(
+        sources: Vec<Source>,
+        fans: Vec<Fan>,
+        rotor: Rotor,
+        budget: V2,
+    ) -> (Vec<Source>, Vec<Fan>, Plan) {
         let columns: &[usize] = match fans.len() {
             0 => &[3, 2, 1],
             1 => &[1],
             _ => &[2, 1],
         };
         let overflow =
-            |plan: &Plan| (plan.extent.width() / BUDGET.x).max(plan.extent.height() / BUDGET.y);
+            |plan: &Plan| (plan.extent.width() / budget.x).max(plan.extent.height() / budget.y);
 
         columns
             .iter()
@@ -2682,6 +2698,38 @@ impl Subject for Cooling {
 
     fn extent(&self) -> Extent {
         self.plan.extent
+    }
+
+    /// In a view smaller than the laptop's, the plan laid out in the
+    /// columns that fit it best, so its lettering stays inside its blocks:
+    /// where that keeps the same parts, notes and room for the
+    /// specification.
+    fn fitted(&self, room: Room) -> Option<Rc<dyn Subject>> {
+        let budget = room.view.min(BUDGET);
+
+        if budget == BUDGET {
+            return None;
+        }
+
+        let mut fitted = self.fitted.borrow_mut();
+
+        if let Some((_, cooling)) = fitted.iter().find(|(made, _)| *made == budget) {
+            return cooling.clone().map(|cooling| cooling as Rc<dyn Subject>);
+        }
+
+        let cooling = Self::within(&self.machine, budget)
+            .filter(|cooling| cooling.plan.extent != self.plan.extent)
+            .filter(|cooling| alike(&self.card, &cooling.card))
+            .map(Rc::new);
+
+        // A view for each output the sheet is drawn on, and a few more for
+        // one that changes size.
+        if fitted.len() >= 8 {
+            fitted.remove(0);
+        }
+
+        fitted.push((budget, cooling.clone()));
+        cooling.map(|cooling| cooling as Rc<dyn Subject>)
     }
 
     /// Under a plan wide enough for it, the temperatures and a fan's speed

@@ -1996,6 +1996,44 @@ mod tests {
         }
     }
 
+    /// On a laptop whose sheet is smaller than the desk's laptop's (2256 ×
+    /// 1504 at 1.5, 2880 × 1800 at 2), a machine's diagrams fold to fit the
+    /// view they have rather than being drawn smaller than their lettering:
+    /// the made-up laptop's topology and cooling at a pixel to a unit on
+    /// the first, and close to it on the second.
+    #[test]
+    fn a_smaller_laptop_folds_the_machines_diagrams_to_fit() {
+        let subjects = subjects::all(&Machine::fixture());
+
+        for (width, height, scale, least) in [(2256, 1504, 1.5, 1.0), (2880, 1800, 2.0, 0.9)] {
+            let output = Output {
+                width,
+                height,
+                scale,
+                display: Display {
+                    mm_per_vpx: 0.4,
+                    estimated: true,
+                },
+            };
+            let (width, height) = output.virtual_size();
+
+            for name in ["topology", "cooling"] {
+                let index = subjects::find(&subjects, name).unwrap();
+                let sheet = sheet(&subjects, index, output, 30.0);
+                let layout = Layout::new(width as i32, height as i32, sheet.subject.card());
+                let fitted = fitted(&sheet, &layout);
+                let subject = fitted.as_deref().expect("Folded for the smaller view");
+                let (panes, _) = arrange(subject, sheet.display, &layout);
+
+                assert!(
+                    panes[0].projection.scale >= least,
+                    "{name} on {width} × {height}: {}",
+                    panes[0].projection.scale
+                );
+            }
+        }
+    }
+
     /// The machine's sheets read as well on the monitors most desks have
     /// as on the laptop: 1920 × 1080 (or 3840 × 2160 at 2), where a diagram
     /// is drawn at a pixel to a unit, and 2560 × 1440, where it is drawn

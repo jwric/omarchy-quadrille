@@ -3,7 +3,9 @@
 //! adapters), the USB tree and the displays on the graphics card's
 //! connectors. Traffic runs along the wires as dots, at the rates the
 //! machine measures its drives and network adapters at.
+use std::cell::RefCell;
 use std::f32::consts::PI;
+use std::rc::Rc;
 
 use quadrille::draw::Anchor;
 
@@ -15,12 +17,14 @@ use crate::machine::{
 };
 
 use super::super::schematic::Schematic;
-use super::super::{Card, Domain, Part, Reading, Revision, Subject, Unit};
+use super::super::{Card, Domain, Part, Reading, Revision, Room, Subject, Unit};
 use super::layout::{
-    Bank, DETAIL_LINE, Diagram, Die, Form, Gauge, Group, LINE, Package, Placed, Route, Source,
-    bridged, named, short, version,
+    BUDGET, Bank, DETAIL_LINE, Diagram, Die, Form, Gauge, Group, LINE, Package, Placed, Route,
+    Source, bridged, named, short, version,
 };
-use super::{SPEC_ROWS, binary, bits, counted, decimal, fit, flow_by, lettered, rate, rows, set};
+use super::{
+    SPEC_ROWS, alike, binary, bits, counted, decimal, fit, flow_by, lettered, rate, rows, set,
+};
 
 /// A dot of traffic every so many units along a wire, running so fast.
 const SPACING: f64 = 8.0;
@@ -46,13 +50,20 @@ pub struct Topology {
     items: Vec<Item>,
     /// The sensor the processor's temperature is read from.
     temperature: Option<usize>,
+    /// The topology folded for each view smaller than the laptop's that a
+    /// sheet has asked for, if it reads the same there.
+    fitted: RefCell<Vec<(V2, Option<Rc<Topology>>)>>,
 }
 
 impl Topology {
     /// The topology of `machine`, if it has a processor and something on
     /// its buses to draw.
     pub fn new(machine: &Machine) -> Option<Self> {
-        let diagram = Diagram::new(machine)?;
+        Some(Self::of(machine, Diagram::new(machine)?))
+    }
+
+    /// The topology of `machine` drawn as `diagram`.
+    fn of(machine: &Machine, diagram: Diagram) -> Self {
         let mut items = vec![Item::Processor];
 
         items.extend(machine.memory.as_ref().map(|_| Item::Memory));
@@ -105,13 +116,14 @@ impl Topology {
             })
             .map(|(index, _)| index);
 
-        Some(Self {
+        Self {
             card,
             machine: machine.clone(),
             diagram,
             items,
             temperature,
-        })
+            fitted: RefCell::default(),
+        }
     }
 
     /// The parts list's index of `item`.
@@ -1555,6 +1567,37 @@ impl Subject for Topology {
 
     fn extent(&self) -> Extent {
         self.diagram.extent
+    }
+
+    /// In a view smaller than the laptop's, the topology folded to fit it,
+    /// so its lettering stays inside its blocks: where that keeps the same
+    /// parts, notes and room for the specification.
+    fn fitted(&self, room: Room) -> Option<Rc<dyn Subject>> {
+        let budget = room.view.min(BUDGET);
+
+        if budget == BUDGET {
+            return None;
+        }
+
+        let mut fitted = self.fitted.borrow_mut();
+
+        if let Some((_, topology)) = fitted.iter().find(|(made, _)| *made == budget) {
+            return topology.clone().map(|topology| topology as Rc<dyn Subject>);
+        }
+
+        let topology = Diagram::within(&self.machine, budget)
+            .map(|diagram| Self::of(&self.machine, diagram))
+            .filter(|topology| alike(&self.card, &topology.card))
+            .map(Rc::new);
+
+        // A view for each output the sheet is drawn on, and a few more for
+        // one that changes size.
+        if fitted.len() >= 8 {
+            fitted.remove(0);
+        }
+
+        fitted.push((budget, topology.clone()));
+        topology.map(|topology| topology as Rc<dyn Subject>)
     }
 
     fn draw(&self, d: &mut Draft, t: f32) {

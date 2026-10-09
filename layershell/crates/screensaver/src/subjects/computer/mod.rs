@@ -15,7 +15,7 @@ use crate::draft::geom::{along, length};
 use crate::draft::{Draft, Tone, V2};
 use crate::machine::Machine;
 
-use super::Subject;
+use super::{Card, Subject};
 
 mod cooling;
 mod displays;
@@ -44,6 +44,22 @@ pub fn sheets(machine: &Machine) -> Vec<Box<dyn Subject>> {
     }
 
     sheets
+}
+
+/// Whether a sheet's card laid out for another view, `fitted`, takes the
+/// sheet's room as `card` does, which the sheet is laid out for: as many
+/// parts, notes no longer, no more rows of specification for a part.
+fn alike(card: &Card, fitted: &Card) -> bool {
+    let rows = |card: &Card| card.parts.iter().map(|part| part.spec.len()).max();
+
+    card.parts.len() == fitted.parts.len()
+        && card.notes.len() == fitted.notes.len()
+        && card
+            .notes
+            .iter()
+            .zip(&fitted.notes)
+            .all(|(note, other)| other.chars().count() <= note.chars().count())
+        && rows(fitted) <= rows(card)
 }
 
 /// Specification rows of `name` and `value`, the value carried onto a
