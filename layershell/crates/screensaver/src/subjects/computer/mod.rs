@@ -47,7 +47,8 @@ pub fn sheets(machine: &Machine) -> Vec<Box<dyn Subject>> {
 }
 
 /// Specification rows of `name` and `value`, the value carried onto a
-/// second row if it is too long for one.
+/// second row if it is too long for one, and cut at the end of that one,
+/// with an ellipsis, if it is too long for two.
 fn rows(name: &str, value: &str) -> Vec<(String, String)> {
     let room = SPEC_ROOM - name.chars().count() - 2;
 
@@ -58,16 +59,13 @@ fn rows(name: &str, value: &str) -> Vec<(String, String)> {
     // Broken only between words: never inside one at its hyphen, which
     // would part HDMI-A-1.
     let options = textwrap::Options::new(room).word_splitter(WordSplitter::NoHyphenation);
+    let lines = textwrap::wrap(value, options);
+    let rest = lines[1..].join(" ");
 
-    textwrap::wrap(value, options)
-        .into_iter()
-        .take(2)
-        .enumerate()
-        .map(|(k, line)| {
-            let name = if k == 0 { name } else { "" };
-            (name.to_owned(), fit(&line, room))
-        })
-        .collect()
+    vec![
+        (name.to_owned(), fit(&lines[0], room)),
+        (String::new(), fit(&rest, room)),
+    ]
 }
 
 /// Draws `draw` set on the grid by each of `snaps` in turn, the outermost
@@ -259,6 +257,7 @@ fn lettered(name: &str) -> String {
 ///   the name;
 /// - a list of the models that share the device's id, `WX700*/WX710*`,
 ///   is the first of them, and a model's wildcard star is dropped;
+/// - a word run into a bracket is spaced from it;
 /// - `PCI Express` is `PCIe`.
 fn cleaned(name: &str) -> String {
     let name = match (name.find('['), name.rfind(']')) {
@@ -292,9 +291,12 @@ fn cleaned(name: &str) -> String {
             }
         })
         .collect();
+    // A word run into the bracket after it, `6E(802.11ax)`, is spaced
+    // from it.
     let name = words
         .join(" ")
         .replace('*', "")
+        .replace('(', " (")
         .replace("PCI Express", "PCIe");
 
     lettered(&name)
@@ -392,11 +394,11 @@ mod tests {
             ),
             (
                 "Wi-Fi 6E(802.11ax) WX210/WX1675* 2x2 [Generic Peak]",
-                "WI-FI 6E(802.11AX) WX210 2X2",
+                "WI-FI 6E (802.11AX) WX210 2X2",
             ),
             (
                 "Wi-Fi 7(802.11be) WX700*/WX710*/WB20*/WB40 2x2",
-                "WI-FI 7(802.11BE) WX700 2X2",
+                "WI-FI 7 (802.11BE) WX700 2X2",
             ),
             (
                 "NVMe SSD Controller SX100/PX100/PX200",
@@ -435,6 +437,16 @@ mod tests {
                 .all(|(_, value)| value.split(", ").all(|name| name.contains('-'))),
             "{carried:?}"
         );
+
+        // Too long for two rows, it says so where it is cut.
+        let cut = rows(
+            "SENSORS",
+            "SYSTIN, CPUTIN, AUXTIN1, AUXTIN3, PECI AGENT 0 CALIBRATION, ACPI THERMAL ZONE",
+        );
+
+        assert_eq!(cut.len(), 2);
+        assert!(cut[1].1.ends_with('…'), "{cut:?}");
+        assert!(cut[1].1.chars().count() <= SPEC_ROOM - "SENSORS".len() - 2);
     }
 
     /// A machine has the sheets it has something to show on, and no
