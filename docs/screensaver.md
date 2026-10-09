@@ -44,6 +44,16 @@ what keeps the plot, the wipe and the run cheap on the software renderer.
 `quadrille-screensaver bench` times each stage headless: drawing the sheet, and
 repainting what changed as a live surface does.
 
+A sheet's plot is worked out once, on its first frame, and each frame looks
+its moment up (`sheet/plotter/`). `--plot` chooses how the pen plots. `today`,
+the default, reveals the drawing pass by pass at one rate, as it always has.
+`carousel`, `drafting` and `quick` are styles of a pen at work being tried out:
+strokes that ink only the pixels they own in the finished drawing, so nothing is
+drawn over or wiped and the plot ends on the drawing the run begins with; put
+in an order, and timed as a carriage moves, then fitted to the plot's length.
+`quadrille-screensaver plot-stats` shows how each style spends each sheet's
+plot.
+
 ## A drawing office's conventions
 
 ![The engine at 1:1 on the ultrawide, in the paper theme: the connecting rod in detail](../plugins/screenshots/screensaver-engine-paper-ultrawide.png)
@@ -86,6 +96,8 @@ quadrille-screensaver render --subject gears --at 12,20 --output ultrawide --the
 quadrille-screensaver render --subject cooling --at 30 --size 1920x1080 --machine fixture-desktop
 quadrille-screensaver render --subject engine --at 24 --physical    # at the panel's own pixels
 quadrille-screensaver bench --output laptop
+quadrille-screensaver render --subject gears --at 3,6 --plot drafting --machine fixture
+quadrille-screensaver plot-stats --machine fixture
 ```
 
 ![The topology of the made-up laptop on the ultrawide, in the paper theme: the processor in detail](../plugins/screenshots/screensaver-computer-topology-paper-ultrawide.png)
