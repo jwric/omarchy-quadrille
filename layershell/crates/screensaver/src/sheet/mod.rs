@@ -24,7 +24,7 @@ use quadrille::draw::{Anchor, Horizontal, Pen, Vertical};
 use quadrille::{Palette, Theme};
 
 use crate::draft::letters;
-use crate::draft::place::Plan;
+use crate::draft::place::{self, Plan};
 use crate::draft::raster::{self, Head, Inked, LETTERING, Projection, colour, rect};
 use crate::draft::scale::Ratio;
 use crate::draft::v;
@@ -714,11 +714,32 @@ impl<'a> Scene<'a> {
         // A view alone is drawn with what is placed round it in its
         // middle, not the room the subject keeps round its drawing: the
         // balloons go wherever they read best, which may be on one side.
-        if let [pane] = panes.as_mut_slice() {
-            let (x, y) = plans[0].shift;
+        // A diagram's views drawn together are moved together the same way,
+        // with their captions.
+        let (x, y) = match plans.as_slice() {
+            [plan] => plan.shift,
+            plans if !card.scaled => plans
+                .iter()
+                .filter_map(Plan::inked)
+                .chain(panes.iter().filter_map(|pane| {
+                    let (name, top) = pane.caption.as_ref()?;
+                    let width = i32::from(LETTERING.width(name));
 
+                    // Its lettering and the line under it.
+                    Some(rect(top.x - width / 2, top.y, width, LINE + 1))
+                }))
+                .reduce(place::union)
+                .map_or((0, 0), |inked| place::middled(inked, layout.drawing())),
+            _ => (0, 0),
+        };
+
+        for pane in &mut panes {
             pane.projection.origin.0 += x as f32;
             pane.projection.origin.1 += y as f32;
+
+            if let Some((_, top)) = &mut pane.caption {
+                *top = Point::new(top.x + x, top.y + y);
+            }
         }
 
         let main = panes[0].projection;
@@ -1893,22 +1914,21 @@ mod tests {
         assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
     }
 
-    /// A view alone has as much paper on either side of what is drawn in
-    /// it, its annotations with it, as on the other, a few pixels apart at
-    /// most for what moves: for every sheet of every machine, on both
-    /// outputs. (A designed subject's moving parts may reach further at
-    /// one moment than another, and it is centred on all of their reach.)
+    /// A view alone, or a diagram's views together, have as much paper on
+    /// either side of what is drawn in them, their annotations and
+    /// captions with it, as on the other, a few pixels apart at most for
+    /// what moves: for every sheet of every machine, on both outputs. (A
+    /// designed subject's moving parts may reach further at one moment
+    /// than another, and it is centred on all of their reach.)
     #[test]
-    fn a_view_alone_is_drawn_in_its_middle() {
+    fn the_views_are_drawn_in_the_middle() {
         use crate::machine::Fixture;
 
         for fixture in Fixture::ALL {
             let subjects = subjects::all(&fixture.machine());
 
             for (index, subject) in subjects.iter().enumerate() {
-                if subject.card().domain != subjects::Domain::Computing
-                    || !subject.views().is_empty()
-                {
+                if subject.card().domain != subjects::Domain::Computing {
                     continue;
                 }
 
@@ -1925,16 +1945,20 @@ mod tests {
 
                         rect(x, y, right - x, bottom - y)
                     };
-                    let mut inked: Option<Rectangle<i32>> = None;
-
-                    for mark in scene
-                        .draft
-                        .marks()
+                    let mut inked: Option<Rectangle<i32>> = scene
+                        .panes
                         .iter()
-                        .filter(|mark| mark.shown_in(None))
-                    {
+                        .filter_map(|pane| {
+                            let (name, top) = pane.caption.as_ref()?;
+                            let width = i32::from(LETTERING.width(name));
+
+                            Some(rect(top.x - width / 2, top.y, width, LINE + 1))
+                        })
+                        .reduce(union);
+
+                    for (mark, projection) in scene.shown() {
                         let mut pieces = Vec::new();
-                        raster::rasterize(mark, &scene.main, &mut pieces);
+                        raster::rasterize(mark, projection, &mut pieces);
 
                         for piece in pieces {
                             let area = match piece.piece {

@@ -69,8 +69,10 @@ pub struct Plan {
     /// What its annotations cover wherever they go, as placed.
     covers: Option<Rectangle<i32>>,
     /// How far the drawing and its annotations, as placed, are from the
-    /// middle of the view (see [`Plan::centre`]).
+    /// middle of the view (see [`Plan::centre`])...
     pub shift: (i32, i32),
+    /// ...and what they cover of it.
+    inked: Option<Rectangle<i32>>,
 }
 
 /// Where one annotation goes.
@@ -223,6 +225,7 @@ impl Plan {
             origin: projection.origin,
             covers,
             shift: (0, 0),
+            inked: None,
         }
     }
 
@@ -255,13 +258,15 @@ impl Plan {
         let Some(covers) = covers.and_then(|covers| raster::intersection(covers, clip)) else {
             return;
         };
-        // Twice the middles, so halving their difference rounds once.
-        let middle = |from: i32, length: i32| 2 * from + length;
 
-        self.shift = (
-            (middle(clip.x, clip.width) - middle(covers.x, covers.width)) / 2,
-            (middle(clip.y, clip.height) - middle(covers.y, covers.height)) / 2,
-        );
+        self.inked = Some(covers);
+        self.shift = middled(covers, clip);
+    }
+
+    /// What the drawing and its annotations cover of the view, as placed
+    /// (see [`Plan::centre`]).
+    pub fn inked(&self) -> Option<Rectangle<i32>> {
+        self.inked
     }
 
     /// Places the automatic annotations among `marks`, drawn through
@@ -1322,7 +1327,18 @@ fn extent(piece: &Piece) -> Option<Rectangle<i32>> {
     }
 }
 
-fn union(a: Rectangle<i32>, b: Rectangle<i32>) -> Rectangle<i32> {
+/// How far to move `inked` for it to be in the middle of `clip`.
+pub fn middled(inked: Rectangle<i32>, clip: Rectangle<i32>) -> (i32, i32) {
+    // Twice the middles, so halving their difference rounds once.
+    let middle = |from: i32, length: i32| 2 * from + length;
+
+    (
+        (middle(clip.x, clip.width) - middle(inked.x, inked.width)) / 2,
+        (middle(clip.y, clip.height) - middle(inked.y, inked.height)) / 2,
+    )
+}
+
+pub fn union(a: Rectangle<i32>, b: Rectangle<i32>) -> Rectangle<i32> {
     let x = a.x.min(b.x);
     let y = a.y.min(b.y);
     let right = (a.x + a.width).max(b.x + b.width);
