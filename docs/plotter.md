@@ -1,11 +1,12 @@
 # Plotting a sheet
 
-How the screensaver's pen plots a sheet, and why it plots it so. Each sheet's
-drawing is turned into the work of a pen once, on its first frame, and every
-frame looks its moment up: the drawing goes down as a drafting office draws
-it, at the pace of a draughtsman's hand played a little over twice as fast,
-and the title block fills in as the drawing reaches what it says. The code is
-in `layershell/crates/screensaver/src/sheet/plotter/`; how a sheet goes as a
+How the screensaver's pen plots a sheet, and why it plots it that way. On a
+sheet's first frame its drawing is worked out once as a pen's strokes, and
+every frame after looks up where the pen is at its moment. The drawing goes
+down as a drafting office draws one, at the pace of a draughtsman's hand
+played a little over twice as fast, and the title block fills in as the
+drawing reaches what it says. The code is in
+`layershell/crates/screensaver/src/sheet/plotter/`; how a sheet goes as a
 whole is in [`screensaver.md`](screensaver.md).
 
 Units throughout are virtual pixels and seconds. The hand's figures are for
@@ -40,8 +41,8 @@ at that rate.
   first [11]. A believable drawing order goes on to the nearest element and
   sweeps consistently [12]. Draughtsmen lay down centre lines, then the
   shapes, then the dimensions and the words [13]. An animation fails when it
-  is too complex or too fast to follow [14], which a fixed plot length makes a
-  dense sheet.
+  is too complex or too fast to follow [14], which a dense sheet becomes if
+  every plot is given the same length.
 - **It is honest.** A pen never erases and never jumps, and the plot visibly
   finishes, the pen put away, before the machine starts to run.
 
@@ -59,8 +60,8 @@ On a sheet's first frame, before the pen starts at 0.6 s:
    ([motion](#motion)), and the plot is as long as they take at the hand's
    pace ([pacing](#pacing)).
 
-The plot depends only on the subject, which showing of it this is, the
-output's size and calibration and how long the schedule gave its plot, so
+The plot depends only on the subject, which of its showings this is, the
+output's size and calibration, and the length the schedule gave the plot, so
 every frame of it is a function of the time: there is no unseeded randomness,
 no iteration over a hash map, every sort key ends in stroke and mark indices,
 and time is accumulated in a fixed order. A frame finds its moment by a binary
@@ -82,8 +83,9 @@ inks only the pixels it owns, so the strokes never overlap, and:
 
 What moves along the drawing's traces (traffic on the buses, flow, a signal)
 is not plotted: it appears when the subject starts to run, as the machine
-switching on, and the pixels it would cover are plotted. The same buffer says
-which marks touch, pixel beside pixel, which a diagram grows along.
+switching on, and the pixels it would cover are plotted. The same buffer tells
+which marks touch, a pixel of one beside a pixel of the other: what a diagram
+grows along.
 
 ### Strokes
 
@@ -184,7 +186,7 @@ corners), as blocks of constant acceleration [28]:
 
 The hand's figures, for the laptop's sheet:
 
-| | Value |
+| Figure | Value |
 |---|---|
 | Drawing speed, faint / line / ink pens | 2,600 / 2,000 / 1,600 px/s |
 | Acceleration along a long line | 16,000 px/s² |
@@ -245,7 +247,7 @@ time the sheet starts, the pace is off by as little as the drawing changed.
 Everything is a virtual pixel wide, in the palette's colours, with no
 blending. The accent is the palette's colour for the machine at work.
 
-| | |
+| What | How it is drawn |
 |---|---|
 | The head, down | A crosshair, arms of 3 with a gap of 1, round the pixel just drawn, which shows through |
 | The head, up | An open crosshair, arms of 2 with a gap of 3: hovering |
@@ -256,10 +258,11 @@ blending. The accent is the palette's colour for the machine at work.
 | The compass | While the pen draws a circle or an arc of a radius of 12 px or more, a faint hairline from its centre to the head and the compass point lit at the centre: draughtsmen ink their circles with a compass first [13], and it shows why the pen goes round |
 | Home | The corner of the zone band at the foot on the left, off the drawing, where a plotter's origin is [15]. The pen starts there, goes back there when it is done and waits a moment, as plotters park [31], and is gone for the plot's last tenth of a second. |
 
-A straightedge or drafting machine was rejected as clutter over a dense
-drawing, and costly to repaint; a faint pass blocked in and inked over, for
-the geometry the subjects do not record; sound; and moving the paper, as a
-grit-wheel plotter does, which would repaint the whole output every frame.
+Rejected: a straightedge or drafting machine on the sheet, clutter over a
+dense drawing and costly to repaint; a faint pass blocked in and then inked
+over, which needs construction the subjects do not record; sound; and moving
+the paper as a grit-wheel plotter does, which would repaint the whole output
+every frame.
 
 The renderer repaints what changes between frames, so the plot is drawn to
 change little: strokes go in buckets of about 1,500 inked pixels, each kept as
@@ -307,10 +310,11 @@ scale, sheet, date and who drew it, and the front view's name, when the
 drawing is done, as the draughtsman lays off the title and checks the drawing
 last [13]. What is filled in is kept as one drawing, drawn again only as
 another entry is filled in, so filling the form in over the whole plot
-repaints no more than typing it at the start would. Kept as a drawing each,
-several entries filled in on one frame, as a diagram's rows are when its
-drawing is done, would have the renderer pair every drawing after them with
-another and repaint most of the output.
+repaints no more than typing it at the start would. Had each entry been kept
+as a drawing of its own, several filled in on one frame (as a diagram's rows
+are, when its drawing is done) would put every kept drawing after them out of
+step with the frame before's, and the renderer would repaint most of the
+output.
 
 ## How it fits the code
 
@@ -334,10 +338,11 @@ schedule (`sheet/schedule.rs`) asks each sheet's length as it puts it in, and
 the screensaver works it out for each output from the size the sheet has on
 it.
 
-**Costs.** Working a plot out takes 0.2 to 3 ms on the sheet's first frame,
-and the schedule's asking how long a subject's plot takes on an output 1.5 to
-16 ms more, laying the sheet out to plot it, once for each subject and output,
-on the frame its first sheet there begins. During the plot a frame draws only
+**Costs.** Working a plot out takes 0.2 to 3 ms on the sheet's first frame.
+Finding how long a subject's plot takes on an output, for the schedule, takes
+1.5 to 16 ms more, as the sheet is laid out to plot it; that is done once for
+each subject and output, on the frame the subject's first sheet there begins.
+During the plot a frame draws only
 the bucket in progress and the pen; at the 95th percentile its repaint takes
 0.5 to 0.9 ms and 8 to 13% of the laptop's output, and 0.8 to 1.3 ms and 3 to
 5% of the ultrawide's, within the budget of 1 ms and 15% on the laptop, and no
@@ -369,13 +374,13 @@ nearest-first search, which on these sheets is fast enough without one.
 
 1. ZSA, ZSA loves pen plotting: https://blog.zsa.io/zsa-loves-pen-plotting/
 2. Paul Rickards, plotter collection: https://biosrhythm.com/?p=3004
-3. Hewlett-Packard Journal, April 1985 (HP 7550A: 80 cm/s, 6 g, curved-line generator, turning speed, fast and slow pen drop 34/60 ms, lift with no delay): https://docs.ampnuts.ru/eevblog.docs/HP_Agilent_Keysight/journals/1985-04.pdf
+3. Hewlett-Packard Journal, April 1985 (HP 7550A: 80 cm/s, 6 g, curved-line generator, turning speed, fast and slow pen drop 34/60 ms, lift with no delay): https://hparchive.com/Journals/HPJ-1985-04.pdf
 4. AxiDraw driver (defaults, motion planner, pen timing, reordering, `connect_nearby_ends`): https://github.com/evil-mad/axidraw
 5. saxi planner defaults and cornering: https://raw.githubusercontent.com/nornagon/saxi/main/src/planning.ts
 6. Sonny Jeon, GRBL cornering algorithm (junction deviation): https://onehossshay.wordpress.com/2011/09/24/improving_grbl_cornering_algorithm/
 7. Fiorella & Mayer, drawing in front of learners, the visible hand: https://learningscientists.org/blog/2017/1/24-1
 8. Calcomp patent US 4,776,097, dual-mode acceleration: https://patents.google.com/patent/US4776097A/en
-9. Hewlett-Packard Journal, October 1981 (low-mass plotting, dual-level pen lift, lifts and drops a growing share of the time to plot text): https://docs.ampnuts.ru/eevblog.docs/HP_Agilent_Keysight/journals/1981-10.pdf
+9. Hewlett-Packard Journal, October 1981 (low-mass plotting, dual-level pen lift, lifts and drops a growing share of the time to plot text): https://hparchive.com/Journals/HPJ-1981-10.pdf
 10. Navon (1977), Forest before trees: https://www.psytoolkit.org/library/navon.html
 11. Chowdhury et al. (2022), FS-COCO: https://arxiv.org/abs/2203.02113
 12. Fu, Zhou, Liu & Mitra (2011), Animated construction of line drawings: https://hongbofu.people.ust.hk/projects/animatedConstructionOfLineDrawings_SiggA11/animatedConstructionOfLineDrawings_SiggA11.pdf
@@ -383,14 +388,14 @@ nearest-first search, which on these sheets is fast enough without one.
 14. Tversky, Morrison & Bétrancourt (2002), Animation: can it facilitate?: https://hci.stanford.edu/courses/cs448b/papers/Tversky_AnimationFacilitate_IJHCS02.pdf
 15. HP-GL commands (LT, LB, VS, P1 origin): https://pic.hallikainen.org/techref/language/hpgl/commands.htm ; https://www.devenezia.com/docs/HP/LJ1889.html
 16. EggBot hatch fill: https://github.com/evil-mad/EggBot
-17. Choset, boustrophedon cellular decomposition: https://publications.ri.cmu.edu/coverage-of-known-spaces-the-boustrophedon-cellupdar-decomposition
+17. H. Choset, Coverage of known spaces: the boustrophedon cellular decomposition, *Autonomous Robots* 9 (2000): https://publications.ri.cmu.edu/coverage-of-known-spaces-the-boustrophedon-cellupdar-decomposition
 18. Hershey fonts: https://en.wikipedia.org/wiki/Hershey_fonts
 19. J. Rose, *Mechanical Drawing Self-Taught* (1887): https://www.gutenberg.org/ebooks/23319
 20. Armengaud, *The Practical Draughtsman's Book of Industrial Design* (1855), circles first, smaller first: https://digi.ub.uni-heidelberg.de/diglit/armengaud1855/0033
 21. US Navy, Engineering Aid, order of inking: https://www.tpub.com/engbas/3-26.htm
 22. City, University of London ME1105, AutoCAD tutorial 2a (section order): https://www.staff.city.ac.uk/~ra600/ME1105/Tutorials/CAD-1/Tutorial%20CAD-2a.htm
 23. Hegarty (1992), mental animation, as summarised by Davis & Marcus: https://arxiv.org/pdf/1506.04956
-24. Drafting for Electronics, schematic diagrams: https://www.gammaelectronics.xyz/drafting-for-electronics-11.html
+24. S. J. Lloyd & L. G. Lamit, *Drafting for Electronics*, the chapters on block and schematic diagrams
 25. Johnson & McGeoch, the TSP as a case study in local optimization: https://redmine.iam.upr.si/attachments/download/242/TSPchapter.pdf
 26. Paul Butler, optimizing plots with a TSP solver (the greedy order's straggler tail): https://nb.paulbutler.org/optimizing-plots-with-tsp-solver/
 27. vpype reference (`linemerge`, `linesort`, `linesimplify`, `reloop`): https://vpype.readthedocs.io/en/latest/reference.html
@@ -399,5 +404,5 @@ nearest-first search, which on these sheets is fast enough without one.
 30. HP 7470A service manual (pen down 38.1 cm/s, pen up 50.8 cm/s, about 2 g): https://literature.hpcalc.org/community/hp7470a-sm-en.pdf
 31. Virtual Plotter (a simulation; parks at home when done): https://github.com/killedbyapixel/virtualplotter
 32. Detail-view callouts (ASME Y14.3, ISO 128): https://eng-tips.com/threads/detail-view-callout.215188
-33. Mayer (2020), multimedia principles (signalling, segmenting): https://ugc.futurelearn.com/uploads/files/7d/d6/7dd6188d-c343-4311-b064-ac98d2c95abc/Multimedia_Principles._R._E._Mayer__2020.pdf
+33. R. E. Mayer, *Multimedia Learning*, 3rd edition (2020), the principles of signalling and segmenting
 34. Inkscape Optimize Path (Euler trails, straightest continuation): https://github.com/Daekkyn/inkscapeOptimizePath

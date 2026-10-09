@@ -47,28 +47,33 @@ what keeps the plot, the wipe and the run cheap on the software renderer.
 `quadrille-screensaver bench` times each stage headless: drawing the sheet, and
 repainting what changed as a live surface does.
 
-A sheet's plot is worked out once, on its first frame, and each frame looks its
-moment up (`sheet/plotter/`; the design, and the research behind it, is in
+## How the pen plots
+
+A sheet's plot is worked out once, on its first frame, and each frame looks up
+its moment (`sheet/plotter/`; the design and the research behind it are in
 [`plotter.md`](plotter.md)). The drawing's pieces become pen strokes that ink
 only the pixels they own in the finished drawing, so nothing is drawn over or
-wiped and the plot ends on the drawing the run begins with. They go down in a
-drafting office's order: the axes of every view, longest first, and the rest of
-the skeleton; then each part's body in turn, circles before straight lines and
-circles round one centre smallest first, a cutting plane before the section it
-cuts; then the lining, the dimensions and notes, the balloons and the sign-off,
-with a beat between. A diagram grows instead, from its first part along its
-wires, each part drawn whole and lettered as the pen reaches it. The pen moves
-as a hand does: it eases along long lines, slows for corners, steps through
-letters a stroke at a time and is carried up between strokes, its ink wet in
-the accent for a moment behind it and a compass arm out to it as it draws a
-circle. The form fills in as the drawing reaches it: the notes with the
-annotation, each part's row as its balloon's number is drawn, the scale, sheet
-and date at the sign-off. The plot takes as long as the pen's work at the
-hand's pace, between 5 and 15 seconds, so the pen moves as fast on a sparse
-sheet as on a dense one, and the schedule works each sheet's length out before
-it starts. The same pen plots each part's detail, the circle on the view and
-then the view, and the sheet is wiped from where it parks.
-`quadrille-screensaver plot-stats` shows how each sheet's plot spends its time.
+wiped, and the plot ends on exactly the drawing the run begins with.
+
+The strokes go down in a drafting office's order: the axes of every view,
+longest first, and the rest of the skeleton; each part's body in turn, circles
+before straight lines and circles round one centre smallest first, a cutting
+plane before the section it cuts; then the lining, the dimensions and notes,
+the balloons and the sign-off, with a beat between. A diagram grows instead,
+from its first part along its wires, each part drawn whole and lettered as the
+pen reaches it. The form fills in as the drawing reaches what it says: the
+notes with the annotation, each part's row as its balloon's number is drawn,
+the scale, sheet and date at the sign-off.
+
+The pen moves as a hand does: it eases along long lines, slows for corners,
+steps through letters a stroke at a time and is carried up between strokes,
+its ink wet in the accent for a moment behind it, and a compass arm out to it
+while it draws a circle. A plot takes as long as the pen's work at the hand's
+pace, between 5 and 15 seconds, so the pen moves as fast on a sparse sheet as
+on a dense one; the schedule works each sheet's length out before it starts.
+The same pen plots each part's detail, the circle on the view and then the
+view, and the sheet is wiped from where it parks. `quadrille-screensaver
+plot-stats` shows how each sheet's plot spends its time.
 
 ## A drawing office's conventions
 
@@ -101,8 +106,10 @@ itself on a `Draft` at a moment of its motion, and fills in a card: a title,
 notes, and its parts with their specifications and detail circles. Plotting,
 scale, the sheet, details and timing are the sheet's, the same for every
 subject. Add the type to `subjects::all()`; the tests check that every part is
-drawn, that names fit the parts list, and that lettering stays clear of other
-lettering on both of the desk's outputs.
+drawn, that names fit the parts list, that lettering stays clear of other
+lettering on both of the desk's outputs, and that the sheet plots: ending on
+the drawing its run begins with, its pen's work at the hand's pace under about
+20 seconds (`plot-stats` shows it).
 
 `render` draws any moment of any sheet offscreen to PNG, exactly as an output
 shows it; it is how the sheets are designed, with no window opened:
