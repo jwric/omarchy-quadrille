@@ -62,9 +62,16 @@ pub struct Focus {
 }
 
 impl Focus {
-    /// The share of the detail view plotted.
+    /// The share of the detail view plotted: all of it once it is settled.
+    /// Worked out from the time alone, the share can still be a rounding
+    /// short of one when it is, and the view kept as it is drawn then would
+    /// lack its last mark for as long as the part is in focus.
     pub fn plotted(self) -> f32 {
-        ((self.time - MARK) / DETAIL_PLOT).clamp(0.0, 1.0)
+        if self.settled() {
+            1.0
+        } else {
+            ((self.time - MARK) / DETAIL_PLOT).clamp(0.0, 1.0)
+        }
     }
 
     /// Whether everything about it has been drawn and lettered.
@@ -155,6 +162,21 @@ mod tests {
         ));
         assert_eq!(at(first + 2.0 * DETAIL + 0.5), Phase::Run(None));
         assert!(matches!(at(duration(2, PLOT) - 0.1), Phase::Wipe(_)));
+    }
+
+    /// A detail is plotted whole from the moment it is settled, whichever
+    /// way that moment rounds.
+    #[test]
+    fn a_settled_detail_is_plotted_whole() {
+        let mut time = MARK + DETAIL_PLOT;
+
+        for _ in 0..64 {
+            let focus = Focus { part: 0, time };
+
+            assert!(focus.settled());
+            assert_eq!(focus.plotted(), 1.0, "{time}");
+            time = time.next_up();
+        }
     }
 
     #[test]

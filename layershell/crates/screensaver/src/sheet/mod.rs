@@ -101,7 +101,7 @@ pub struct Kept<Renderer: geometry::Renderer> {
     /// The plot of the sheet showing, worked out on its first frame...
     plot: plotter::Kept<PlotFor>,
     /// ...and of the detail showing, on its first.
-    detail_plot: plotter::Kept<DetailFor, plotter::detail::Detail>,
+    detail_plot: plotter::Kept<DetailFor, Picked>,
     /// The entries of a sheet's form, each once it is filled in, and how
     /// many letters each types.
     entries: RefCell<Vec<Memo<Filled, Renderer>>>,
@@ -134,6 +134,14 @@ type PlotFor = (usize, u64, (i32, i32), PlotStyle);
 
 /// The detail of a part, by its index, on a showing.
 type DetailFor = (PlotFor, usize);
+
+/// A part's detail as the pen plots it, worked out from the drawing as it
+/// stood when the part was picked out: the pen's plan, and where the
+/// letter of the circle round the part goes, which the pen letters there.
+struct Picked {
+    plan: plotter::detail::Detail,
+    letter: (Lettered, bool),
+}
 
 impl Planned {
     /// The plans for subject `index` at `size`, a plan a view, worked out by
@@ -241,22 +249,25 @@ where
         let palette = theme.palette();
 
         // A detail the pen plots: its plot, worked out on its first frame
-        // from the drawing as it stood when its part was picked out.
+        // from the drawing as it stood when its part was picked out, and
+        // where that is while the pen plots it.
         if self.plot.details
             && let Some(view) = scene.detail.as_mut()
-            && !view.focus.settled()
         {
             let showing = self.showing;
             let made = (
                 (showing.subject, showing.serial, (width, height), self.plot),
                 view.focus.part,
             );
-            let plan = kept.detail_plot.get(made, || {
+            let picked = kept.detail_plot.get(made, || {
                 self.detail_plot(view.focus, (width, height), &kept.plan)
             });
-            let now = plan.at(view.focus.time);
 
-            view.pen = Some((plan, now));
+            if !view.focus.settled() {
+                view.pen = Some(picked.plan.at(view.focus.time));
+            }
+
+            view.picked = Some(picked);
         }
         let moment = self.showing.moment;
         let key = |marked| Key {
@@ -347,7 +358,7 @@ where
             }
 
             // Carried up, or still, where the plan has the pen.
-            if let Some((_, now)) = &view.pen {
+            if let Some(now) = &view.pen {
                 head = head.or(now.head);
             }
         }
@@ -469,12 +480,7 @@ impl Sheet<'_> {
     /// The pen's plot of the detail in `focus` on a sheet of `size`, from
     /// the drawing as it stood when its part was picked out: the same
     /// whichever frame of the detail works it out.
-    fn detail_plot(
-        &self,
-        focus: Focus,
-        size: (i32, i32),
-        planned: &Planned,
-    ) -> plotter::detail::Detail {
+    fn detail_plot(&self, focus: Focus, size: (i32, i32), planned: &Planned) -> Picked {
         let moment = self.showing.moment;
         let picked = Sheet {
             subject: self.subject,
@@ -497,8 +503,16 @@ impl Sheet<'_> {
         };
         let scene = Scene::new(&picked, size.0, size.1, planned);
         let view = scene.detail.as_ref().expect("A part picked out");
+        let letter = scene.letter_spot(view);
 
-        plotter::detail::Detail::new(&self.plot, scene.sketch(view), plotter::scale(size.1))
+        Picked {
+            plan: plotter::detail::Detail::new(
+                &self.plot,
+                scene.sketch(view, letter.0),
+                plotter::scale(size.1),
+            ),
+            letter,
+        }
     }
 }
 
@@ -544,8 +558,10 @@ struct DetailView {
     detail: Detail,
     projection: Projection,
     ratio: Option<Ratio>,
-    /// The pen's plot of it and where that is, while the pen plots it.
-    pen: Option<(Rc<plotter::detail::Detail>, plotter::detail::Now)>,
+    /// The pen's plot of it, while it is in focus, if the pen plots it...
+    picked: Option<Rc<Picked>>,
+    /// ...and where that is, while the pen plots it.
+    pen: Option<plotter::detail::Now>,
 }
 
 impl DetailView {
@@ -931,6 +947,7 @@ impl<'a> Scene<'a> {
                 detail,
                 projection: Projection::centred(region, window, scale),
                 ratio,
+                picked: None,
                 pen: None,
             })
         });
@@ -1508,7 +1525,7 @@ impl<'a> Scene<'a> {
 
         // Drawn by the pen as far as its plan has drawn it, round the
         // circle as it is now.
-        if let Some((_, now)) = &view.pen {
+        if let Some(now) = &view.pen {
             let ring = self.ring(view);
 
             return partly(pen, palette, &ring, now.ring, self.layout.drawing())
@@ -1558,13 +1575,17 @@ impl<'a> Scene<'a> {
     /// and whether it is clear of the view's outlines: up and right, unless
     /// what the view draws or letters is in the way there and not somewhere
     /// else round the circle. A circle that follows a moving part keeps to
-    /// one place.
+    /// one place. Where the pen plots the detail, the letter goes where it
+    /// letters it, as the drawing stood when the part was picked out, on
+    /// every frame of the detail however many of them came before.
     fn letter_spot(&self, view: &DetailView) -> (Lettered, bool) {
         let centre = self.main.px(view.detail.centre);
         let radius = self.main.length(view.detail.radius).max(4);
 
         if view.detail.follows {
             (marker_letter(centre, radius, WAYS[0], 0), true)
+        } else if let Some(picked) = &view.picked {
+            picked.letter
         } else {
             let text = letter(view.focus.part).to_string();
             let pieces = pieces(self.shown(), None);
@@ -1587,7 +1608,7 @@ impl<'a> Scene<'a> {
     fn detail_compass(&self, view: &DetailView, height: i32) -> Option<Point<i32>> {
         use plotter::detail::Drawing;
 
-        let (_, now) = view.pen.as_ref()?;
+        let now = view.pen.as_ref()?;
         let (centre, radius) = match now.drawing? {
             Drawing::Ring => (
                 self.main.px(view.detail.centre),
@@ -1670,10 +1691,11 @@ impl<'a> Scene<'a> {
         pieces.into_iter().map(|(_, sketched)| sketched).collect()
     }
 
-    /// What the pen plots `view` from, as the scene has it.
-    fn sketch(&self, view: &DetailView) -> plotter::detail::Sketch {
+    /// What the pen plots `view` from, as the scene has it, its circle's
+    /// letter set where `spot` says.
+    fn sketch(&self, view: &DetailView, spot: Lettered) -> plotter::detail::Sketch {
         let text = letter(view.focus.part).to_string();
-        let ((_, _, at, anchor), _) = self.letter_spot(view);
+        let (_, _, at, anchor) = spot;
         let top_left = raster::place(LETTERING, &text, at, anchor);
 
         plotter::detail::Sketch {
@@ -1759,7 +1781,7 @@ impl<'a> Scene<'a> {
 
         // Plotted by the pen: each piece as far along as the plan has
         // drawn it, as the piece is now, in the order they are painted.
-        if let Some((plan, now)) = &view.pen {
+        if let (Some(picked), Some(now)) = (&view.picked, &view.pen) {
             use plotter::detail::Drawing;
 
             let circle = self.window_circle(view);
@@ -1768,7 +1790,8 @@ impl<'a> Scene<'a> {
 
             for sketched in self.detail_pieces(view) {
                 let piece = &sketched.inked.piece;
-                let budget = plotter::detail::budget(piece, inside, plan.drawn(now, sketched.id));
+                let budget =
+                    plotter::detail::budget(piece, inside, picked.plan.drawn(now, sketched.id));
 
                 if budget > 0 {
                     let stopped = sketched.inked.piece.draw(
@@ -3504,43 +3527,91 @@ mod tests {
         }
     }
 
-    /// A detail the pen plots is worked out from the drawing as it stood
-    /// when its part was picked out, so it is drawn the same by a surface
-    /// that has shown it from the start as by one that begins halfway
-    /// through it, a part moving or not.
-    #[test]
-    fn a_plotted_detail_is_the_same_from_any_frame() {
+    /// Fails at the first frame of the first detail of a sheet of each of
+    /// `names`, in each of `styles`, on each of `outputs`, drawn thirty a
+    /// second by a surface that has shown every frame of it before, from
+    /// the part being picked out until a moment after the detail settles,
+    /// that a fresh surface draws differently: one frame in `every`.
+    fn details_alike_from_any_frame(
+        styles: &[PlotStyle],
+        names: &[&str],
+        outputs: &[Output],
+        every: usize,
+    ) {
         use crate::headless::Studio;
 
         let subjects = subjects::all(&Machine::fixture());
         let theme = Theme::TERMINAL;
+        let frames = ((MARK + timeline::DETAIL_PLOT + 0.5) * 30.0) as usize;
 
-        for style in [PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK] {
-            let studio = || {
-                Studio::new(&subjects, Output::LAPTOP, &theme, "2026-10-07")
-                    .expect("A studio")
-                    .plotting(style)
-            };
+        for &style in styles {
+            for &output in outputs {
+                let studio = || {
+                    Studio::new(&subjects, output, &theme, "2026-10-07")
+                        .expect("A studio")
+                        .plotting(style)
+                };
 
-            for name in ["gears", "engine"] {
-                let index = subjects::find(&subjects, name).expect("A subject");
-                let picked = timeline::PLOT_START + style.length + timeline::SETTLE;
-                let mut watching = studio();
+                for name in names {
+                    let index = subjects::find(&subjects, name).expect("A subject");
+                    // The frame the part is picked out on, counted from the
+                    // sheet's first, as a surface counts them.
+                    let picked = ((timeline::PLOT_START + style.length + timeline::SETTLE) * 30.0)
+                        .round() as usize;
+                    let mut watching = studio();
 
-                for frame in 0..=20 {
-                    let at = picked + frame as f32 / 10.0;
-                    let watched = watching.frame(index, at);
+                    for frame in picked..=picked + frames {
+                        let at = frame as f32 / 30.0;
+                        let watched = watching.frame(index, at);
 
-                    if frame % 5 == 3 {
-                        assert!(
-                            watched == studio().frame(index, at),
-                            "{name}, {}, at {at} s",
-                            style.name
-                        );
+                        if (frame - picked) % every == every / 2 {
+                            assert!(
+                                watched == studio().frame(index, at),
+                                "{name} on {}, {}, at {at} s",
+                                output.name(),
+                                style.name
+                            );
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// A detail the pen plots is worked out from the drawing as it stood
+    /// when its part was picked out, its circle's letter set where the pen
+    /// letters it, so it is drawn the same by a surface that has shown it
+    /// from the start as by one that begins halfway through it, a part
+    /// moving or not; and it is drawn whole from the frame it settles on.
+    #[test]
+    fn a_plotted_detail_is_the_same_from_any_frame() {
+        details_alike_from_any_frame(
+            &[PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK],
+            &["gears", "timer"],
+            &[Output::LAPTOP],
+            10,
+        );
+    }
+
+    /// Every frame of the first detail of every sheet, on both outputs,
+    /// but the cooling's, whose fans turn on from where they were last
+    /// drawn.
+    #[test]
+    #[ignore = "minutes: run with --release --ignored"]
+    fn every_plotted_detail_is_the_same_from_any_frame() {
+        let subjects = subjects::all(&Machine::fixture());
+        let names: Vec<&str> = subjects
+            .iter()
+            .map(|subject| subject.name())
+            .filter(|name| *name != "cooling")
+            .collect();
+
+        details_alike_from_any_frame(
+            &[PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK],
+            &names,
+            &[Output::LAPTOP, Output::ULTRAWIDE],
+            1,
+        );
     }
 
     /// A part's detail drawn on its own, with its circle on the view: as
@@ -3567,10 +3638,10 @@ mod tests {
             let view = scene.detail.as_mut().expect("A part in detail");
 
             if self.pen {
-                let plan = Rc::new(self.sheet.detail_plot(view.focus, size, &kept.plan));
-                let now = plan.at(view.focus.time);
+                let picked = Rc::new(self.sheet.detail_plot(view.focus, size, &kept.plan));
 
-                view.pen = Some((plan, now));
+                view.pen = Some(picked.plan.at(view.focus.time));
+                view.picked = Some(picked);
             } else {
                 // Settled, its whole drawing drawn.
                 view.focus.time = MARK + timeline::DETAIL_PLOT + 0.1;
