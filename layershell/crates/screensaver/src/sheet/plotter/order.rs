@@ -6,8 +6,13 @@
 //! drawn in the order of their keys. Groups with the same key are drawn
 //! nearest first, if the style says so, from wherever the pen is: a line
 //! is turned round, an area's lining run backwards or a loop started where
-//! that is nearer. The rest of the key keeps clusters apart for the
-//! motion's beats: a stage from the next, a part or a view from another.
+//! that is nearer. If the style polishes the order, it is then improved
+//! where moving a few groups elsewhere, or turning a stretch of them round,
+//! shortens the pen's journey (Or-opt and 2-opt), and each loop started
+//! where the pen comes to it and leaves it soonest. The rest of the key
+//! keeps clusters apart for the motion's beats: a stage from the next, a
+//! part or a view from another.
+use glam::DVec2;
 use iced_core::Point;
 
 use crate::draft::{Line, Pass, Tone};
@@ -31,6 +36,9 @@ pub struct Meta {
     pub cuts: Option<usize>,
     /// A balloon's item number.
     pub item: Option<usize>,
+    /// A circle's centre, which a plotter's circle instruction draws it
+    /// from.
+    pub centre: Option<Point<i32>>,
 }
 
 /// What comes before a stroke in the order.
@@ -69,6 +77,43 @@ struct Group {
 /// How far apart, along a loop, the pen may start it.
 const SEAMS: usize = 16;
 
+/// The most groups a cluster may have for its order to be polished, and
+/// the most rounds of polishing: past these the gain is not worth the time
+/// it takes on a sheet's first frame.
+const POLISHED: usize = 600;
+const ROUNDS: usize = 3;
+
+impl Group {
+    fn start(&self) -> Point<i32> {
+        self.strokes[0].start()
+    }
+
+    fn end(&self) -> Point<i32> {
+        self.strokes[self.strokes.len() - 1].end()
+    }
+
+    /// Whether it can be drawn the other way round whole: it starts where
+    /// it ends, or is one line, or may be drawn backwards.
+    fn turns(&self) -> bool {
+        self.start() == self.end()
+            || self.backwards
+            || (self.strokes.len() == 1 && self.strokes[0].form == Form::Line)
+    }
+
+    /// Turns it round, if it [`turns`](Self::turns).
+    fn turn(&mut self) {
+        if self.start() == self.end() {
+            return;
+        }
+
+        self.strokes.reverse();
+
+        for stroke in &mut self.strokes {
+            stroke.reverse();
+        }
+    }
+}
+
 /// `strokes`, in the order made, put in `style`'s order for a pen
 /// starting at `from`; `marks` says what their marks are.
 pub fn order(style: &PlotStyle, strokes: Vec<Stroke>, marks: &[Meta], from: Point<i32>) -> Ordered {
@@ -86,6 +131,9 @@ pub fn order(style: &PlotStyle, strokes: Vec<Stroke>, marks: &[Meta], from: Poin
     let mut pen = from;
     let mut last: Option<Key> = None;
     let mut rest = groups.into_iter().peekable();
+    // A pen-sorted plot on a plotter with a carousel fetches each pen from
+    // home, where the pen starts, and takes it back there.
+    let trips = style.carousel.is_some() && style.order == Order::Pens;
 
     while let Some(first) = rest.next() {
         // The cluster: every group with this key.
@@ -96,8 +144,21 @@ pub fn order(style: &PlotStyle, strokes: Vec<Stroke>, marks: &[Meta], from: Poin
             cluster.push(group);
         }
 
+        if trips {
+            pen = from;
+        }
+
         if style.nearest {
+            let start = pen;
+            let end = trips.then_some(from);
+
             cluster = nearest(cluster, &mut pen);
+
+            if style.polish && cluster.len() <= POLISHED {
+                cluster = polish(cluster, start, end);
+                reseam(&mut cluster, start, end);
+                pen = cluster.last().map_or(pen, Group::end);
+            }
         }
 
         for (index, group) in cluster.into_iter().enumerate() {
@@ -246,7 +307,9 @@ fn entries(group: &Group) -> Vec<Entry> {
     let first = &group.strokes[0];
 
     match first.form {
-        Form::Touch(at) => vec![(at, Way::Forwards)],
+        Form::Touch(at) | Form::Circle(at) => vec![(at, Way::Forwards)],
+        // Lettering is written one way.
+        Form::Glyph => vec![(first.start(), Way::Forwards)],
         Form::Loop => (0..first.pixels.len())
             .step_by(SEAMS)
             .map(|index| (first.pixels[index], Way::Seam(index)))
@@ -254,7 +317,7 @@ fn entries(group: &Group) -> Vec<Entry> {
         Form::Line if group.backwards => {
             let last = &group.strokes[group.strokes.len() - 1];
             let end = match last.form {
-                Form::Touch(at) => at,
+                Form::Touch(at) | Form::Circle(at) => at,
                 _ => last.pixels[last.pixels.len() - 1],
             };
 
@@ -330,6 +393,183 @@ fn nearest(cluster: Vec<Group>, pen: &mut Point<i32>) -> Vec<Group> {
     ordered
 }
 
+/// Groups in order, each by its index and whether it is turned round.
+type Tour = Vec<(usize, bool)>;
+
+fn place(pixel: Point<i32>) -> DVec2 {
+    DVec2::new(f64::from(pixel.x), f64::from(pixel.y))
+}
+
+/// `cluster`, drawn in this order by a pen starting at `from` and going on
+/// to `to` if it is given, improved wherever moving a run of one to three
+/// groups elsewhere (turned round, if they turn) or turning a stretch of
+/// them round shortens the pen's journey between them: a few rounds of
+/// each, the first improvement found taken each time.
+fn polish(mut cluster: Vec<Group>, from: Point<i32>, to: Option<Point<i32>>) -> Vec<Group> {
+    let count = cluster.len();
+    let ends: Vec<(DVec2, DVec2, bool)> = cluster
+        .iter()
+        .map(|group| (place(group.start()), place(group.end()), group.turns()))
+        .collect();
+    let mut tour: Tour = (0..count).map(|index| (index, false)).collect();
+    let from = place(from);
+    let to = to.map(place);
+    let entry = |&(index, turned): &(usize, bool)| {
+        if turned { ends[index].1 } else { ends[index].0 }
+    };
+    let exit = |&(index, turned): &(usize, bool)| {
+        if turned { ends[index].0 } else { ends[index].1 }
+    };
+    // Where the pen leaves what is before place `at`.
+    let before = |tour: &[(usize, bool)], at: usize| {
+        if at == 0 { from } else { exit(&tour[at - 1]) }
+    };
+    // Where the pen goes on to after place `at`.
+    let after = |tour: &[(usize, bool)], at: usize| tour.get(at).map(entry).or(to);
+    let turns = |stretch: &[(usize, bool)]| stretch.iter().all(|&(index, _)| ends[index].2);
+    const GAIN: f64 = 1e-6;
+
+    for _ in 0..ROUNDS {
+        let mut improved = false;
+
+        // 2-opt: a stretch turned round, if every group in it turns; a
+        // group alone, turned where it is.
+        for first in 0..count {
+            for last in first..count {
+                if !turns(&tour[first..=last]) {
+                    break;
+                }
+
+                let prev = before(&tour, first);
+                let next = after(&tour, last + 1);
+                let was = prev.distance(entry(&tour[first]))
+                    + next.map_or(0.0, |next| exit(&tour[last]).distance(next));
+                let will = prev.distance(exit(&tour[last]))
+                    + next.map_or(0.0, |next| entry(&tour[first]).distance(next));
+
+                if will < was - GAIN {
+                    tour[first..=last].reverse();
+
+                    for step in &mut tour[first..=last] {
+                        step.1 = !step.1;
+                    }
+
+                    improved = true;
+                }
+            }
+        }
+
+        // Or-opt: a run of one to three moved elsewhere, either way round.
+        for length in 1..=3 {
+            let mut first = 0;
+
+            while first + length <= count {
+                let run: Vec<(usize, bool)> = tour[first..first + length].to_vec();
+                let prev = before(&tour, first);
+                let next = after(&tour, first + length);
+                let taken = prev.distance(entry(&run[0]))
+                    + next.map_or(0.0, |next| exit(&run[length - 1]).distance(next))
+                    - next.map_or(0.0, |next| prev.distance(next));
+                let mut rest = tour.clone();
+                rest.drain(first..first + length);
+
+                let turned: Vec<(usize, bool)> = run
+                    .iter()
+                    .rev()
+                    .map(|&(index, turned)| (index, !turned))
+                    .collect();
+                let ways = if turns(&run) {
+                    vec![run.clone(), turned]
+                } else {
+                    vec![run.clone()]
+                };
+                let mut best: Option<(f64, usize, Tour)> = None;
+
+                for at in 0..=rest.len() {
+                    if at == first {
+                        continue;
+                    }
+
+                    let prev = before(&rest, at);
+                    let next = after(&rest, at);
+
+                    for way in &ways {
+                        let added = prev.distance(entry(&way[0]))
+                            + next.map_or(0.0, |next| exit(&way[length - 1]).distance(next))
+                            - next.map_or(0.0, |next| prev.distance(next));
+
+                        if added < taken - GAIN
+                            && best.as_ref().is_none_or(|(cost, ..)| added < *cost)
+                        {
+                            best = Some((added, at, way.clone()));
+                        }
+                    }
+                }
+
+                match best {
+                    Some((_, at, way)) => {
+                        rest.splice(at..at, way);
+                        tour = rest;
+                        improved = true;
+                    }
+                    None => first += 1,
+                }
+            }
+        }
+
+        if !improved {
+            break;
+        }
+    }
+
+    let mut groups: Vec<Option<Group>> = cluster.drain(..).map(Some).collect();
+
+    tour.into_iter()
+        .map(|(index, turned)| {
+            let mut group = groups[index].take().expect("Each group once");
+
+            if turned {
+                group.turn();
+            }
+
+            group
+        })
+        .collect()
+}
+
+/// Starts each loop in `cluster`, drawn by a pen starting at `from` and
+/// going on to `to` if it is given, where the pen comes to it and goes on
+/// from it soonest.
+fn reseam(cluster: &mut [Group], from: Point<i32>, to: Option<Point<i32>>) {
+    let mut pen = from;
+
+    for index in 0..cluster.len() {
+        let next = match cluster[index].strokes.get(1) {
+            Some(stroke) => Some(stroke.start()),
+            None => cluster.get(index + 1).map(Group::start).or(to),
+        };
+        let first = &mut cluster[index].strokes[0];
+
+        if first.form == Form::Loop {
+            let cost = |pixel: Point<i32>| {
+                place(pen).distance(place(pixel))
+                    + next.map_or(0.0, |next| place(pixel).distance(place(next)))
+            };
+            let seam = (0..first.pixels.len())
+                .min_by(|&a, &b| {
+                    cost(first.pixels[a])
+                        .total_cmp(&cost(first.pixels[b]))
+                        .then(a.cmp(&b))
+                })
+                .unwrap_or(0);
+
+            first.rotate(seam);
+        }
+
+        pen = cluster[index].end();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +596,7 @@ mod tests {
         pane: 0,
         cuts: None,
         item: None,
+        centre: None,
     };
 
     /// The pen goes to the nearest line next, and draws it from its nearer
@@ -416,5 +657,113 @@ mod tests {
                 Gap::Cluster
             ]
         );
+    }
+
+    /// The pen's journey from `from` through `strokes` and on to `to`.
+    fn journey(strokes: &[Stroke], from: Point<i32>, to: Option<Point<i32>>) -> f64 {
+        let mut pen = place(from);
+        let mut length = 0.0;
+
+        for stroke in strokes {
+            length += pen.distance(place(stroke.start()));
+            pen = place(stroke.end());
+        }
+
+        length + to.map_or(0.0, |to| pen.distance(place(to)))
+    }
+
+    /// Lines scattered as a pseudo-random walk would leave them, the same
+    /// every time.
+    fn scattered(count: usize) -> Vec<Stroke> {
+        let mut seed: u64 = 7;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            ((seed >> 33) % 400) as i32
+        };
+
+        (0..count)
+            .map(|mark| {
+                let from = (next(), next());
+                let to = (from.0 + next() / 20 - 10, from.1 + next() / 20 - 10);
+
+                line(mark, from, to)
+            })
+            .collect()
+    }
+
+    /// Polishing the nearest-first order never lengthens the pen's journey,
+    /// and keeps every stroke, each drawn once.
+    #[test]
+    fn polishing_shortens_the_journey_and_keeps_every_stroke() {
+        let home = Point::new(0, 400);
+        let style = |polish| PlotStyle {
+            polish,
+            ..PlotStyle::CAROUSEL
+        };
+        let metas = [EDGE; 120];
+        let greedy = order(&style(false), scattered(120), &metas, home);
+        let polished = order(&style(true), scattered(120), &metas, home);
+        let marks = |ordered: &Ordered| {
+            let mut marks: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
+            marks.sort_unstable();
+            marks
+        };
+
+        assert_eq!(marks(&polished), (0..120).collect::<Vec<_>>());
+        assert!(
+            journey(&polished.strokes, home, Some(home))
+                < journey(&greedy.strokes, home, Some(home)) * 0.95,
+            "{} against {}",
+            journey(&polished.strokes, home, Some(home)),
+            journey(&greedy.strokes, home, Some(home))
+        );
+    }
+
+    /// A carousel plotter's pens are sorted lightest first, each fetched
+    /// from home and taken back: each pen's strokes are ordered for the
+    /// round trip, not from where the pen before stopped.
+    #[test]
+    fn each_pen_of_a_carousel_starts_from_home() {
+        let home = Point::new(0, 0);
+        let mut strokes = vec![
+            line(0, (300, 300), (310, 300)),
+            line(1, (10, 10), (20, 10)),
+            line(2, (290, 290), (280, 290)),
+            line(3, (20, 20), (30, 20)),
+        ];
+
+        strokes[0].tone = Tone::Faint;
+        strokes[1].tone = Tone::Ink;
+        strokes[2].tone = Tone::Faint;
+        strokes[3].tone = Tone::Ink;
+
+        let ordered = order(&PlotStyle::CAROUSEL, strokes, &[EDGE; 4], home);
+        let marks: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
+        // Out to the far end of the far line, back along the near one.
+        let shortest = 800f64.sqrt() + 200f64.sqrt() + 200f64.sqrt();
+
+        assert_eq!(marks[..2], [2, 0]);
+        assert!((journey(&ordered.strokes[2..], home, Some(home)) - shortest).abs() < 1e-9);
+    }
+
+    /// A circle drawn from its centre is reached at its centre, and lettering
+    /// is never turned round to be reached sooner.
+    #[test]
+    fn circles_are_reached_at_their_centres_and_letters_as_written() {
+        let mut circle = line(0, (100, 50), (101, 50));
+        let mut letter = line(1, (0, 10), (6, 10));
+
+        circle.form = Form::Circle(Point::new(10, 12));
+        letter.form = Form::Glyph;
+
+        let ordered = order(
+            &PlotStyle::CAROUSEL,
+            vec![letter, circle],
+            &[EDGE; 2],
+            Point::new(7, 10),
+        );
+
+        assert_eq!(ordered.strokes[0].mark, 0);
+        assert_eq!(ordered.strokes[1].start(), Point::new(0, 10));
     }
 }

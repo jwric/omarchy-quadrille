@@ -16,6 +16,7 @@
 //!
 //! The plot as it was, [`Motion::Reveal`], is kept exactly: every piece in
 //! the order of its passes, revealed at one rate of pen travel.
+pub mod detail;
 pub mod motion;
 pub mod order;
 pub mod own;
@@ -39,8 +40,8 @@ use motion::Motions;
 use order::Meta;
 use own::Owners;
 use pen::Head;
-use strokes::{Form, Stroke};
-use style::{Motion, PlotStyle};
+use strokes::{Form, Making, Stroke};
+use style::{Circles, Motion, PlotStyle};
 
 /// The longest piece of the plot as it was, and stretch of a stroke, in
 /// pixels of pen travel: each a path of its own, so the pen's damage is the
@@ -51,6 +52,12 @@ const PLOT_BUCKET: usize = 1536;
 
 /// The laptop's sheet height, which a style's lengths and speeds are for.
 const REFERENCE: f64 = 533.0;
+
+/// How much a style's lengths and speeds are scaled on a sheet `height`
+/// virtual pixels high, so a plot takes as long on every output.
+pub fn scale(height: i32) -> f64 {
+    f64::from(height) / REFERENCE
+}
 
 /// A mark to plot, as its view projects it.
 pub struct Marked {
@@ -134,7 +141,8 @@ pub struct Stats {
     pub drawing: f64,
     pub travelling: f64,
     pub still: f64,
-    /// Letters and dots set at a touch, and how many a second.
+    /// Letters and dots set at a touch; and letters lettered a second,
+    /// over the time the pen spends lettering.
     pub touches: usize,
     pub lettering: f64,
     pub strokes: usize,
@@ -246,12 +254,20 @@ impl Plot {
             }
         }
 
+        let making = Making {
+            lining: style.lining,
+            glyphs: style.glyphs,
+        };
         let made: Vec<Stroke> = marks
             .iter()
             .enumerate()
             .filter(|(_, marked)| !waits(marked))
             .flat_map(|(mark, marked)| {
                 let (owners, ids) = (&owners, &ids);
+                let centre = marked
+                    .meta
+                    .centre
+                    .filter(|_| style.circles == Circles::Centred);
 
                 marked
                     .pieces
@@ -263,14 +279,15 @@ impl Plot {
                             (mark, piece, ids[mark][piece]),
                             owners,
                             paper.clip,
-                            style.lining,
+                            making,
+                            centre,
                         )
                     })
             })
             .collect();
         let metas: Vec<Meta> = marks.iter().map(|marked| marked.meta).collect();
         let ordered = order::order(style, made, &metas, paper.home);
-        let scale = f64::from(paper.size.1) / REFERENCE;
+        let scale = scale(paper.size.1);
         let motions = Motions::plan(style, &ordered.strokes, &ordered.gaps, paper.home, scale);
         let inks: Vec<usize> = ordered.strokes.iter().map(Stroke::ink).collect();
         let buckets = buckets(&inks, PLOT_BUCKET);
@@ -285,7 +302,7 @@ impl Plot {
                 .iter()
                 .filter(|stroke| matches!(stroke.form, Form::Touch(_)))
                 .count(),
-            lettering: f64::from(style.lettering) * motions.k,
+            lettering: lettering(marks, &ordered.strokes, &motions),
             strokes: ordered.strokes.len(),
             groups: ordered.groups,
             ink: inks.iter().sum(),
@@ -297,7 +314,7 @@ impl Plot {
             match op.act {
                 motion::Act::Draw { .. } | motion::Act::Touch { .. } => stats.drawing += op.time,
                 motion::Act::Travel { .. } => stats.travelling += op.time,
-                motion::Act::Still { .. } => stats.still += op.time,
+                motion::Act::Still { .. } | motion::Act::Change { .. } => stats.still += op.time,
             }
         }
 
@@ -437,6 +454,58 @@ impl Plot {
     }
 }
 
+/// Letters a second in a plot of `marks` drawing `strokes` as `motions`
+/// says: the letters of every line of lettering plotted, over the time the
+/// pen spends on them, from its first letter's first stroke to its last's
+/// end.
+fn lettering(marks: &[Marked], strokes: &[Stroke], motions: &Motions) -> f64 {
+    let letters: std::collections::BTreeMap<(usize, usize), usize> = marks
+        .iter()
+        .enumerate()
+        .flat_map(|(mark, marked)| {
+            marked
+                .pieces
+                .iter()
+                .enumerate()
+                .filter_map(move |(piece, inked)| match &inked.piece {
+                    raster::Piece::Text { text, .. } => Some((
+                        (mark, piece),
+                        text.chars().filter(|c| !c.is_whitespace()).count(),
+                    )),
+                    _ => None,
+                })
+        })
+        .collect();
+    let line = |index: usize| {
+        strokes
+            .get(index)
+            .map(|stroke| (stroke.mark, stroke.piece))
+            .filter(|key| letters.contains_key(key))
+    };
+    let mut lettered = std::collections::BTreeSet::new();
+    let mut time = 0.0;
+
+    for op in &motions.ops {
+        let on = match op.act {
+            motion::Act::Draw { stroke, .. } | motion::Act::Touch { stroke } => line(stroke),
+            // Between two strokes of the same line.
+            _ => match (op.done.checked_sub(1).and_then(line), line(op.done)) {
+                (Some(before), Some(next)) if before == next => Some(next),
+                _ => None,
+            },
+        };
+
+        if let Some(key) = on {
+            lettered.insert(key);
+            time += op.time;
+        }
+    }
+
+    let count: usize = lettered.iter().map(|key| letters[key]).sum();
+
+    if time > 0.0 { count as f64 / time } else { 0.0 }
+}
+
 /// Draws the pixels `stroke` inks among the first `passed`, a path for each
 /// stretch of [`PLOT_PIECE`] pixels: what is drawn on stays the same
 /// stretches from frame to frame, so only the stretch the pen is on is
@@ -482,19 +551,19 @@ fn buckets(costs: &[usize], cost: usize) -> Vec<Range<usize>> {
     buckets
 }
 
-/// Works out the plot of a sheet when it is first asked for, and keeps it
-/// while that sheet shows.
-pub struct Kept<For: PartialEq>(std::cell::RefCell<Option<(For, std::rc::Rc<Plot>)>>);
+/// Works out the plot of a sheet, or of a detail, when it is first asked
+/// for, and keeps it while that sheet, or detail, shows.
+pub struct Kept<For: PartialEq, What = Plot>(std::cell::RefCell<Option<(For, std::rc::Rc<What>)>>);
 
-impl<For: PartialEq> Default for Kept<For> {
+impl<For: PartialEq, What> Default for Kept<For, What> {
     fn default() -> Self {
         Self(std::cell::RefCell::new(None))
     }
 }
 
-impl<For: PartialEq> Kept<For> {
+impl<For: PartialEq, What> Kept<For, What> {
     /// The plot made `made`, worked out by `plot` if it is not kept.
-    pub fn get(&self, made: For, plot: impl FnOnce() -> Plot) -> std::rc::Rc<Plot> {
+    pub fn get(&self, made: For, plot: impl FnOnce() -> What) -> std::rc::Rc<What> {
         let mut kept = self.0.borrow_mut();
 
         match kept.as_ref() {

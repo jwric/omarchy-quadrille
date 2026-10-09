@@ -96,6 +96,10 @@ struct Render {
     /// Moments into the sheet, in seconds.
     #[arg(long, value_delimiter = ',', default_value = "4,12,16")]
     at: Vec<f32>,
+    /// Every frame at this many a second from the first moment to the
+    /// last, each named by its frame, rather than the moments alone.
+    #[arg(long)]
+    fps: Option<f32>,
     #[arg(long, value_enum, default_value_t = Desk::Laptop)]
     output: Desk,
     /// Another output than the desk's, by its mode:
@@ -288,14 +292,31 @@ fn draw(render: Render, machine: &Machine, plot: PlotStyle) -> Result<(), String
     let date = today();
     let mut studio = Studio::new(&subjects, output, &theme, &date)?.plotting(plot);
 
+    // The moments, each with what names its file.
+    let moments: Vec<(f32, String)> = match render.fps {
+        Some(fps) => {
+            let first = render.at.iter().copied().fold(f32::INFINITY, f32::min);
+            let last = render.at.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+            ((first * fps).round() as u32..=(last * fps).round() as u32)
+                .map(|frame| (frame as f32 / fps, format!("f{frame:05}")))
+                .collect()
+        }
+        None => render
+            .at
+            .iter()
+            .map(|moment| (*moment, format!("{moment:05.1}")))
+            .collect(),
+    };
+
     for index in indices {
-        for &moment in &render.at {
+        for (moment, name) in &moments {
             let path = render.out.join(format!(
-                "{}-{desk}-{tag}-{moment:05.1}.png",
+                "{}-{desk}-{tag}-{name}.png",
                 subjects[index].name()
             ));
 
-            studio.save(index, moment, render.physical, &path)?;
+            studio.save(index, *moment, render.physical, &path)?;
             println!("{}", path.display());
         }
     }
@@ -377,7 +398,7 @@ fn plot_stats(machine: &Machine) -> Result<(), String> {
         "each sheet's plot: its strokes, and its letters and dots set at a touch; pixels inked and \
          carried over; seconds of moves and pauses as planned; k, how much faster the moves are \
          played to fit the plot (p, the pauses); the share of the plot drawing, carried and still; \
-         touches a second; milliseconds to plan"
+         letters a second; milliseconds to plan"
     );
     println!(
         "{:<10} {:<9} {:<8} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>5} {:>4} {:>4} {:>4} {:>6} {:>5}",

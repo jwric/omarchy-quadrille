@@ -642,8 +642,26 @@ mod tests {
         repaints_as_drawn_in(PlotStyle::DRAFTING, 0, Output::LAPTOP, 0.0..12.0, 4.0);
     }
 
+    /// A carousel plotter repaints as drawn: its gantry under the ink and
+    /// its carriage's ticks through the plot, a detail plotted by its pen,
+    /// and the sweep of the wipe.
+    #[test]
+    fn a_carousel_plotter_repaints_as_drawn() {
+        let style = PlotStyle::CAROUSEL;
+        let parts = crate::subjects::all(&Machine::fixture())[0]
+            .card()
+            .parts
+            .len();
+        let detail = timeline::PLOT_START + style.length + timeline::SETTLE;
+        let end = timeline::duration(parts, style.length);
+
+        repaints_as_drawn_in(style, 0, Output::LAPTOP, 0.0..4.0, 4.0);
+        repaints_as_drawn_in(style, 0, Output::LAPTOP, detail - 0.2..detail + 2.4, 10.0);
+        repaints_as_drawn_in(style, 0, Output::LAPTOP, end - 1.6..end, 10.0);
+    }
+
     /// Every sheet's plot in every style, on both outputs, at ten frames a
-    /// second.
+    /// second; and its first detail, where the pen plots details.
     #[test]
     #[ignore = "minutes: run with --release --ignored"]
     fn every_plot_repaints_as_drawn() {
@@ -651,8 +669,14 @@ mod tests {
             for first in 0..crate::subjects::all(&Machine::fixture()).len() {
                 for output in [Output::LAPTOP, Output::ULTRAWIDE] {
                     let end = timeline::PLOT_START + style.length + 0.5;
+                    let detail = timeline::PLOT_START + style.length + timeline::SETTLE;
+                    let settled = detail + timeline::MARK + timeline::DETAIL_PLOT + 0.2;
 
                     repaints_as_drawn_in(style, first, output, 0.0..end, 10.0);
+
+                    if style.details {
+                        repaints_as_drawn_in(style, first, output, detail..settled, 10.0);
+                    }
                 }
             }
         }

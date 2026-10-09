@@ -4,20 +4,21 @@
 //! and which of them it inks. A dashed line is one stroke, the pen bouncing
 //! over its gaps; lining is a stroke along each of its diagonals, back and
 //! forth across the area; an area of solid or tint is one stroke back and
-//! forth along its rows; a letter or a dot is a touch of the pen that sets
-//! it whole. Which pixels a stroke inks is worked out once, in the
-//! direction it was drawn, and carried with them, so turning a stroke round
-//! or starting a loop elsewhere never moves a dash.
+//! forth along its rows; a letter is a touch of the pen that sets it whole,
+//! or the strokes of its glyph traced in turn; a dot is a touch. Which
+//! pixels a stroke inks is worked out once, in the direction it was drawn,
+//! and carried with them, so turning a stroke round or starting a loop
+//! elsewhere never moves a dash.
 use std::collections::BTreeMap;
 use std::ops::Range;
 
 use iced_core::{Point, Rectangle};
 
 use crate::draft::raster::{self, Inked, LETTERING, Piece, Texture};
-use crate::draft::{Tone, letters};
+use crate::draft::{Tone, glyphs, letters};
 
 use super::own::{Owners, painted};
-use super::style::Lining;
+use super::style::{Glyphs, Lining};
 
 /// One motion of the pen.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,6 +42,13 @@ pub enum Form {
     Line,
     /// Round and back to where it began, which may be anywhere on it.
     Loop,
+    /// A circle round this centre as a plotter's circle instruction draws
+    /// it: from the centre out to its first pixel, at three o'clock, round
+    /// anticlockwise, and back to the centre.
+    Circle(Point<i32>),
+    /// A stroke of a letter, from its first pixel to its last: the way the
+    /// letter is written, never turned round.
+    Glyph,
     /// A touch where the pen stands, setting a letter or a dot whole.
     Touch(Point<i32>),
 }
@@ -49,18 +57,23 @@ impl Stroke {
     /// Where the pen starts it.
     pub fn start(&self) -> Point<i32> {
         match self.form {
-            Form::Touch(at) => at,
-            Form::Line | Form::Loop => self.pixels[0],
+            Form::Touch(at) | Form::Circle(at) => at,
+            Form::Line | Form::Loop | Form::Glyph => self.pixels[0],
         }
     }
 
     /// Where the pen leaves it.
     pub fn end(&self) -> Point<i32> {
         match self.form {
-            Form::Touch(at) => at,
+            Form::Touch(at) | Form::Circle(at) => at,
             Form::Loop => self.pixels[0],
-            Form::Line => self.pixels[self.pixels.len() - 1],
+            Form::Line | Form::Glyph => self.pixels[self.pixels.len() - 1],
         }
+    }
+
+    /// Whether the pen goes round it and back to its first pixel.
+    pub fn closed(&self) -> bool {
+        matches!(self.form, Form::Loop | Form::Circle(_))
     }
 
     /// How many pixels it inks.
@@ -92,7 +105,7 @@ impl Stroke {
                 self.pixels[1..].reverse();
                 self.lit[1..].reverse();
             }
-            Form::Touch(_) => {}
+            Form::Circle(_) | Form::Glyph | Form::Touch(_) => {}
         }
     }
 
@@ -105,16 +118,25 @@ impl Stroke {
     }
 }
 
+/// How a sheet's pieces are made strokes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Making {
+    pub lining: Lining,
+    pub glyphs: Glyphs,
+}
+
 /// The strokes of `inked`, piece `piece` of mark `mark`, which is piece
 /// `id` of the drawing: inking only what it owns in `owners`, inside
-/// `clip`, its lining drawn as `lining` says. A stroke that would ink
-/// nothing is left out.
+/// `clip`, its lining and lettering drawn as `making` says. A circle round
+/// `centre`, if one is given, is drawn from it as a plotter draws a circle.
+/// A stroke that would ink nothing is left out.
 pub fn strokes(
     inked: &Inked,
     (mark, piece, id): (usize, usize, u32),
     owners: &Owners,
     clip: Rectangle<i32>,
-    lining: Lining,
+    making: Making,
+    centre: Option<Point<i32>>,
 ) -> Vec<Stroke> {
     let owned = |pixel: &Point<i32>| owners.owns(id, *pixel);
     let stroke = |pixels: Vec<Point<i32>>, lit: Vec<bool>, form: Form| Stroke {
@@ -144,12 +166,19 @@ pub fn strokes(
                 let lit = (first..=last)
                     .map(|index| stipple.lights(phase + index) && owned(&pixels[index]))
                     .collect();
+                let made = path(pixels[first..=last].to_vec(), lit, stroke);
 
-                strokes.push(path(pixels[first..=last].to_vec(), lit, stroke));
+                strokes.push(match centre {
+                    // A circle the clip leaves whole.
+                    Some(centre) if made.form == Form::Loop && last + 1 - first == pixels.len() => {
+                        centred(made, centre)
+                    }
+                    _ => made,
+                });
             }
         }
         Piece::Rows { texture, .. } => {
-            let diagonal = match (texture, lining) {
+            let diagonal = match (texture, making.lining) {
                 (Texture::Rising(_), Lining::Diagonals) => Some(true),
                 (Texture::Falling(_), Lining::Diagonals) => Some(false),
                 _ => None,
@@ -175,8 +204,8 @@ pub fn strokes(
                 }
             }
         }
-        Piece::Text { at, text } => {
-            if raster::shows(*at, text, clip) {
+        Piece::Text { at, text } if raster::shows(*at, text, clip) => match making.glyphs {
+            Glyphs::Touched => {
                 let advance = i32::from(LETTERING.advance());
                 let middle = at.y + i32::from(LETTERING.cap_top()) + i32::from(LETTERING.cap()) / 2;
 
@@ -187,7 +216,20 @@ pub fn strokes(
                     strokes.push(stroke(glyph, lit, Form::Touch(centre)));
                 }
             }
-        }
+            Glyphs::Traced => {
+                for trail in glyphs::strokes(text, *at).into_iter().flatten() {
+                    let lit = trail.iter().map(owned).collect();
+                    let form = match trail.as_slice() {
+                        [dot] => Form::Touch(*dot),
+                        _ => Form::Glyph,
+                    };
+
+                    strokes.push(stroke(trail, lit, form));
+                }
+            }
+        },
+        // Lettering the clip would cut is left out whole.
+        Piece::Text { .. } => {}
         Piece::Block(bounds) => {
             let mut pixels = Vec::new();
             painted(&inked.piece, clip, |pixel| pixels.push(pixel));
@@ -234,6 +276,30 @@ fn path(
     }
 
     stroke(pixels, lit, Form::Line)
+}
+
+/// `circle`, a loop round `centre`, drawn as a plotter's circle instruction
+/// draws it: from its pixel at three o'clock, anticlockwise.
+pub fn centred(mut circle: Stroke, centre: Point<i32>) -> Stroke {
+    let count = circle.pixels.len();
+    // Level with the centre and furthest right of it.
+    let start = (0..count)
+        .min_by_key(|&index| {
+            let pixel = circle.pixels[index];
+
+            ((pixel.y - centre.y).abs(), centre.x - pixel.x, index)
+        })
+        .unwrap_or(0);
+
+    circle.rotate(start);
+
+    // Anticlockwise on the sheet, whose y grows downwards: upwards first.
+    if circle.pixels[1].y > circle.pixels[count - 1].y {
+        circle.reverse();
+    }
+
+    circle.form = Form::Circle(centre);
+    circle
 }
 
 /// The pixels of an area's rows inside `clip`, back and forth: the first
@@ -322,6 +388,19 @@ mod tests {
 
     /// The strokes of `piece`, alone on a sheet, drawn as `lining` says.
     fn alone(piece: &Piece, lining: Lining) -> Vec<Stroke> {
+        made(
+            piece,
+            Making {
+                lining,
+                glyphs: Glyphs::Touched,
+            },
+            None,
+        )
+    }
+
+    /// The strokes of `piece`, alone on a sheet, made as `making` says,
+    /// round `centre` if it is a circle drawn from its centre.
+    fn made(piece: &Piece, making: Making, centre: Option<Point<i32>>) -> Vec<Stroke> {
         let mut owners = Owners::new(200, 200);
         owners.paint(1, piece, CLIP);
 
@@ -330,7 +409,7 @@ mod tests {
             tone: Tone::Ink,
         };
 
-        strokes(&inked, (0, 0, 1), &owners, CLIP, lining)
+        strokes(&inked, (0, 0, 1), &owners, CLIP, making, centre)
     }
 
     /// Pixels in an order of their own, each once.
@@ -474,12 +553,77 @@ mod tests {
             (0, 0, 1),
             &owners,
             CLIP,
-            Lining::Rows,
+            Making {
+                lining: Lining::Rows,
+                glyphs: Glyphs::Touched,
+            },
+            None,
         );
 
         assert_eq!(made.len(), 1);
         assert_eq!(made[0].pixels.len(), 141);
         assert_eq!(made[0].ink(), 141 - 20);
         assert!(inked_by(&made).iter().all(|&(x, _)| !(60..80).contains(&x)));
+    }
+
+    /// Lettering traced a stroke at a time inks what it paints, its letters
+    /// left to right, each stroke the way it is written.
+    #[test]
+    fn traced_lettering_lights_what_it_paints() {
+        let piece = Piece::Text {
+            at: Point::new(12, 40),
+            text: "Ø8 H7/k6 R43.3".into(),
+        };
+        let traced = made(
+            &piece,
+            Making {
+                lining: Lining::Rows,
+                glyphs: Glyphs::Traced,
+            },
+            None,
+        );
+
+        let advance = i32::from(LETTERING.advance());
+        let letter = |stroke: &Stroke| (stroke.pixels[0].x - 12).div_euclid(advance);
+
+        assert_eq!(inked_by(&traced), painted_by(&piece));
+        assert!(traced.len() > 14);
+        assert!(
+            traced
+                .windows(2)
+                .all(|pair| letter(&pair[0]) <= letter(&pair[1]))
+        );
+        assert!(
+            traced
+                .iter()
+                .all(|stroke| matches!(stroke.form, Form::Glyph | Form::Touch(_)))
+        );
+    }
+
+    /// A circle drawn from its centre starts level with it on the right
+    /// and goes up from there, round to where it began, with its dashes
+    /// where they were.
+    #[test]
+    fn a_circle_from_its_centre_starts_at_three_oclock_and_goes_up() {
+        let centre = Point::new(100, 100);
+        let piece = Piece::path(
+            raster::ordered_circle(centre, 37),
+            Stipple::of(Line::Phantom),
+        );
+        let made = made(
+            &piece,
+            Making {
+                lining: Lining::Rows,
+                glyphs: Glyphs::Touched,
+            },
+            Some(centre),
+        );
+
+        assert_eq!(made.len(), 1);
+        assert_eq!(made[0].form, Form::Circle(centre));
+        assert_eq!(made[0].pixels[0], Point::new(137, 100));
+        assert_eq!(made[0].pixels[1].y, 99);
+        assert_eq!((made[0].start(), made[0].end()), (centre, centre));
+        assert_eq!(inked_by(&made), painted_by(&piece));
     }
 }

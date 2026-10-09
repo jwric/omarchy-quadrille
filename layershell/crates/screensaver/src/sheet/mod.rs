@@ -34,7 +34,7 @@ use crate::subjects::{Card, Detail, Place, Room, Subject};
 
 use layout::{CAPTION, LINE, Layout};
 use plates::Typist;
-use plotter::style::PlotStyle;
+use plotter::style::{PlotStyle, Wipe};
 use plotter::{Marked, Paper, Plot};
 use timeline::{Focus, MARK, Phase, Showing};
 
@@ -98,8 +98,10 @@ pub struct Kept<Renderer: geometry::Renderer> {
     detail: Memo<Key, Renderer>,
     /// Where the automatic annotations of the subject showing go.
     plan: Planned,
-    /// The plot of the sheet showing, worked out on its first frame.
+    /// The plot of the sheet showing, worked out on its first frame...
     plot: plotter::Kept<PlotFor>,
+    /// ...and of the detail showing, on its first.
+    detail_plot: plotter::Kept<DetailFor, plotter::detail::Detail>,
     /// The finished buckets of a plot, and the passed strips of a wipe.
     ///
     /// The renderer counts a kept drawing it has seen before as unchanged,
@@ -121,6 +123,9 @@ type PlanFor = (usize, (i32, i32));
 /// style: frozen for the showing, so a live subject's marks cannot change
 /// under the buckets kept of it.
 type PlotFor = (usize, u64, (i32, i32), PlotStyle);
+
+/// The detail of a part, by its index, on a showing.
+type DetailFor = (PlotFor, usize);
 
 impl Planned {
     /// The plans for subject `index` at `size`, a plan a view, worked out by
@@ -163,6 +168,7 @@ impl<Renderer: geometry::Renderer> Default for Kept<Renderer> {
             detail: Memo::new(),
             plan: Planned::default(),
             plot: plotter::Kept::default(),
+            detail_plot: plotter::Kept::default(),
             pieces: RefCell::new(Vec::new()),
         }
     }
@@ -220,8 +226,28 @@ where
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry<Renderer>> {
         let size = Size::new(bounds.width.floor(), bounds.height.floor());
-        let scene = Scene::new(self, size.width as i32, size.height as i32, &kept.plan);
+        let (width, height) = (size.width as i32, size.height as i32);
+        let mut scene = Scene::new(self, width, height, &kept.plan);
         let palette = theme.palette();
+
+        // A detail the pen plots: its plot, worked out on its first frame
+        // from the drawing as it stood when its part was picked out.
+        if self.plot.details
+            && let Some(view) = scene.detail.as_mut()
+            && !view.focus.settled()
+        {
+            let showing = self.showing;
+            let made = (
+                (showing.subject, showing.serial, (width, height), self.plot),
+                view.focus.part,
+            );
+            let plan = kept.detail_plot.get(made, || {
+                self.detail_plot(view.focus, (width, height), &kept.plan)
+            });
+            let now = plan.at(view.focus.time);
+
+            view.pen = Some((plan, now));
+        }
         let moment = self.showing.moment;
         let key = |marked| Key {
             subject: self.showing.subject,
@@ -293,16 +319,56 @@ where
                     .detail_view(&mut frame, palette, view, Layer::All)
                     .map(|Head(at)| plotter::pen::Head::down(at)));
             }
+
+            // Carried up, or still, where the plan has the pen.
+            if let Some((_, now)) = &view.pen {
+                head = head.or(now.head);
+            }
         }
 
         scene.readings(&mut Pen::new(&mut frame), palette);
 
-        if let Some(head) = head.filter(|_| self.plot.head) {
-            plotter::pen::draw(&mut Pen::new(&mut frame), head, palette);
+        let head = head.filter(|_| self.plot.head);
+
+        if let Some(head) = head {
+            let mut pen = Pen::new(&mut frame);
+
+            plotter::pen::draw(&mut pen, head, palette);
+
+            // The carriage's ticks, which on a gantry plotter ride at the
+            // ends of its arm, along which the head shows where it is.
+            if self.plot.ticks && !self.plot.gantry {
+                let (trim, border) = (scene.layout.trim, scene.layout.border);
+
+                plotter::pen::ticks_across(&mut pen, head.at.x, trim, border, palette);
+                plotter::pen::ticks_down(&mut pen, head.at.y, trim, border, palette);
+            }
         }
 
         layers.push(frame.into_geometry());
         layers.extend(scene.wipe(kept, renderer, bounds.size(), key(false), palette));
+
+        // The gantry's arm, over the border and under all else, a layer of
+        // its own every frame so that the others pair with the frame
+        // before's as they are. It is shown while the pen plots the sheet,
+        // not while it plots a detail over the subject's run: crossing what
+        // moves, it would have most of the sheet repainted every frame.
+        if self.plot.gantry && self.plot.head {
+            let mut arm = Frame::new(renderer, bounds.size());
+
+            if let Some(head) = head.filter(|_| matches!(moment.phase, Phase::Plot(_))) {
+                let (trim, border) = (scene.layout.trim, scene.layout.border);
+                let mut pen = Pen::new(&mut arm);
+
+                plotter::pen::gantry(&mut pen, head.at.x, border, palette);
+
+                if self.plot.ticks {
+                    plotter::pen::ticks_across(&mut pen, head.at.x, trim, border, palette);
+                }
+            }
+
+            layers.insert(1, arm.into_geometry());
+        }
 
         layers
     }
@@ -321,6 +387,43 @@ where
 /// worked out as its first frame works it out.
 pub fn plot_of(sheet: &Sheet<'_>, size: (i32, i32)) -> Plot {
     Scene::new(sheet, size.0, size.1, &Planned::default()).plot(&sheet.plot, size)
+}
+
+impl Sheet<'_> {
+    /// The pen's plot of the detail in `focus` on a sheet of `size`, from
+    /// the drawing as it stood when its part was picked out: the same
+    /// whichever frame of the detail works it out.
+    fn detail_plot(
+        &self,
+        focus: Focus,
+        size: (i32, i32),
+        planned: &Planned,
+    ) -> plotter::detail::Detail {
+        let moment = self.showing.moment;
+        let picked = Sheet {
+            subject: self.subject,
+            number: self.number,
+            of: self.of,
+            showing: Showing {
+                moment: timeline::Moment {
+                    phase: Phase::Run(Some(Focus {
+                        part: focus.part,
+                        time: 0.0,
+                    })),
+                    local: moment.local - focus.time,
+                    run: timeline::SETTLE + focus.part as f32 * timeline::DETAIL,
+                },
+                ..self.showing
+            },
+            display: self.display,
+            date: self.date,
+            plot: self.plot,
+        };
+        let scene = Scene::new(&picked, size.0, size.1, planned);
+        let view = scene.detail.as_ref().expect("A part picked out");
+
+        plotter::detail::Detail::new(&self.plot, scene.sketch(view), plotter::scale(size.1))
+    }
 }
 
 /// The sheet worked out for one size: its layout, the subject's marks at
@@ -365,6 +468,8 @@ struct DetailView {
     detail: Detail,
     projection: Projection,
     ratio: Option<Ratio>,
+    /// The pen's plot of it and where that is, while the pen plots it.
+    pen: Option<(Rc<plotter::detail::Detail>, plotter::detail::Now)>,
 }
 
 impl DetailView {
@@ -750,6 +855,7 @@ impl<'a> Scene<'a> {
                 detail,
                 projection: Projection::centred(region, window, scale),
                 ratio,
+                pen: None,
             })
         });
 
@@ -837,27 +943,39 @@ impl<'a> Scene<'a> {
                             Ink::Balloon { item, .. } => Some(item),
                             _ => None,
                         },
+                        centre: match mark.ink {
+                            Ink::Stroke {
+                                shape: Shape::Circle { centre, .. },
+                                ..
+                            } => Some(raster::through(mark, projection).px(centre)),
+                            _ => None,
+                        },
                     },
                     moving: mark.moving,
                     pieces,
                 }
             })
             .collect();
-        let (trim, border) = (self.layout.trim, self.layout.border);
-
         Plot::new(
             style,
             &marks,
             Paper {
                 size,
                 clip: self.layout.drawing(),
-                // The corner of the zone band at the foot on the left: off
-                // the drawing, where a plotter's origin is.
-                home: Point::new(
-                    (trim.x + border.x) / 2,
-                    (border.y + border.height - 1 + trim.y + trim.height - 1) / 2,
-                ),
+                home: self.home(),
             },
+        )
+    }
+
+    /// Where the pen is kept, and its carousel: the corner of the zone band
+    /// at the foot on the left, off the drawing, where a plotter's origin
+    /// is.
+    fn home(&self) -> Point<i32> {
+        let (trim, border) = (self.layout.trim, self.layout.border);
+
+        Point::new(
+            (trim.x + border.x) / 2,
+            (border.y + border.height - 1 + trim.y + trim.height - 1) / 2,
         )
     }
 
@@ -977,7 +1095,16 @@ impl<'a> Scene<'a> {
         };
         let border = self.layout.border;
         let (left, top, height) = (border.x + 1, border.y + 1, border.height - 2);
-        let x = left + ((border.width - 2) as f32 * share) as i32;
+        let x = match self.sheet.plot.wipe {
+            Wipe::Line => left + ((border.width - 2) as f32 * share) as i32,
+            // From the parked pen, eased in and out.
+            Wipe::Sweep => {
+                let from = self.home().x;
+                let eased = share * share * (3.0 - 2.0 * share);
+
+                from + ((left + border.width - 2 - from) as f32 * eased) as i32
+            }
+        };
         let mut geometries = Vec::new();
 
         let strip = ((border.width - 2) + WIPE_STRIPS - 1) / WIPE_STRIPS;
@@ -1004,7 +1131,17 @@ impl<'a> Scene<'a> {
         }
 
         let mut line = Frame::new(renderer, size);
-        Pen::new(&mut line).vline(x, top, top + height - 1, palette.accent);
+        let mut pen = Pen::new(&mut line);
+
+        pen.vline(x, top, top + height - 1, palette.accent);
+
+        // A gantry's arm clears the sheet it drew, its carriage riding the
+        // rails as it goes.
+        if self.sheet.plot.gantry && self.sheet.plot.ticks {
+            plotter::pen::ticks_across(&mut pen, x, self.layout.trim, border, palette);
+        }
+
+        drop(pen);
         geometries.push(line.into_geometry());
 
         geometries
@@ -1139,6 +1276,16 @@ impl<'a> Scene<'a> {
     ) -> Option<Head> {
         let centre = self.main.px(view.detail.centre);
         let radius = self.main.length(view.detail.radius).max(4);
+
+        // Drawn by the pen as far as its plan has drawn it, round the
+        // circle as it is now.
+        if let Some((_, now)) = &view.pen {
+            let ring = self.ring(view);
+
+            return partly(pen, palette, &ring, now.ring, self.layout.drawing())
+                .filter(|_| now.drawing == Some(plotter::detail::Drawing::Ring));
+        }
+
         let share = (view.focus.time / MARK).min(1.0);
         let circle = raster::Piece::path(
             raster::ordered_circle(centre, radius),
@@ -1162,29 +1309,9 @@ impl<'a> Scene<'a> {
         palette: &Palette,
         view: &DetailView,
     ) {
-        let centre = self.main.px(view.detail.centre);
-        let radius = self.main.length(view.detail.radius).max(4);
-
         if view.focus.time >= MARK {
             let text = letter(view.focus.part).to_string();
-            // Up and right, unless what the view draws or letters is in the
-            // way there and not somewhere else round the circle; a circle
-            // that follows a moving part keeps to one place.
-            let ((corner, leader, at, anchor), clear) = if view.detail.follows {
-                (marker_letter(centre, radius, WAYS[0], 0), true)
-            } else {
-                let pieces = pieces(self.shown(), None);
-                let edges = outlines(self.shown());
-
-                letter_place(
-                    centre,
-                    radius,
-                    &text,
-                    &pieces,
-                    &edges,
-                    self.layout.drawing(),
-                )
-            };
+            let ((corner, leader, at, anchor), clear) = self.letter_spot(view);
 
             pen.line(corner, leader, palette.accent);
 
@@ -1195,6 +1322,120 @@ impl<'a> Scene<'a> {
             }
 
             letters::set(pen, &text, at, anchor, palette.accent);
+        }
+    }
+
+    /// Where the letter of the circle round the detail on the view goes,
+    /// and whether it is clear of the view's outlines: up and right, unless
+    /// what the view draws or letters is in the way there and not somewhere
+    /// else round the circle. A circle that follows a moving part keeps to
+    /// one place.
+    fn letter_spot(&self, view: &DetailView) -> (Lettered, bool) {
+        let centre = self.main.px(view.detail.centre);
+        let radius = self.main.length(view.detail.radius).max(4);
+
+        if view.detail.follows {
+            (marker_letter(centre, radius, WAYS[0], 0), true)
+        } else {
+            let text = letter(view.focus.part).to_string();
+            let pieces = pieces(self.shown(), None);
+            let edges = outlines(self.shown());
+
+            letter_place(
+                centre,
+                radius,
+                &text,
+                &pieces,
+                &edges,
+                self.layout.drawing(),
+            )
+        }
+    }
+
+    /// The circle round the detail on the view, as the pen draws it.
+    fn ring(&self, view: &DetailView) -> plotter::strokes::Stroke {
+        plotter::detail::circle(
+            self.main.px(view.detail.centre),
+            self.main.length(view.detail.radius).max(4),
+            raster::Stipple::of(Line::Phantom),
+            Tone::Accent,
+            &self.sheet.plot,
+        )
+    }
+
+    /// The detail view's boundary circle, round what the view's circle
+    /// marks, as the pen draws it.
+    fn window_circle(&self, view: &DetailView) -> plotter::strokes::Stroke {
+        plotter::detail::circle(
+            view.projection.px(view.detail.centre),
+            view.projection.length(view.detail.radius),
+            WINDOW_CIRCLE,
+            Tone::Faint,
+            &self.sheet.plot,
+        )
+    }
+
+    /// The detail view's pieces, each by what it draws (see
+    /// [`plotter::detail::Id`]), in the order they are painted: pass by
+    /// pass, the part in focus in the accent.
+    fn detail_pieces(&self, view: &DetailView) -> Vec<plotter::detail::Sketched> {
+        let mut pieces = Vec::new();
+        let mut buffer = Vec::new();
+        let mut kinds: std::collections::BTreeMap<plotter::detail::Kind, usize> =
+            std::collections::BTreeMap::new();
+
+        for mark in self.draft.marks() {
+            if !mark.magnified_for(view.focus.part) {
+                continue;
+            }
+
+            let kind = (
+                mark.pass(),
+                mark.part,
+                plotter::order::pen(mark.tone),
+                kind(&mark.ink),
+            );
+            let which = kinds.entry(kind).or_default();
+            let focused = mark.part == Some(view.focus.part);
+
+            raster::rasterize(mark, &view.projection, &mut buffer);
+            pieces.extend(buffer.drain(..).enumerate().map(|(piece, mut inked)| {
+                if focused && !matches!(inked.tone, Tone::Live | Tone::Caution) {
+                    inked.tone = Tone::Accent;
+                }
+
+                (
+                    mark.pass(),
+                    plotter::detail::Sketched {
+                        id: (kind, *which, piece),
+                        inked,
+                    },
+                )
+            }));
+            *which += 1;
+        }
+
+        pieces.sort_by_key(|(pass, _)| *pass);
+        pieces.into_iter().map(|(_, sketched)| sketched).collect()
+    }
+
+    /// What the pen plots `view` from, as the scene has it.
+    fn sketch(&self, view: &DetailView) -> plotter::detail::Sketch {
+        let text = letter(view.focus.part).to_string();
+        let ((_, _, at, anchor), _) = self.letter_spot(view);
+        let top_left = raster::place(LETTERING, &text, at, anchor);
+
+        plotter::detail::Sketch {
+            home: self.home(),
+            ring: self.ring(view),
+            // The middle of the letter.
+            letter: Point::new(
+                top_left.x + i32::from(LETTERING.width(&text)) / 2,
+                top_left.y + i32::from(LETTERING.cap_top()) + i32::from(LETTERING.cap()) / 2,
+            ),
+            window: self.window_circle(view),
+            pieces: self.detail_pieces(view),
+            clip: layout::inset(self.layout.detail_window(), 1),
         }
     }
 
@@ -1264,6 +1505,38 @@ impl<'a> Scene<'a> {
 
         let inside = layout::inset(window, 1);
         let mut pen = Pen::new(frame);
+
+        // Plotted by the pen: each piece as far along as the plan has
+        // drawn it, as the piece is now, in the order they are painted.
+        if let Some((plan, now)) = &view.pen {
+            use plotter::detail::Drawing;
+
+            let circle = self.window_circle(view);
+            let mut head = partly(&mut pen, palette, &circle, now.window, inside)
+                .filter(|_| now.drawing == Some(Drawing::Window));
+
+            for sketched in self.detail_pieces(view) {
+                let piece = &sketched.inked.piece;
+                let budget = plotter::detail::budget(piece, inside, plan.drawn(now, sketched.id));
+
+                if budget > 0 {
+                    let stopped = sketched.inked.piece.draw(
+                        &mut pen,
+                        colour(palette, sketched.inked.tone),
+                        palette.void,
+                        budget,
+                        inside,
+                    );
+
+                    if now.drawing == Some(Drawing::Piece(sketched.id)) {
+                        head = head.or(stopped);
+                    }
+                }
+            }
+
+            return head;
+        }
+
         let marks = self
             .draft
             .marks()
@@ -1277,10 +1550,7 @@ impl<'a> Scene<'a> {
             // marks so their lettering reads across it.
             let centre = view.projection.px(view.detail.centre);
             let radius = view.projection.length(view.detail.radius);
-            let circle = raster::Piece::path(
-                raster::ordered_circle(centre, radius),
-                raster::Stipple::Dash { on: 11, off: 4 },
-            );
+            let circle = raster::Piece::path(raster::ordered_circle(centre, radius), WINDOW_CIRCLE);
 
             circle.draw(&mut pen, palette.faint, palette.void, usize::MAX, inside);
         }
@@ -1294,6 +1564,49 @@ impl<'a> Scene<'a> {
             share,
         )
     }
+}
+
+/// What a mark is, for telling it from others of its pass and part.
+fn kind(ink: &Ink) -> u8 {
+    match ink {
+        Ink::Stroke { .. } => 0,
+        Ink::Arrow { .. } => 1,
+        Ink::Area { .. } => 2,
+        Ink::Inside { .. } => 3,
+        Ink::Label { .. } => 4,
+        Ink::Dimension { .. } => 5,
+        Ink::Note { .. } => 6,
+        Ink::Balloon { .. } => 7,
+        Ink::Dot { .. } => 8,
+        Ink::Finish { .. } => 9,
+        Ink::Datum { .. } => 10,
+        Ink::Control { .. } => 11,
+        Ink::Section { .. } => 12,
+    }
+}
+
+/// The dashes of a detail view's boundary circle.
+const WINDOW_CIRCLE: raster::Stipple = raster::Stipple::Dash { on: 11, off: 4 };
+
+/// Draws the first `share` of `stroke`'s pixels that it inks, inside
+/// `clip`; returns where the pen is if it is part of the way along.
+fn partly<Renderer: geometry::Renderer>(
+    pen: &mut Pen<'_, Renderer>,
+    palette: &Palette,
+    stroke: &plotter::strokes::Stroke,
+    share: f64,
+    clip: Rectangle<i32>,
+) -> Option<Head> {
+    let count = stroke.pixels.len();
+    let passed = ((share * count as f64).round() as usize).min(count);
+    let lit: Vec<Point<i32>> = stroke
+        .inked(0..passed)
+        .filter(|pixel| raster::contains(clip, *pixel))
+        .collect();
+
+    raster::fill_pixels(pen, &lit, colour(palette, stroke.tone));
+
+    (passed > 0 && passed < count).then(|| Head(stroke.pixels[passed - 1]))
 }
 
 /// The ways out from a detail's circle its letter may stand, the first
@@ -2932,6 +3245,123 @@ mod tests {
                         style.name
                     );
                 }
+            }
+        }
+    }
+
+    /// A detail the pen plots is worked out from the drawing as it stood
+    /// when its part was picked out, so it is drawn the same by a surface
+    /// that has shown it from the start as by one that begins halfway
+    /// through it, a part moving or not.
+    #[test]
+    fn a_plotted_detail_is_the_same_from_any_frame() {
+        use crate::headless::Studio;
+
+        let subjects = subjects::all(&Machine::fixture());
+        let theme = Theme::TERMINAL;
+        let style = PlotStyle::CAROUSEL;
+        let studio = || {
+            Studio::new(&subjects, Output::LAPTOP, &theme, "2026-10-07")
+                .expect("A studio")
+                .plotting(style)
+        };
+
+        for name in ["gears", "engine"] {
+            let index = subjects::find(&subjects, name).expect("A subject");
+            let picked = timeline::PLOT_START + style.length + timeline::SETTLE;
+            let mut watching = studio();
+
+            for frame in 0..=20 {
+                let at = picked + frame as f32 / 10.0;
+                let watched = watching.frame(index, at);
+
+                if frame % 5 == 3 {
+                    assert!(watched == studio().frame(index, at), "{name} at {at} s");
+                }
+            }
+        }
+    }
+
+    /// A part's detail drawn on its own, with its circle on the view: as
+    /// the pen has plotted it by its sheet's moment, or drawn whole as it
+    /// is once it settles.
+    struct DetailIn<'a> {
+        sheet: Sheet<'a>,
+        pen: bool,
+    }
+
+    impl canvas::Program<(), Theme, iced_renderer::Renderer> for DetailIn<'_> {
+        type State = Kept<iced_renderer::Renderer>;
+
+        fn draw(
+            &self,
+            kept: &Self::State,
+            renderer: &iced_renderer::Renderer,
+            theme: &Theme,
+            bounds: Rectangle,
+            _cursor: mouse::Cursor,
+        ) -> Vec<Geometry<iced_renderer::Renderer>> {
+            let size = (bounds.width as i32, bounds.height as i32);
+            let mut scene = Scene::new(&self.sheet, size.0, size.1, &kept.plan);
+            let view = scene.detail.as_mut().expect("A part in detail");
+
+            if self.pen {
+                let plan = Rc::new(self.sheet.detail_plot(view.focus, size, &kept.plan));
+                let now = plan.at(view.focus.time);
+
+                view.pen = Some((plan, now));
+            } else {
+                // Settled, its whole drawing drawn.
+                view.focus.time = MARK + timeline::DETAIL_PLOT + 0.1;
+            }
+
+            let view = scene.detail.as_ref().expect("A part in detail");
+            let mut frame = Frame::new(renderer, bounds.size());
+            let _ = scene.detail_marker(&mut Pen::new(&mut frame), theme.palette(), view);
+            let _ = scene.detail_view(&mut frame, theme.palette(), view, Layer::All);
+
+            vec![frame.into_geometry()]
+        }
+    }
+
+    /// The pen finishes a detail on what the detail shows once it settles,
+    /// exactly, on every sheet and both outputs: nothing pops in, nothing is
+    /// left over.
+    #[test]
+    fn a_plotted_detail_ends_on_the_settled_detail() {
+        let subjects = subjects::all(&Machine::fixture());
+        let theme = Theme::TERMINAL;
+        let style = PlotStyle::CAROUSEL;
+        // The pen home and gone, just before the detail settles.
+        let local =
+            timeline::PLOT_START + style.length + timeline::SETTLE + MARK + timeline::DETAIL_PLOT
+                - plotter::motion::REST / 2.0;
+
+        for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+            for index in 0..subjects.len() {
+                let drawn = |pen| {
+                    crate::headless::screenshot(
+                        DetailIn {
+                            sheet: plotted_sheet(&subjects, index, output, local, style),
+                            pen,
+                        },
+                        output.virtual_size(),
+                        &theme,
+                    )
+                };
+                let (plotted, settled) = (drawn(true), drawn(false));
+                let differ = plotted
+                    .chunks_exact(4)
+                    .zip(settled.chunks_exact(4))
+                    .filter(|(a, b)| a != b)
+                    .count();
+
+                assert!(
+                    differ == 0,
+                    "{} on {}: {differ} pixels",
+                    subjects[index].name(),
+                    output.name()
+                );
             }
         }
     }

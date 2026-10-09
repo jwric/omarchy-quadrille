@@ -241,7 +241,8 @@ pub struct Inked {
 pub struct Head(pub Point<i32>);
 
 const TEXT_COST: usize = 6;
-const ROW_COST: usize = 2;
+/// What a row of an area costs to plot, in pixels of pen travel.
+pub const ROW_COST: usize = 2;
 
 impl Piece {
     /// A whole stroke's pixels.

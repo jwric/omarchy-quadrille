@@ -7,6 +7,7 @@
 //! [`Projection`](raster::Projection), once for the view and again, larger,
 //! for a detail, and plots them stroke by stroke.
 pub mod geom;
+pub mod glyphs;
 pub mod letters;
 pub mod place;
 pub mod raster;

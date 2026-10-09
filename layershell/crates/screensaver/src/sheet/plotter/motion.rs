@@ -2,15 +2,15 @@
 //!
 //! The pen's work is a list of moves: carried up from one stroke to the
 //! next, drawing along a stroke, touching down to set a letter, or still
-//! while it settles, pauses between stages or changes pens. Each is timed
-//! as the style's carriage would move ([`Motion::Physical`]: blocks of
-//! constant acceleration, slowing for corners by GRBL's junction deviation,
-//! a short move stepped rather than ramped) or eased as a whole
-//! ([`Motion::Eased`]). Then the moves are fitted to the plot's length: the
-//! pauses keep their time, or shrink until they take three tenths of the
-//! plot, and the moves are played faster or slower to fill the rest. A
-//! moment of the plot is then found by a binary search and worked out in
-//! closed form.
+//! while it settles or pauses between stages, or at the carousel changing
+//! pens. Each is timed as the style's carriage would move
+//! ([`Motion::Physical`]: blocks of constant acceleration, slowing for
+//! corners by GRBL's junction deviation, a short move stepped rather than
+//! ramped) or eased as a whole ([`Motion::Eased`]). Then the moves are
+//! fitted to the plot's length: the pauses keep their time, or shrink until
+//! they take three tenths of the plot, and the moves are played faster or
+//! slower to fill the rest. A moment of the plot is then found by a binary
+//! search and worked out in closed form.
 use glam::DVec2;
 use iced_core::Point;
 use mint::Point2;
@@ -20,13 +20,13 @@ use crate::draft::Tone;
 use super::order::{Gap, pen as position};
 use super::pen::{Head, Pose};
 use super::strokes::{Form, Stroke};
-use super::style::{Easing, Motion, Physics, PlotStyle};
+use super::style::{Carousel, Easing, Glyphs, Motion, Physics, PlotStyle};
 
 /// Seconds at the end of a plot the pen is gone, so its last frames show
 /// the drawing as the subject's run begins.
 pub const REST: f32 = 0.1;
 /// Seconds the pen waits at home once it is parked.
-const HOLD: f64 = 0.2;
+pub const HOLD: f64 = 0.2;
 /// The most of a plot its pauses may take.
 const PAUSES: f64 = 0.3;
 /// How far a stroke's path may stray from its pixels' before its corners
@@ -215,7 +215,7 @@ impl Way {
     fn new(stroke: &Stroke) -> (Self, Vec<DVec2>) {
         let mut path: Vec<Point<i32>> = stroke.pixels.clone();
 
-        if stroke.form == Form::Loop {
+        if stroke.closed() {
             path.push(stroke.pixels[0]);
         }
 
@@ -312,15 +312,23 @@ pub enum Act {
     Draw { stroke: usize, run: Run, way: Way },
     /// Down on a stroke it sets at a touch.
     Touch { stroke: usize },
-    /// Still: settling, hovering between stages, changing pens, parked.
+    /// Still: settling, hovering between stages, parked.
     Still { at: Point<i32>, pose: Pose },
+    /// At the carousel: turning it `clicks` places, a jolt each, then
+    /// taking up the pen in `tone`, or putting the pen away.
+    Change {
+        at: Point<i32>,
+        tone: Option<Tone>,
+        clicks: u8,
+        click: f64,
+    },
 }
 
 impl Act {
     /// Whether it is a move, played faster or slower to fit the plot, and
     /// not a pause.
     fn moves(&self) -> bool {
-        !matches!(self, Self::Still { .. })
+        !matches!(self, Self::Still { .. } | Self::Change { .. })
     }
 }
 
@@ -373,16 +381,14 @@ impl Motions {
         home: Point<i32>,
         scale: f64,
     ) -> Self {
-        let mut plan = Planner {
+        let mut plan = Planner::new(
             style,
             scale,
-            acts: Vec::new(),
-            at: match strokes.first() {
-                Some(first) if !style.from_home => point(first.start()),
-                _ => point(home),
+            match strokes.first() {
+                Some(first) if !style.from_home => first.start(),
+                _ => home,
             },
-            travel: 0.0,
-        };
+        );
         let home = point(home);
         let mut holding: Option<Tone> = None;
 
@@ -404,16 +410,13 @@ impl Motions {
                 };
 
                 plan.carry(home);
-                plan.still(
-                    Pose::Up,
-                    f64::from(carousel.change) + f64::from(carousel.click) * f64::from(clicks),
-                );
+                plan.change(Some(stroke.tone), clicks, carousel);
                 holding = Some(stroke.tone);
             }
 
-            // A letter after a letter of the same line is set where the
-            // pen steps to; anything else is reached up, and settled on.
-            let typed = index > 0 && {
+            // A letter set whole after a letter of the same line is set
+            // where the pen steps to.
+            let typed = style.glyphs == Glyphs::Touched && index > 0 && {
                 let before = &strokes[index - 1];
 
                 matches!(before.form, Form::Touch(_))
@@ -423,22 +426,14 @@ impl Motions {
 
             if typed {
                 plan.at = point(stroke.start());
-            } else {
-                let hop = plan.carry(point(stroke.start()));
-
-                if let Some(drop) = style.drop
-                    && hop > f64::from(drop.near) * scale
-                {
-                    plan.still(Pose::Landing, f64::from(drop.far));
-                }
             }
 
-            plan.draw(index, stroke);
+            plan.stroke(index, stroke);
         }
 
         if let Some(carousel) = style.carousel {
             plan.carry(home);
-            plan.still(Pose::Up, f64::from(carousel.change));
+            plan.change(None, 0, carousel);
         }
 
         if style.park {
@@ -501,12 +496,31 @@ impl Motions {
             }
             Act::Touch { stroke } => place(Pose::Down, strokes[*stroke].start()),
             Act::Still { at, pose } => place(*pose, *at),
+            Act::Change {
+                at,
+                tone,
+                clicks,
+                click,
+            } => {
+                // Seconds into the change as planned: a pause's are its
+                // own, shrunk to fit.
+                let into = (time - op.start).clamp(0.0, op.time) / self.p;
+                let clicked = into / click;
+                // A pixel's jolt for the first half of each click.
+                let jolt = i32::from(clicked < f64::from(*clicks) && clicked.fract() < 0.5);
+                let pose = match tone {
+                    Some(tone) => Pose::Changing(*tone),
+                    None => Pose::Up,
+                };
+
+                place(pose, Point::new(at.x + jolt, at.y))
+            }
         }
     }
 }
 
 /// The pen's work as it is planned, before it is fitted to the plot.
-struct Planner<'a> {
+pub struct Planner<'a> {
     style: &'a PlotStyle,
     scale: f64,
     /// What the pen does, how long each takes as planned, and how many
@@ -517,7 +531,19 @@ struct Planner<'a> {
     travel: f64,
 }
 
-impl Planner<'_> {
+impl<'a> Planner<'a> {
+    /// The work of a pen at `from`, moving as `style` moves, its lengths
+    /// and speeds scaled by `scale`.
+    pub fn new(style: &'a PlotStyle, scale: f64, from: Point<i32>) -> Self {
+        Self {
+            style,
+            scale,
+            acts: Vec::new(),
+            at: point(from),
+            travel: 0.0,
+        }
+    }
+
     fn done(&self) -> usize {
         match self.acts.last() {
             Some((Act::Draw { stroke, .. } | Act::Touch { stroke }, ..)) => stroke + 1,
@@ -526,7 +552,8 @@ impl Planner<'_> {
         }
     }
 
-    fn still(&mut self, pose: Pose, time: f64) {
+    /// The pen still for `time` seconds, standing as `pose` says.
+    pub fn still(&mut self, pose: Pose, time: f64) {
         if time > 0.0 {
             let done = self.done();
             self.acts.push((
@@ -538,6 +565,58 @@ impl Planner<'_> {
                 done,
             ));
         }
+    }
+
+    /// Changes pens at the carousel, where the pen is: turns it `clicks`
+    /// places to the pen in `tone` and takes it up, or puts the pen away.
+    fn change(&mut self, tone: Option<Tone>, clicks: u8, carousel: Carousel) {
+        let click = f64::from(carousel.click);
+        let done = self.done();
+
+        self.acts.push((
+            Act::Change {
+                at: pixel(self.at),
+                tone,
+                clicks,
+                click,
+            },
+            f64::from(carousel.change) + click * f64::from(clicks),
+            done,
+        ));
+    }
+
+    /// Reaches stroke `index`, `stroke`, and draws it: carried up to it
+    /// unless it is there, settling after a long move, and for a circle
+    /// by way of its centre and back. A pen already at a stroke's start
+    /// draws it from there.
+    pub fn stroke(&mut self, index: usize, stroke: &Stroke) {
+        let mut hop = if self.at != point(stroke.start()) {
+            self.carry(point(stroke.start()))
+        } else {
+            0.0
+        };
+
+        // A circle is reached at its centre, and begun from there.
+        if let Form::Circle(_) = stroke.form {
+            hop = self.carry(point(stroke.pixels[0]));
+        }
+
+        if let Some(drop) = self.style.drop
+            && hop > f64::from(drop.near) * self.scale
+        {
+            self.still(Pose::Landing, f64::from(drop.far));
+        }
+
+        self.draw(index, stroke);
+
+        if let Form::Circle(centre) = stroke.form {
+            self.carry(point(centre));
+        }
+    }
+
+    /// Carries the pen up to `to`, a pixel.
+    pub fn go(&mut self, to: Point<i32>) {
+        self.carry(point(to));
     }
 
     /// Carries the pen up to `to`; returns how far.
@@ -659,13 +738,18 @@ impl Planner<'_> {
             ));
         }
 
-        self.at = point(stroke.end());
+        // A circle ends where it began, and the pen goes back to its centre
+        // from there.
+        self.at = point(match stroke.form {
+            Form::Circle(_) => stroke.pixels[0],
+            _ => stroke.end(),
+        });
     }
 
     /// The work fitted to `length` seconds: pauses as planned, or shrunk
     /// to three tenths of it, and the moves played faster or slower to fill
     /// the rest.
-    fn fit(self, length: f64) -> Motions {
+    pub fn fit(self, length: f64) -> Motions {
         let (moving, pausing) =
             self.acts
                 .iter()
@@ -798,5 +882,123 @@ mod tests {
         assert_eq!(run.at(1.0), 100.0);
         assert_eq!(run.at(0.5), 50.0);
         assert!(run.at(0.1) < 10.0);
+    }
+
+    /// A circle is drawn as a plotter's circle instruction draws it: the
+    /// pen carried to its centre, out to its start, round, and back to the
+    /// centre.
+    #[test]
+    fn a_circle_is_drawn_from_its_centre_and_back() {
+        let centre = Point::new(100, 100);
+        let pixels = crate::draft::raster::ordered_circle(centre, 40);
+        let circle = super::super::strokes::centred(
+            Stroke {
+                lit: vec![true; pixels.len()],
+                pixels,
+                tone: Tone::Ink,
+                form: Form::Loop,
+                mark: 0,
+                piece: 0,
+            },
+            centre,
+        );
+        let style = PlotStyle {
+            carousel: None,
+            ..PlotStyle::CAROUSEL
+        };
+        let motions = Motions::plan(&style, &[circle], &[Gap::Stage], Point::new(0, 0), 1.0);
+        let acts: Vec<String> = motions
+            .ops
+            .iter()
+            .map(|op| match &op.act {
+                Act::Travel { to, .. } => format!("to {},{}", to.x, to.y),
+                Act::Draw { .. } => "draw".into(),
+                Act::Still { pose, .. } => format!("{pose:?}"),
+                act => format!("{act:?}"),
+            })
+            .collect();
+
+        assert_eq!(
+            acts,
+            [
+                "to 100,100",
+                "to 140,100",
+                "Landing",
+                "draw",
+                "to 100,100",
+                "to 0,0",
+                "Up"
+            ]
+        );
+    }
+
+    /// At the carousel the head jolts a pixel for each place the carousel
+    /// turns, and shows the pen it takes up.
+    #[test]
+    fn the_carousel_clicks_round_to_the_next_pen() {
+        let home = Point::new(5, 300);
+        let strokes: Vec<Stroke> = [Tone::Faint, Tone::Ink]
+            .into_iter()
+            .enumerate()
+            .map(|(mark, tone)| Stroke {
+                pixels: vec![
+                    Point::new(100, 100 + mark as i32 * 50),
+                    Point::new(160, 100),
+                ],
+                lit: vec![true; 2],
+                tone,
+                form: Form::Line,
+                mark,
+                piece: 0,
+            })
+            .collect();
+
+        let motions = Motions::plan(
+            &PlotStyle::CAROUSEL,
+            &strokes,
+            &[Gap::Stage, Gap::Stage],
+            home,
+            1.0,
+        );
+        let change = motions
+            .ops
+            .iter()
+            .find(|op| {
+                matches!(
+                    op.act,
+                    Act::Change {
+                        tone: Some(Tone::Ink),
+                        ..
+                    }
+                )
+            })
+            .expect("A change to the ink pen");
+        let Act::Change { clicks, click, .. } = change.act else {
+            unreachable!()
+        };
+        let at = |planned: f64| {
+            motions
+                .at(change.start + planned * motions.p, &strokes)
+                .head
+        };
+
+        // From the faint pen three places round to the ink.
+        assert_eq!(clicks, 3);
+
+        for (planned, x) in [
+            (0.25 * click, 6),
+            (0.75 * click, 5),
+            (2.25 * click, 6),
+            (3.5 * click, 5),
+        ] {
+            assert_eq!(
+                at(planned),
+                Some(Head {
+                    at: Point::new(x, 300),
+                    pose: Pose::Changing(Tone::Ink)
+                }),
+                "{planned}"
+            );
+        }
     }
 }

@@ -28,12 +28,20 @@ pub struct PlotStyle {
     pub nearest: bool,
     /// How section lining is drawn.
     pub lining: Lining,
+    /// How a letter is set: whole at a touch, or traced a stroke at a time.
+    pub glyphs: Glyphs,
+    /// Where a circle is started and which way round it goes.
+    pub circles: Circles,
+    /// Whether the nearest-first order is then improved where moving a few
+    /// strokes elsewhere, or turning a run of them round, saves the pen a
+    /// journey: no darting back across the sheet for a stroke left behind.
+    pub polish: bool,
     /// Whether what moves along the drawing's traces (bus traffic, flow,
     /// a signal) waits for the subject's run to appear, the machine
     /// switching on, rather than being plotted where it stands.
     pub traces_wait: bool,
-    /// Letters, and dots, the pen sets a second before the plot is fitted
-    /// to its length: each is set whole at a touch of the pen.
+    /// Touches a second before the plot is fitted to its length: dots, and
+    /// letters set whole at a touch of the pen.
     pub lettering: f32,
     /// How long the pen takes to settle after a long move, if at all.
     pub drop: Option<Drop>,
@@ -47,8 +55,20 @@ pub struct PlotStyle {
     /// Whether the pen goes home at the end, rather than lifting where it
     /// stops.
     pub park: bool,
-    /// Whether the pen's head is shown.
+    /// Whether the pen's head is shown, and the carriage with it.
     pub head: bool,
+    /// Whether the carriage is shown riding its rails: a tick in the
+    /// sheet's zone bands level with the head, above and below it, and
+    /// either side of it but on a gantry, whose arm shows that.
+    pub ticks: bool,
+    /// Whether the carriage's arm is shown across the sheet, under the ink,
+    /// at the head: a gantry plotter's.
+    pub gantry: bool,
+    /// Whether a part's detail is plotted by the pen, its circle on the view
+    /// and then its view, rather than revealed as it was.
+    pub details: bool,
+    /// How the sheet is wiped.
+    pub wipe: Wipe,
 }
 
 /// How the pen moves.
@@ -142,6 +162,36 @@ pub struct Carousel {
     pub click: f32,
 }
 
+/// How a letter is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Glyphs {
+    /// Whole, at a touch of the pen.
+    Touched,
+    /// Along the strokes of its glyph, each in turn, as it is lettered.
+    Traced,
+}
+
+/// Where a circle is started and which way round it goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Circles {
+    /// Wherever is nearest the pen.
+    Seamed,
+    /// As a plotter's circle instruction draws it: the pen comes to the
+    /// centre, goes out to the right, round anticlockwise, and back to the
+    /// centre.
+    Centred,
+}
+
+/// How the sheet is wiped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wipe {
+    /// A line crossing it at one rate.
+    Line,
+    /// The pen's carriage sweeping it from where it is parked, easing in
+    /// and out.
+    Sweep,
+}
+
 /// What the pen draws first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Order {
@@ -180,6 +230,9 @@ impl PlotStyle {
         order: Order::Passes,
         nearest: false,
         lining: Lining::Rows,
+        glyphs: Glyphs::Touched,
+        circles: Circles::Seamed,
+        polish: false,
         traces_wait: false,
         lettering: 45.0,
         drop: None,
@@ -191,10 +244,17 @@ impl PlotStyle {
         from_home: false,
         park: false,
         head: true,
+        ticks: false,
+        gantry: false,
+        details: false,
+        wipe: Wipe::Line,
     };
 
-    /// A carousel plotter at work: pen by pen, lightest first, a snappy
-    /// carriage, a trip home for every pen.
+    /// A carousel plotter at work, after HP's: pen by pen, lightest first,
+    /// a trip home to the carousel for every pen; a snappy carriage on a
+    /// gantry, its circles drawn from their centres and its letters stroke
+    /// by stroke; the details plotted by the same pen, and the sheet wiped
+    /// by the same arm.
     pub const CAROUSEL: Self = Self {
         name: "carousel",
         length: 12.0,
@@ -216,6 +276,9 @@ impl PlotStyle {
         order: Order::Pens,
         nearest: true,
         lining: Lining::Diagonals,
+        glyphs: Glyphs::Traced,
+        circles: Circles::Centred,
+        polish: true,
         traces_wait: true,
         lettering: 35.0,
         drop: Some(Drop {
@@ -233,6 +296,10 @@ impl PlotStyle {
         from_home: true,
         park: true,
         head: true,
+        ticks: true,
+        gantry: true,
+        details: true,
+        wipe: Wipe::Sweep,
     };
 
     /// A drafting office's order and a hand-like carriage: the skeleton,
@@ -258,6 +325,9 @@ impl PlotStyle {
         order: Order::Stages,
         nearest: true,
         lining: Lining::Diagonals,
+        glyphs: Glyphs::Touched,
+        circles: Circles::Seamed,
+        polish: false,
         traces_wait: true,
         lettering: 45.0,
         drop: Some(Drop {
@@ -272,6 +342,10 @@ impl PlotStyle {
         from_home: true,
         park: true,
         head: true,
+        ticks: false,
+        gantry: false,
+        details: false,
+        wipe: Wipe::Line,
     };
 
     /// A quick study: the skeleton, then each part whole in eased strokes,
@@ -289,6 +363,9 @@ impl PlotStyle {
         order: Order::Parts,
         nearest: true,
         lining: Lining::Diagonals,
+        glyphs: Glyphs::Touched,
+        circles: Circles::Seamed,
+        polish: false,
         traces_wait: true,
         lettering: 150.0,
         drop: None,
@@ -300,6 +377,10 @@ impl PlotStyle {
         from_home: false,
         park: false,
         head: true,
+        ticks: false,
+        gantry: false,
+        details: false,
+        wipe: Wipe::Line,
     };
 
     /// Every preset, today's first.
