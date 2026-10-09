@@ -51,8 +51,13 @@ the default, reveals the drawing pass by pass at one rate, as it always has.
 strokes that ink only the pixels they own in the finished drawing, so nothing is
 drawn over or wiped and the plot ends on the drawing the run begins with; put
 in an order, and timed as a carriage moves, then fitted to the plot's length.
-`quadrille-screensaver plot-stats` shows how each style spends each sheet's
-plot.
+`carousel` is a pen plotter with a carousel of pens, as HP made them: it takes
+each pen in turn from the carousel in the sheet's corner, lightest first, and
+plots all that pen draws, nearest first, its gantry sliding across under the
+ink; circles start from their centres and letters are drawn a stroke at a
+time. The same pen plots each part's detail, the circle on the view and then
+the view, and its arm sweeps the sheet clean. `quadrille-screensaver
+plot-stats` shows how each style spends each sheet's plot.
 
 ## A drawing office's conventions
 
@@ -97,6 +102,7 @@ quadrille-screensaver render --subject cooling --at 30 --size 1920x1080 --machin
 quadrille-screensaver render --subject engine --at 24 --physical    # at the panel's own pixels
 quadrille-screensaver bench --output laptop
 quadrille-screensaver render --subject gears --at 3,6 --plot drafting --machine fixture
+quadrille-screensaver render --subject gears --at 0,13 --fps 30 --plot carousel --machine fixture   # every frame
 quadrille-screensaver plot-stats --machine fixture
 ```
 
