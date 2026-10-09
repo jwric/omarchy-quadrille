@@ -1,35 +1,33 @@
-//! The order the pen draws its strokes in.
+//! The order the pen draws its strokes in: a drafting office's.
 //!
 //! Strokes go in groups, the strokes of one mark, which keep their order:
 //! a dimension's extension lines, then its line, its arrowheads and its
-//! value. The style's [`Order`] gives each group a key, and the groups are
-//! drawn in the order of their keys. Groups with the same key are drawn
-//! nearest first, if the style says so, from wherever the pen is: a line
-//! is turned round, an area's lining run backwards or a loop started where
-//! that is nearer. If the style polishes the order, it is then improved
-//! where moving a few groups elsewhere, or turning a stretch of them round,
-//! shortens the pen's journey (Or-opt and 2-opt), and each loop started
-//! where the pen comes to it and leaves it soonest. The rest of the key
-//! keeps clusters apart for the motion's beats: a stage from the next, a
-//! part or a view from another.
+//! value. Each group has a key, its place in the drafting office's
+//! [stages](stage): the skeleton of every view, then the bodies view by
+//! view and part by part, the lining, the annotation, the traces, the
+//! balloons. The groups are drawn in the order of their keys, and those
+//! with the same key nearest first from wherever the pen is: a line is
+//! turned round, an area's lining run backwards or a loop started where
+//! that is nearer. The order is then improved where moving a few groups
+//! elsewhere, or turning a stretch of them round, shortens the pen's
+//! journey (Or-opt and 2-opt), and each loop started where the pen comes
+//! to it and leaves it soonest. The rest of the key keeps clusters apart
+//! for the motion's beats: a stage from the next, a part or a view from
+//! another.
 //!
-//! A drafting office's order ([`Order::Stages`]) lays down a sheet's axes
-//! longest first, draws circles round one centre smallest first, and a
-//! balloon from the dot on its part outwards. A diagram it grows: from its
-//! first part along what touches it, each part drawn whole with its
-//! lettering as the pen reaches it, what joins two parts drawn on the way.
-//! A quick study ([`Order::Parts`]) lays the skeleton down and draws its
-//! balloons as a drafting office does, and grows a diagram the same way,
-//! each part with all that is said of it.
+//! The axes go down longest first, circles round one centre smallest
+//! first, a balloon from the dot on its part outwards, and each loop round
+//! the way the pen was heading. A diagram grows: from its first part along
+//! what touches it, each part drawn whole with its lettering as the pen
+//! reaches it, what joins two parts drawn on the way.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use glam::DVec2;
 use iced_core::Point;
 
-use crate::draft::{Line, Pass, Tone};
+use crate::draft::{Line, Pass};
 
 use super::strokes::{Form, Stroke};
-use super::style::{Circles, Order, PlotStyle};
 
 /// What the order needs to know of a mark.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,8 +45,8 @@ pub struct Meta {
     pub cuts: Option<usize>,
     /// A balloon's item number.
     pub item: Option<usize>,
-    /// A circle's centre, which a plotter's circle instruction draws it
-    /// from.
+    /// A circle's centre: the circles round one centre are drawn one after
+    /// another.
     pub centre: Option<Point<i32>>,
     /// A circle's or an arc's centre and radius, which a compass draws it
     /// round.
@@ -90,14 +88,6 @@ pub mod stage {
     pub const BALLOONS: u8 = 5;
 }
 
-/// A quick study's stages: the skeleton as a drafting office lays it down,
-/// each part whole, and what is said of none.
-mod study {
-    pub const SKELETON: u8 = super::stage::SKELETON;
-    pub const PARTS: u8 = 1;
-    pub const REST: u8 = 2;
-}
-
 /// Pairs of marks that touch on the sheet, each the lower index first.
 pub type Touching = BTreeSet<(usize, usize)>;
 
@@ -105,7 +95,7 @@ pub type Touching = BTreeSet<(usize, usize)>;
 /// (the first two numbers after it), and what orders the cluster within.
 type Key = (u8, u32, u32, u32, u32);
 
-/// The strokes of one mark (of one pen, in a pen-sorted plot), in order.
+/// The strokes of one mark, in order.
 struct Group {
     strokes: Vec<Stroke>,
     key: Key,
@@ -155,30 +145,27 @@ impl Group {
     }
 }
 
-/// `strokes`, in the order made, put in `style`'s order for a pen
-/// starting at `from`; `marks` says what their marks are. A diagram grows
-/// along the marks `touching`, if it is given.
+/// `strokes`, in the order made, put in a drafting office's order for a
+/// pen starting at `from`; `marks` says what their marks are. A diagram
+/// grows along the marks `touching`, if it is given.
 pub fn order(
-    style: &PlotStyle,
     strokes: Vec<Stroke>,
     marks: &[Meta],
     from: Point<i32>,
     touching: Option<&Touching>,
 ) -> Ordered {
-    let mut groups = group(style, strokes, marks);
+    let mut groups = group(strokes, marks);
 
-    if matches!(style.order, Order::Stages | Order::Parts) {
-        axes(&mut groups);
+    axes(&mut groups);
 
-        for group in &mut groups {
-            if marks[group.strokes[0].mark].pass == Pass::Balloons {
-                balloon(&mut group.strokes);
-            }
+    for group in &mut groups {
+        if marks[group.strokes[0].mark].pass == Pass::Balloons {
+            balloon(&mut group.strokes);
         }
+    }
 
-        if let Some(touching) = touching {
-            grow(&mut groups, marks, touching, style.order);
-        }
+    if let Some(touching) = touching {
+        grow(&mut groups, marks, touching);
     }
 
     // A stable sort: groups with the same key stay in the order made.
@@ -194,9 +181,6 @@ pub fn order(
     let mut pen = from;
     let mut last: Option<Key> = None;
     let mut rest = groups.into_iter().peekable();
-    // A pen-sorted plot on a plotter with a carousel fetches each pen from
-    // home, where the pen starts, and takes it back there.
-    let trips = style.carousel.is_some() && style.order == Order::Pens;
 
     while let Some(first) = rest.next() {
         // The cluster: every group with this key.
@@ -207,30 +191,17 @@ pub fn order(
             cluster.push(group);
         }
 
-        if trips {
-            pen = from;
+        let start = pen;
+
+        cluster = nearest(cluster, &mut pen);
+
+        if cluster.len() <= POLISHED {
+            cluster = polish(cluster, start);
         }
 
-        if style.nearest {
-            let start = pen;
-            let end = trips.then_some(from);
-            let polished = style.polish && cluster.len() <= POLISHED;
-
-            cluster = nearest(cluster, &mut pen);
-
-            if polished {
-                cluster = polish(cluster, start, end);
-            }
-
-            if style.order == Order::Stages {
-                cluster = concentric(cluster);
-            }
-
-            if polished || style.order == Order::Stages {
-                reseam(&mut cluster, start, end);
-                pen = cluster.last().map_or(pen, Group::end);
-            }
-        }
+        cluster = concentric(cluster);
+        reseam(&mut cluster, start);
+        pen = cluster.last().map_or(pen, Group::end);
 
         for (index, group) in cluster.into_iter().enumerate() {
             let gap = match last {
@@ -253,33 +224,28 @@ pub fn order(
         last = Some(key);
     }
 
-    if style.circles == Circles::Onward {
-        onward(&mut ordered.strokes, from);
-    }
+    onward(&mut ordered.strokes, from);
 
     ordered
 }
 
 /// The strokes in groups, each with its key.
-fn group(style: &PlotStyle, strokes: Vec<Stroke>, marks: &[Meta]) -> Vec<Group> {
+fn group(strokes: Vec<Stroke>, marks: &[Meta]) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
 
     for stroke in strokes {
         let meta = &marks[stroke.mark];
-        let split = style.order == Order::Pens;
-        let found = groups
-            .iter_mut()
-            .rev()
-            .take_while(|group| group.strokes[0].mark == stroke.mark)
-            .find(|group| !split || group.strokes[0].tone == stroke.tone);
 
-        match found {
+        match groups
+            .last_mut()
+            .filter(|group| group.strokes[0].mark == stroke.mark)
+        {
             Some(group) => {
                 group.backwards &= group.strokes[0].piece == stroke.piece;
                 group.strokes.push(stroke);
             }
             None => groups.push(Group {
-                key: key(style.order, meta, stroke.tone),
+                key: key(meta),
                 backwards: meta.pass == Pass::Areas,
                 centre: meta.centre,
                 strokes: vec![stroke],
@@ -302,53 +268,25 @@ fn skeleton(meta: &Meta) -> bool {
     meta.pass == Pass::Construction && !(meta.line == Some(Line::Thin) && meta.part.is_some())
 }
 
-/// Where a mark of `meta`, in `tone`, goes in `order`.
-fn key(order: Order, meta: &Meta, tone: Tone) -> Key {
-    let skeleton = skeleton(meta);
-
-    match order {
-        Order::Passes => (meta.pass as u8, 0, 0, 0, 0),
-        Order::Pens => (pen(tone), 0, 0, 0, 0),
-        Order::Stages => match meta.pass {
-            _ if skeleton => (stage::SKELETON, 0, 0, 0, 0),
-            Pass::Construction | Pass::Edges | Pass::Hidden => (
-                stage::BODIES,
-                meta.pane as u32,
-                rank(meta.part) + 1,
-                body(meta),
-                0,
-            ),
-            Pass::Areas => (stage::LINING, rank(meta.part), 0, 0, 0),
-            Pass::Annotation => match meta.cuts {
-                // A cutting plane before the section it cuts.
-                Some(section) => (stage::BODIES, section as u32, 0, 0, 0),
-                None => (stage::ANNOTATION, meta.pane as u32, 0, 0, 0),
-            },
-            Pass::Traces => (stage::TRACES, 0, 0, 0, 0),
-            Pass::Balloons => (stage::BALLOONS, meta.item.unwrap_or(0) as u32, 0, 0, 0),
+/// Where a mark of `meta` goes in the order.
+fn key(meta: &Meta) -> Key {
+    match meta.pass {
+        _ if skeleton(meta) => (stage::SKELETON, 0, 0, 0, 0),
+        Pass::Construction | Pass::Edges | Pass::Hidden => (
+            stage::BODIES,
+            meta.pane as u32,
+            rank(meta.part) + 1,
+            body(meta),
+            0,
+        ),
+        Pass::Areas => (stage::LINING, rank(meta.part), 0, 0, 0),
+        Pass::Annotation => match meta.cuts {
+            // A cutting plane before the section it cuts.
+            Some(section) => (stage::BODIES, section as u32, 0, 0, 0),
+            None => (stage::ANNOTATION, meta.pane as u32, 0, 0, 0),
         },
-        Order::Parts => {
-            let part = match meta.pass {
-                Pass::Balloons => meta.item.map(|item| item.saturating_sub(1)),
-                _ => meta.part,
-            };
-            let sub = match meta.pass {
-                Pass::Construction | Pass::Edges => 0,
-                Pass::Hidden => 1,
-                Pass::Areas => 2,
-                Pass::Traces | Pass::Annotation => 3,
-                Pass::Balloons => 4,
-            };
-
-            match part {
-                _ if skeleton => (study::SKELETON, 0, 0, 0, 0),
-                Some(part) => (study::PARTS, rank(Some(part)), 0, sub, 0),
-                // What belongs to no part: its line work before the parts,
-                // what is said about it after them.
-                None if sub >= 3 => (study::REST, meta.pane as u32, 0, sub, 0),
-                None => (study::PARTS, 0, 0, sub, 0),
-            }
-        }
+        Pass::Traces => (stage::TRACES, 0, 0, 0, 0),
+        Pass::Balloons => (stage::BALLOONS, meta.item.unwrap_or(0) as u32, 0, 0, 0),
     }
 }
 
@@ -562,69 +500,31 @@ enum Node {
 /// what led to it; a mark of no part (a wire, a junction, a legend on a
 /// wire) as it is crossed. Parts are taken by their ranks, then what joins
 /// them left to right. What the walk never reaches of the bodies is drawn
-/// after it, and the rest keeps its stage. In a quick study, `order`
-/// [`Order::Parts`], a part is drawn with all that is said of it, its
-/// dimensions and its balloon too, though what they cross does not lead
-/// the walk on.
-fn grow(groups: &mut [Group], marks: &[Meta], touching: &Touching, order: Order) {
-    let study = order == Order::Parts;
+/// after it, and the rest keeps its stage.
+fn grow(groups: &mut [Group], marks: &[Meta], touching: &Touching) {
     // What each mark is drawn as in the walk, and where in its node: a
-    // part's lines, its lining, what it traces still, its lettering, and in
-    // a quick study what else is said of it and its balloon; whether it is
-    // drawn if the walk never reaches it; and whether what it touches leads
-    // the walk on.
-    let walked = |mark: usize, key: Key| -> Option<(Node, u32, bool, bool)> {
+    // part's lines, its lining, what it traces still, its lettering; and
+    // whether it is drawn if the walk never reaches it.
+    let walked = |mark: usize, key: Key| -> Option<(Node, u32, bool)> {
         let meta = &marks[mark];
         let label = meta.pass == Pass::Annotation && meta.label;
 
-        if key.0 == stage::SKELETON {
-            return None;
-        }
-
-        if study {
-            let part = match meta.pass {
-                Pass::Balloons => meta.item.map(|item| item.saturating_sub(1)),
-                _ => meta.part,
-            };
-
-            return match (part, meta.pass) {
-                (Some(part), Pass::Construction | Pass::Edges | Pass::Hidden) => {
-                    Some((Node::Part(part), body(meta), true, true))
-                }
-                (Some(part), Pass::Areas) => Some((Node::Part(part), 4, true, true)),
-                (Some(part), Pass::Traces) => Some((Node::Part(part), 5, true, true)),
-                (Some(part), Pass::Annotation) if label => Some((Node::Part(part), 7, true, true)),
-                (Some(part), Pass::Annotation) => Some((Node::Part(part), 6, true, false)),
-                (Some(part), Pass::Balloons) => Some((Node::Part(part), 8, true, false)),
-                (None, Pass::Construction | Pass::Edges | Pass::Hidden) => {
-                    Some((Node::Mark(mark), body(meta), true, true))
-                }
-                (None, Pass::Annotation) if label => Some((Node::Mark(mark), 7, false, true)),
-                (None, Pass::Traces) if meta.line.is_none() => {
-                    Some((Node::Mark(mark), 5, false, true))
-                }
-                _ => None,
-            };
-        }
-
         match (meta.part, key.0) {
             (Some(part), stage::BODIES) if meta.cuts.is_none() => {
-                Some((Node::Part(part), body(meta), true, true))
+                Some((Node::Part(part), body(meta), true))
             }
-            (Some(part), stage::LINING) => Some((Node::Part(part), 4, true, true)),
-            (Some(part), stage::TRACES) => Some((Node::Part(part), 5, true, true)),
-            (Some(part), stage::ANNOTATION) if label => Some((Node::Part(part), 6, true, true)),
+            (Some(part), stage::LINING) => Some((Node::Part(part), 4, true)),
+            (Some(part), stage::TRACES) => Some((Node::Part(part), 5, true)),
+            (Some(part), stage::ANNOTATION) if label => Some((Node::Part(part), 6, true)),
             (None, stage::BODIES) if meta.cuts.is_none() => {
-                Some((Node::Mark(mark), body(meta), true, true))
+                Some((Node::Mark(mark), body(meta), true))
             }
-            (None, stage::ANNOTATION) if label => Some((Node::Mark(mark), 6, false, true)),
-            (None, stage::TRACES) if meta.line.is_none() => {
-                Some((Node::Mark(mark), 5, false, true))
-            }
+            (None, stage::ANNOTATION) if label => Some((Node::Mark(mark), 6, false)),
+            (None, stage::TRACES) if meta.line.is_none() => Some((Node::Mark(mark), 5, false)),
             _ => None,
         }
     };
-    let mut nodes: BTreeMap<usize, (Node, u32, bool, bool)> = BTreeMap::new();
+    let mut nodes: BTreeMap<usize, (Node, u32, bool)> = BTreeMap::new();
     // The top left of each node.
     let mut corners: BTreeMap<Node, (i32, i32)> = BTreeMap::new();
 
@@ -645,7 +545,7 @@ fn grow(groups: &mut [Group], marks: &[Meta], touching: &Touching, order: Order)
     let mut joins: BTreeMap<Node, BTreeSet<Node>> = BTreeMap::new();
 
     for &(a, b) in touching {
-        if let (Some(&(a, .., true)), Some(&(b, .., true))) = (nodes.get(&a), nodes.get(&b))
+        if let (Some(&(a, ..)), Some(&(b, ..))) = (nodes.get(&a), nodes.get(&b))
             && a != b
         {
             joins.entry(a).or_default().insert(b);
@@ -721,17 +621,15 @@ fn grow(groups: &mut [Group], marks: &[Meta], touching: &Touching, order: Order)
         places.insert(node, place);
     }
 
-    let walking = if study { study::PARTS } else { stage::BODIES };
-
     for group in groups.iter_mut() {
-        let Some(&(node, within, always, _)) = nodes.get(&group.strokes[0].mark) else {
+        let Some(&(node, within, always)) = nodes.get(&group.strokes[0].mark) else {
             continue;
         };
 
         match places.get(&node) {
-            Some(&(step, index)) => group.key = (walking, 0, step, index, within),
+            Some(&(step, index)) => group.key = (stage::BODIES, 0, step, index, within),
             // A line of no part the walk never reached, after it.
-            None if always => group.key = (walking, 0, count + 2, 0, within),
+            None if always => group.key = (stage::BODIES, 0, count + 2, 0, within),
             None => {}
         }
     }
@@ -800,20 +698,6 @@ impl Walk {
     }
 }
 
-/// A pen's place on a carousel: the lightest first, which here is also the
-/// construction first.
-pub fn pen(tone: Tone) -> u8 {
-    match tone {
-        Tone::Faint => 0,
-        Tone::Line => 1,
-        Tone::Muted => 2,
-        Tone::Ink => 3,
-        Tone::Live => 4,
-        Tone::Caution => 5,
-        Tone::Accent => 6,
-    }
-}
-
 /// How a group can be started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Way {
@@ -833,7 +717,7 @@ fn entries(group: &Group) -> Vec<Entry> {
     let first = &group.strokes[0];
 
     match first.form {
-        Form::Touch(at) | Form::Circle(at) => vec![(at, Way::Forwards)],
+        Form::Touch(at) => vec![(at, Way::Forwards)],
         // Lettering is written one way.
         Form::Glyph => vec![(first.start(), Way::Forwards)],
         Form::Loop => (0..first.pixels.len())
@@ -843,7 +727,7 @@ fn entries(group: &Group) -> Vec<Entry> {
         Form::Line if group.backwards => {
             let last = &group.strokes[group.strokes.len() - 1];
             let end = match last.form {
-                Form::Touch(at) | Form::Circle(at) => at,
+                Form::Touch(at) => at,
                 _ => last.pixels[last.pixels.len() - 1],
             };
 
@@ -926,12 +810,12 @@ fn place(pixel: Point<i32>) -> DVec2 {
     DVec2::new(f64::from(pixel.x), f64::from(pixel.y))
 }
 
-/// `cluster`, drawn in this order by a pen starting at `from` and going on
-/// to `to` if it is given, improved wherever moving a run of one to three
-/// groups elsewhere (turned round, if they turn) or turning a stretch of
-/// them round shortens the pen's journey between them: a few rounds of
-/// each, the first improvement found taken each time.
-fn polish(mut cluster: Vec<Group>, from: Point<i32>, to: Option<Point<i32>>) -> Vec<Group> {
+/// `cluster`, drawn in this order by a pen starting at `from`, improved
+/// wherever moving a run of one to three groups elsewhere (turned round, if
+/// they turn) or turning a stretch of them round shortens the pen's journey
+/// between them: a few rounds of each, the first improvement found taken
+/// each time.
+fn polish(mut cluster: Vec<Group>, from: Point<i32>) -> Vec<Group> {
     let count = cluster.len();
     let ends: Vec<(DVec2, DVec2, bool)> = cluster
         .iter()
@@ -939,7 +823,6 @@ fn polish(mut cluster: Vec<Group>, from: Point<i32>, to: Option<Point<i32>>) -> 
         .collect();
     let mut tour: Tour = (0..count).map(|index| (index, false)).collect();
     let from = place(from);
-    let to = to.map(place);
     let entry = |&(index, turned): &(usize, bool)| {
         if turned { ends[index].1 } else { ends[index].0 }
     };
@@ -951,7 +834,7 @@ fn polish(mut cluster: Vec<Group>, from: Point<i32>, to: Option<Point<i32>>) -> 
         if at == 0 { from } else { exit(&tour[at - 1]) }
     };
     // Where the pen goes on to after place `at`.
-    let after = |tour: &[(usize, bool)], at: usize| tour.get(at).map(entry).or(to);
+    let after = |tour: &[(usize, bool)], at: usize| tour.get(at).map(entry);
     let turns = |stretch: &[(usize, bool)]| stretch.iter().all(|&(index, _)| ends[index].2);
     const GAIN: f64 = 1e-6;
 
@@ -1063,16 +946,15 @@ fn polish(mut cluster: Vec<Group>, from: Point<i32>, to: Option<Point<i32>>) -> 
         .collect()
 }
 
-/// Starts each loop in `cluster`, drawn by a pen starting at `from` and
-/// going on to `to` if it is given, where the pen comes to it and goes on
-/// from it soonest.
-fn reseam(cluster: &mut [Group], from: Point<i32>, to: Option<Point<i32>>) {
+/// Starts each loop in `cluster`, drawn by a pen starting at `from`, where
+/// the pen comes to it and goes on from it soonest.
+fn reseam(cluster: &mut [Group], from: Point<i32>) {
     let mut pen = from;
 
     for index in 0..cluster.len() {
         let next = match cluster[index].strokes.get(1) {
             Some(stroke) => Some(stroke.start()),
-            None => cluster.get(index + 1).map(Group::start).or(to),
+            None => cluster.get(index + 1).map(Group::start),
         };
         let first = &mut cluster[index].strokes[0];
 
@@ -1099,6 +981,7 @@ fn reseam(cluster: &mut [Group], from: Point<i32>, to: Option<Point<i32>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::draft::Tone;
 
     fn line(mark: usize, from: (i32, i32), to: (i32, i32)) -> Stroke {
         let pixels =
@@ -1136,12 +1019,7 @@ mod tests {
             line(1, (0, 10), (40, 10)),
             line(2, (90, 60), (45, 12)),
         ];
-        let style = PlotStyle {
-            order: Order::Passes,
-            nearest: true,
-            ..PlotStyle::DRAFTING
-        };
-        let ordered = order(&style, strokes, &[EDGE; 3], Point::new(0, 0), None);
+        let ordered = order(strokes, &[EDGE; 3], Point::new(0, 0), None);
         let marks: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
 
         assert_eq!(marks, [1, 2, 0]);
@@ -1171,13 +1049,7 @@ mod tests {
         let strokes = (0..marks.len())
             .map(|mark| line(mark, (mark as i32 * 10, 0), (mark as i32 * 10, 5)))
             .collect();
-        let ordered = order(
-            &PlotStyle::DRAFTING,
-            strokes,
-            &marks,
-            Point::new(0, 0),
-            None,
-        );
+        let ordered = order(strokes, &marks, Point::new(0, 0), None);
         let drawn: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
 
         assert_eq!(drawn, [4, 3, 1, 2, 0]);
@@ -1191,38 +1063,6 @@ mod tests {
                 Gap::Cluster
             ]
         );
-    }
-
-    /// A quick study lays the skeleton down, then draws each part whole in
-    /// the order of the parts (its lines, the lines hidden behind it, its
-    /// lining, what is said of it, its balloon), then what is said of no
-    /// part.
-    #[test]
-    fn a_quick_study_draws_each_part_whole() {
-        let meta = |pass, line, part, item| Meta {
-            pass,
-            line,
-            part,
-            item,
-            ..EDGE
-        };
-        let marks = [
-            meta(Pass::Annotation, None, None, None),
-            meta(Pass::Balloons, None, None, Some(2)),
-            meta(Pass::Annotation, None, Some(1), None),
-            meta(Pass::Areas, None, Some(0), None),
-            meta(Pass::Edges, Some(Line::Outline), Some(1), None),
-            meta(Pass::Balloons, None, None, Some(1)),
-            meta(Pass::Edges, Some(Line::Outline), Some(0), None),
-            meta(Pass::Construction, Some(Line::Centre), Some(1), None),
-            meta(Pass::Hidden, Some(Line::Hidden), Some(0), None),
-        ];
-        let strokes = (0..marks.len())
-            .map(|mark| line(mark, (mark as i32 * 10, 0), (mark as i32 * 10, 5)))
-            .collect();
-        let ordered = order(&PlotStyle::QUICK, strokes, &marks, Point::new(0, 0), None);
-
-        assert_eq!(drawn(&ordered), [7, 6, 8, 3, 5, 4, 2, 1, 0]);
     }
 
     /// The pen's journey from `from` through `strokes` and on to `to`.
@@ -1257,81 +1097,49 @@ mod tests {
             .collect()
     }
 
-    /// Polishing the nearest-first order never lengthens the pen's journey,
-    /// and keeps every stroke, each drawn once.
+    /// Polishing the nearest-first order shortens the pen's journey, and
+    /// keeps every stroke, each drawn once.
     #[test]
     fn polishing_shortens_the_journey_and_keeps_every_stroke() {
         let home = Point::new(0, 400);
-        let style = |polish| PlotStyle {
-            polish,
-            ..PlotStyle::CAROUSEL
+        let mut pen = home;
+        let greedy = nearest(group(scattered(120), &[EDGE; 120]), &mut pen);
+        let strokes = |groups: &[Group]| -> Vec<Stroke> {
+            groups
+                .iter()
+                .flat_map(|group| group.strokes.iter().cloned())
+                .collect()
         };
-        let metas = [EDGE; 120];
-        let greedy = order(&style(false), scattered(120), &metas, home, None);
-        let polished = order(&style(true), scattered(120), &metas, home, None);
-        let marks = |ordered: &Ordered| {
-            let mut marks: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
-            marks.sort_unstable();
-            marks
-        };
+        let before = journey(&strokes(&greedy), home, None);
+        let polished = strokes(&polish(greedy, home));
+        let mut marks: Vec<usize> = polished.iter().map(|stroke| stroke.mark).collect();
 
-        assert_eq!(marks(&polished), (0..120).collect::<Vec<_>>());
+        marks.sort_unstable();
+        assert_eq!(marks, (0..120).collect::<Vec<_>>());
         assert!(
-            journey(&polished.strokes, home, Some(home))
-                < journey(&greedy.strokes, home, Some(home)) * 0.95,
-            "{} against {}",
-            journey(&polished.strokes, home, Some(home)),
-            journey(&greedy.strokes, home, Some(home))
+            journey(&polished, home, None) < before * 0.95,
+            "{} against {before}",
+            journey(&polished, home, None)
         );
     }
 
-    /// A carousel plotter's pens are sorted lightest first, each fetched
-    /// from home and taken back: each pen's strokes are ordered for the
-    /// round trip, not from where the pen before stopped.
+    /// A line is drawn from its nearer end, and a stroke of a letter only
+    /// the way it is written, however near its end is.
     #[test]
-    fn each_pen_of_a_carousel_starts_from_home() {
-        let home = Point::new(0, 0);
-        let mut strokes = vec![
-            line(0, (300, 300), (310, 300)),
-            line(1, (10, 10), (20, 10)),
-            line(2, (290, 290), (280, 290)),
-            line(3, (20, 20), (30, 20)),
-        ];
+    fn lines_are_turned_round_and_letters_never() {
+        for (form, start) in [(Form::Line, (6, 10)), (Form::Glyph, (0, 10))] {
+            let mut stroke = line(0, (0, 10), (6, 10));
 
-        strokes[0].tone = Tone::Faint;
-        strokes[1].tone = Tone::Ink;
-        strokes[2].tone = Tone::Faint;
-        strokes[3].tone = Tone::Ink;
+            stroke.form = form;
 
-        let ordered = order(&PlotStyle::CAROUSEL, strokes, &[EDGE; 4], home, None);
-        let marks: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
-        // Out to the far end of the far line, back along the near one.
-        let shortest = 800f64.sqrt() + 200f64.sqrt() + 200f64.sqrt();
+            let ordered = order(vec![stroke], &[EDGE], Point::new(7, 10), None);
 
-        assert_eq!(marks[..2], [2, 0]);
-        assert!((journey(&ordered.strokes[2..], home, Some(home)) - shortest).abs() < 1e-9);
-    }
-
-    /// A circle drawn from its centre is reached at its centre, and lettering
-    /// is never turned round to be reached sooner.
-    #[test]
-    fn circles_are_reached_at_their_centres_and_letters_as_written() {
-        let mut circle = line(0, (100, 50), (101, 50));
-        let mut letter = line(1, (0, 10), (6, 10));
-
-        circle.form = Form::Circle(Point::new(10, 12));
-        letter.form = Form::Glyph;
-
-        let ordered = order(
-            &PlotStyle::CAROUSEL,
-            vec![letter, circle],
-            &[EDGE; 2],
-            Point::new(7, 10),
-            None,
-        );
-
-        assert_eq!(ordered.strokes[0].mark, 0);
-        assert_eq!(ordered.strokes[1].start(), Point::new(0, 10));
+            assert_eq!(
+                ordered.strokes[0].start(),
+                Point::new(start.0, start.1),
+                "{form:?}"
+            );
+        }
     }
 
     /// A closed square loop of side `side` with its top left at `at`.
@@ -1395,13 +1203,7 @@ mod tests {
             circle(3, (200, 100), 60),
             line(4, (350, 0), (350, 210)),
         ];
-        let ordered = order(
-            &PlotStyle::DRAFTING,
-            strokes,
-            &[centre; 5],
-            Point::new(0, 0),
-            None,
-        );
+        let ordered = order(strokes, &[centre; 5], Point::new(0, 0), None);
 
         assert_eq!(drawn(&ordered)[..3], [1, 2, 4]);
         assert_eq!(ordered.gaps[1..], [Gap::Group; 4]);
@@ -1430,13 +1232,7 @@ mod tests {
             round((300, 100)),
             round((100, 100)),
         ];
-        let ordered = order(
-            &PlotStyle::DRAFTING,
-            strokes,
-            &marks,
-            Point::new(0, 100),
-            None,
-        );
+        let ordered = order(strokes, &marks, Point::new(0, 100), None);
         let marks = drawn(&ordered);
         let first = marks
             .iter()
@@ -1469,7 +1265,6 @@ mod tests {
             ..EDGE
         };
         let ordered = order(
-            &PlotStyle::DRAFTING,
             vec![leader, dot, ring, number],
             &[balloon],
             Point::new(0, 0),
@@ -1553,13 +1348,7 @@ mod tests {
         let touching: Touching = [(0, 2), (2, 3), (3, 5), (5, 6), (6, 8), (7, 8)]
             .into_iter()
             .collect();
-        let ordered = order(
-            &PlotStyle::DRAFTING,
-            strokes,
-            &marks,
-            Point::new(0, 0),
-            Some(&touching),
-        );
+        let ordered = order(strokes, &marks, Point::new(0, 0), Some(&touching));
 
         assert_eq!(drawn(&ordered), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         assert_eq!(
@@ -1578,75 +1367,5 @@ mod tests {
                 Gap::Cluster
             ]
         );
-    }
-
-    /// A quick study grows a diagram as a drafting office does, each part
-    /// drawn with all that is said of it; what is said of a part goes with
-    /// it but does not lead the walk on to what it crosses.
-    #[test]
-    fn a_quick_study_grows_a_diagram_with_all_said_of_each_part() {
-        let boxed = |part| Meta {
-            curved: true,
-            part: Some(part),
-            ..EDGE
-        };
-        let label = |part| Meta {
-            pass: Pass::Annotation,
-            line: None,
-            part: Some(part),
-            label: true,
-            ..EDGE
-        };
-        let dimension = Meta {
-            pass: Pass::Annotation,
-            line: None,
-            part: Some(0),
-            ..EDGE
-        };
-        let lettered = |mark, at: (i32, i32)| {
-            let mut stroke = line(mark, at, (at.0 + 4, at.1));
-            stroke.form = Form::Glyph;
-            stroke
-        };
-        let marks = [
-            boxed(0),
-            label(0),
-            EDGE,
-            boxed(1),
-            label(1),
-            EDGE,
-            boxed(2),
-            boxed(2),
-            EDGE,
-            label(2),
-            EDGE,
-            dimension,
-        ];
-        let strokes = vec![
-            square(0, (0, 0), 20),
-            lettered(1, (5, 8)),
-            line(2, (21, 10), (59, 10)),
-            square(3, (60, 0), 20),
-            lettered(4, (65, 8)),
-            line(5, (70, 21), (70, 59)),
-            square(6, (60, 60), 20),
-            square(7, (120, 60), 20),
-            line(8, (81, 70), (119, 70)),
-            lettered(9, (65, 68)),
-            line(10, (300, 300), (320, 300)),
-            line(11, (0, 25), (20, 25)),
-        ];
-        let touching: Touching = [(0, 2), (2, 3), (3, 5), (5, 6), (6, 8), (7, 8), (10, 11)]
-            .into_iter()
-            .collect();
-        let ordered = order(
-            &PlotStyle::QUICK,
-            strokes,
-            &marks,
-            Point::new(0, 0),
-            Some(&touching),
-        );
-
-        assert_eq!(drawn(&ordered), [0, 11, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 }

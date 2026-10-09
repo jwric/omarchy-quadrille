@@ -3,12 +3,10 @@
 //! When a part is picked out, the pen comes from home and draws the circle
 //! round it on the view, goes to the circle's letter and letters it, then
 //! goes to the detail's window and plots the view there: its boundary
-//! circle, then the magnified marks in the style's order, nearest first;
-//! and goes home. A pen that does not start from home starts on the
-//! circle, where it is nearest the letter, and one that does not go home
-//! lifts off the view's last mark. Its work is planned once, from the
-//! drawing as it stands when the part is picked out, and fitted to the
-//! time the sheet gives the circle and the view.
+//! circle, then the magnified marks pass by pass, nearest first; and goes
+//! home. Its work is planned once, from the drawing as it stands when the
+//! part is picked out, and fitted to the time the sheet gives the circle
+//! and the view.
 //!
 //! The part may move while it is plotted, and the detail with it, so the
 //! plan keeps each stroke by what it draws, not by its pixels: a piece of a
@@ -27,8 +25,7 @@ use crate::draft::raster::{self, Inked, LETTERING, Piece, ROW_COST, Stipple};
 
 use super::motion::{HOLD, Motions, Place, Planner, REST};
 use super::pen::{Head, Pose};
-use super::strokes::{self, Form, Stroke};
-use super::style::{Circles, Order, PlotStyle};
+use super::strokes::{Form, Stroke};
 use crate::sheet::timeline::{DETAIL_PLOT, MARK};
 
 /// What a detail is plotted from, as it stands when its part is picked out.
@@ -49,7 +46,7 @@ pub struct Sketch {
 /// which of the marks of that kind it is, and which piece of the mark.
 pub type Id = (Kind, usize, usize);
 
-/// A kind of mark: its pass, its part, its pen and what it is.
+/// A kind of mark: its pass, its part, its tone and what it is.
 pub type Kind = (Pass, Option<usize>, u8, u8);
 
 /// A piece of a detail's view.
@@ -115,39 +112,22 @@ struct Planned {
 }
 
 impl Detail {
-    /// The plot of `sketch` in `style`, its lengths and speeds scaled by
-    /// `scale`.
-    pub fn new(style: &PlotStyle, sketch: Sketch, scale: f64) -> Self {
+    /// The plot of `sketch`, its lengths and speeds scaled by `scale`.
+    pub fn new(sketch: Sketch, scale: f64) -> Self {
         let mut ring = sketch.ring;
+        let home = sketch.home;
+        // Started where it is nearest the pen coming from home.
+        let seam = (0..ring.pixels.len())
+            .min_by_key(|&index| {
+                let pixel = ring.pixels[index];
 
-        if !matches!(ring.form, Form::Circle(_)) {
-            // Started where it is nearest the pen coming from home, or
-            // else where the pen goes on to its letter soonest.
-            let near = if style.from_home {
-                sketch.home
-            } else {
-                sketch.letter
-            };
-            let seam = (0..ring.pixels.len())
-                .min_by_key(|&index| {
-                    let pixel = ring.pixels[index];
+                ((pixel.x - home.x).pow(2) + (pixel.y - home.y).pow(2), index)
+            })
+            .unwrap_or(0);
 
-                    ((pixel.x - near.x).pow(2) + (pixel.y - near.y).pow(2), index)
-                })
-                .unwrap_or(0);
+        ring.rotate(seam);
 
-            ring.rotate(seam);
-        }
-
-        let mut plan = Planner::new(
-            style,
-            scale,
-            if style.from_home {
-                sketch.home
-            } else {
-                ring.start()
-            },
-        );
+        let mut plan = Planner::new(scale, home);
 
         plan.stroke(0, &ring);
         plan.go(sketch.letter);
@@ -157,12 +137,8 @@ impl Detail {
             strokes: vec![ring],
         };
 
-        // The view's pieces in the style's order: pen by pen, or pass by
-        // pass; nearest first within.
-        let key = |id: &Id| match style.order {
-            Order::Pens => (id.0).2,
-            _ => (id.0).0 as u8,
-        };
+        // The view's pieces pass by pass, nearest first within.
+        let key = |id: &Id| (id.0).0 as u8;
         let mut pieces: Vec<(u8, Planned)> = sketch
             .pieces
             .iter()
@@ -217,7 +193,7 @@ impl Detail {
             .collect();
         let ids: Vec<Option<Id>> = planned.iter().map(|planned| planned.id).collect();
         let strokes: Vec<Stroke> = planned.into_iter().map(|planned| planned.stroke).collect();
-        let mut plan = Planner::new(style, scale, sketch.letter);
+        let mut plan = Planner::new(scale, sketch.letter);
 
         plan.still(Pose::Down, LETTERING_TIME);
 
@@ -225,10 +201,8 @@ impl Detail {
             plan.stroke(index, stroke);
         }
 
-        if style.park {
-            plan.go(sketch.home);
-            plan.still(Pose::Up, HOLD);
-        }
+        plan.go(home);
+        plan.still(Pose::Up, HOLD);
 
         Self {
             ring,
@@ -343,32 +317,25 @@ fn drawn(strokes: &[Stroke], place: &Place, index: usize) -> f64 {
 }
 
 /// A circle round `centre` of `radius`, lined as `stipple` says, in
-/// `tone`, as the pen draws it in `style`: from its centre, if the style
-/// draws circles so, or else from the top.
+/// `tone`, as the pen draws it: from the top.
 pub fn circle(
     centre: Point<i32>,
     radius: i32,
     stipple: Stipple,
     tone: crate::draft::Tone,
-    style: &PlotStyle,
 ) -> Stroke {
     let pixels = raster::ordered_circle(centre, radius);
     let lit = (0..pixels.len())
         .map(|index| stipple.lights(index))
         .collect();
-    let circle = Stroke {
+
+    Stroke {
         pixels,
         lit,
         tone,
         form: Form::Loop,
         mark: 0,
         piece: 0,
-    };
-
-    if style.circles == Circles::Centred && circle.pixels.len() >= 4 {
-        strokes::centred(circle, centre)
-    } else {
-        circle
     }
 }
 
@@ -467,7 +434,7 @@ mod tests {
 
     /// A detail with a line crossing its window and running out of it, a
     /// label and the ground under it.
-    fn sketch(style: &PlotStyle) -> Sketch {
+    fn sketch() -> Sketch {
         Sketch {
             home: Point::new(5, 500),
             ring: circle(
@@ -475,7 +442,6 @@ mod tests {
                 20,
                 Stipple::of(Line::Phantom),
                 Tone::Accent,
-                style,
             ),
             letter: Point::new(230, 170),
             window: circle(
@@ -483,7 +449,6 @@ mod tests {
                 80,
                 Stipple::Dash { on: 11, off: 4 },
                 Tone::Faint,
-                style,
             ),
             pieces: vec![
                 sketched(
@@ -512,8 +477,7 @@ mod tests {
     /// before the detail settles.
     #[test]
     fn the_pen_draws_the_circle_then_the_view_and_goes_home() {
-        let style = PlotStyle::CAROUSEL;
-        let detail = Detail::new(&style, sketch(&style), 1.0);
+        let detail = Detail::new(sketch(), 1.0);
         let ids = [(OUTLINE, 0, 0), (LABEL, 0, 0), (LABEL, 0, 1)];
         let start = detail.at(0.0);
 
@@ -551,44 +515,6 @@ mod tests {
         assert!(ids.iter().all(|id| detail.drawn(&settled, *id) == 1.0));
     }
 
-    /// A pen that neither starts from home nor goes back to it starts on
-    /// the circle, where it is nearest the letter, and lifts off the view
-    /// with all of it drawn, never going home.
-    #[test]
-    fn a_quick_studys_pen_starts_on_the_circle_and_lifts_off_the_view() {
-        let style = PlotStyle::QUICK;
-        let sketch = sketch(&style);
-        let (home, letter) = (sketch.home, sketch.letter);
-        let nearest = sketch
-            .ring
-            .pixels
-            .iter()
-            .copied()
-            .min_by_key(|pixel| (pixel.x - letter.x).pow(2) + (pixel.y - letter.y).pow(2))
-            .expect("A circle");
-        let detail = Detail::new(&style, sketch, 1.0);
-        let ids = [(OUTLINE, 0, 0), (LABEL, 0, 0), (LABEL, 0, 1)];
-
-        assert_eq!(
-            detail.at(0.0).head,
-            Some(Head {
-                at: nearest,
-                pose: Pose::Down
-            })
-        );
-
-        for frame in 0..=63 {
-            let head = detail.at(frame as f32 / 30.0).head;
-
-            assert!(head.is_none_or(|head| head.at != home), "{frame}");
-        }
-
-        let settled = detail.at(MARK + DETAIL_PLOT - REST / 2.0);
-
-        assert_eq!(settled.head, None);
-        assert!(ids.iter().all(|id| detail.drawn(&settled, *id) == 1.0));
-    }
-
     /// A line running out of the window is drawn from where it comes in,
     /// and the ground under lettering is cleared from the start.
     #[test]
@@ -613,8 +539,7 @@ mod tests {
     /// kind the plan knows.
     #[test]
     fn a_mark_it_did_not_know_is_drawn_as_far_as_its_kind() {
-        let style = PlotStyle::CAROUSEL;
-        let detail = Detail::new(&style, sketch(&style), 1.0);
+        let detail = Detail::new(sketch(), 1.0);
 
         for frame in 0..=30 {
             let now = detail.at(MARK + frame as f32 * DETAIL_PLOT / 30.0);

@@ -2,9 +2,10 @@
 //! list, the notes, a part's specification and the readings.
 //!
 //! Lettering goes through a [`Typist`], which can be given a budget of
-//! characters: the title block of a new sheet types itself in. Or the
+//! characters: the readings and a detail's caption type themselves in. The
 //! furniture is a printed form a drafting office fills in as its drawing
-//! proceeds, an [`Entry`] at a time, each with its own typist ([`Typing`]).
+//! proceeds, an [`Entry`] at a time, each with its own typist
+//! ([`Typing`]).
 use iced_core::{Color, Point, Rectangle};
 use iced_widget::graphics::geometry;
 use quadrille::Palette;
@@ -79,29 +80,26 @@ pub enum Entry {
     SignOff,
 }
 
-/// Which of the furniture is drawn, and who types it.
-pub enum Typing {
-    /// All of it, by one typist in turn: a new sheet typing itself in.
-    InTurn(Typist),
-    /// Only one entry, by a typist of its own.
-    Only(Entry, Typist),
+/// Which entry of the furniture is drawn, and who types it.
+pub struct Typing {
+    entry: Entry,
+    pub typist: Typist,
 }
 
 impl Typing {
+    /// `entry` alone, typed by `typist`.
+    pub fn new(entry: Entry, typist: Typist) -> Self {
+        Self { entry, typist }
+    }
+
     /// The typist of `entry`, if it is drawn.
     pub fn typist(&mut self, entry: Entry) -> Option<&mut Typist> {
-        match self {
-            Self::InTurn(typist) => Some(typist),
-            Self::Only(only, typist) => (*only == entry).then_some(typist),
-        }
+        (self.entry == entry).then_some(&mut self.typist)
     }
 
     /// Whether `entry` is drawn.
     pub fn draws(&self, entry: Entry) -> bool {
-        match self {
-            Self::InTurn(_) => true,
-            Self::Only(only, _) => *only == entry,
-        }
+        self.entry == entry
     }
 }
 

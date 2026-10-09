@@ -97,13 +97,9 @@ impl Owners {
 /// [`Piece::draw`] paints it; the ground a knockout clears among them.
 pub fn painted(piece: &Piece, clip: Rectangle<i32>, mut paint: impl FnMut(Point<i32>)) {
     match piece {
-        Piece::Path {
-            pixels,
-            stipple,
-            phase,
-        } => {
+        Piece::Path { pixels, stipple } => {
             for (index, pixel) in pixels.iter().enumerate() {
-                if stipple.lights(phase + index) && raster::contains(clip, *pixel) {
+                if stipple.lights(index) && raster::contains(clip, *pixel) {
                     paint(*pixel);
                 }
             }

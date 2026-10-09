@@ -19,7 +19,6 @@ use quadrille_desktop::theme;
 use headless::{Output, Stage, Studio};
 use machine::{Fixture, Machine};
 use saver::{Options, Saver};
-use sheet::plotter::style::PlotStyle;
 use subjects::Subject;
 
 #[derive(Parser)]
@@ -32,10 +31,6 @@ struct Cli {
     #[arg(long, global = true, value_enum, default_value_t = Source::Live)]
     machine: Source,
 
-    /// How the pen plots the sheets.
-    #[arg(long, global = true, value_enum, default_value_t = Plotting::Today)]
-    plot: Plotting,
-
     #[command(flatten)]
     run: Run,
 }
@@ -46,8 +41,8 @@ enum Command {
     Render(Render),
     /// Time drawing frames headless: a sheet's plot and its documented run.
     Bench(Bench),
-    /// How each style of plot spends its time on each sheet, on both of the
-    /// desk's outputs: what tunes a style.
+    /// How each sheet's plot spends its time, on both of the desk's
+    /// outputs: what tunes the pen.
     PlotStats,
     /// The subjects there are.
     List,
@@ -126,31 +121,6 @@ enum Desk {
     Ultrawide,
 }
 
-/// How the pen plots the sheets.
-#[derive(Clone, Copy, ValueEnum)]
-enum Plotting {
-    /// As it always has: the drawing revealed pass by pass, at one rate.
-    Today,
-    /// A carousel plotter: pen by pen, lightest first, a trip home for each.
-    Carousel,
-    /// A drafting office: the skeleton, then each part's body, the lining,
-    /// the annotation and the balloons, with a beat between.
-    Drafting,
-    /// A quick study: each part whole in eased strokes, its words typed.
-    Quick,
-}
-
-impl Plotting {
-    fn style(self) -> PlotStyle {
-        match self {
-            Self::Today => PlotStyle::TODAY,
-            Self::Carousel => PlotStyle::CAROUSEL,
-            Self::Drafting => PlotStyle::DRAFTING,
-            Self::Quick => PlotStyle::QUICK,
-        }
-    }
-}
-
 /// Which computer the sheets of this computer draw.
 #[derive(Clone, Copy, ValueEnum)]
 enum Source {
@@ -186,10 +156,9 @@ fn main() {
         Source::FixtureServer => Fixture::Server.machine(),
         Source::FixtureVm => Fixture::Vm.machine(),
     };
-    let plot = cli.plot.style();
     let result = match cli.command {
-        Some(Command::Render(render)) => draw(render, &machine, plot),
-        Some(Command::Bench(bench)) => time(bench, &machine, plot),
+        Some(Command::Render(render)) => draw(render, &machine),
+        Some(Command::Bench(bench)) => time(bench, &machine),
         Some(Command::PlotStats) => plot_stats(&machine),
         Some(Command::List) => {
             for subject in subjects::all(&machine) {
@@ -203,7 +172,7 @@ fn main() {
             }
             Ok(())
         }
-        None => run(cli.run, machine, plot),
+        None => run(cli.run, machine),
     };
 
     if let Err(error) = result {
@@ -212,7 +181,7 @@ fn main() {
     }
 }
 
-fn run(run: Run, machine: Machine, plot: PlotStyle) -> Result<(), String> {
+fn run(run: Run, machine: Machine) -> Result<(), String> {
     let first = match &run.subject {
         Some(name) => Some(subject(&subjects::all(&machine), name)?),
         None => None,
@@ -241,7 +210,6 @@ fn run(run: Run, machine: Machine, plot: PlotStyle) -> Result<(), String> {
         theme: theme::current(&run.theme_dir),
         date: today(),
         machine,
-        plot,
     };
 
     let mut settings = quadrille_desktop::graphics::settings();
@@ -264,7 +232,7 @@ fn run(run: Run, machine: Machine, plot: PlotStyle) -> Result<(), String> {
     result.map_err(|error| error.to_string())
 }
 
-fn draw(render: Render, machine: &Machine, plot: PlotStyle) -> Result<(), String> {
+fn draw(render: Render, machine: &Machine) -> Result<(), String> {
     let (output, desk) = match render.output {
         Desk::Laptop => (Output::LAPTOP, "laptop"),
         Desk::Ultrawide => (Output::ULTRAWIDE, "ultrawide"),
@@ -290,7 +258,7 @@ fn draw(render: Render, machine: &Machine, plot: PlotStyle) -> Result<(), String
         None => (0..subjects.len()).collect(),
     };
     let date = today();
-    let mut studio = Studio::new(&subjects, output, &theme, &date)?.plotting(plot);
+    let mut studio = Studio::new(&subjects, output, &theme, &date)?;
 
     // The moments, each with what names its file.
     let moments: Vec<(f32, String)> = match render.fps {
@@ -324,7 +292,7 @@ fn draw(render: Render, machine: &Machine, plot: PlotStyle) -> Result<(), String
     Ok(())
 }
 
-fn time(bench: Bench, machine: &Machine, plot: PlotStyle) -> Result<(), String> {
+fn time(bench: Bench, machine: &Machine) -> Result<(), String> {
     let output = match bench.output {
         Desk::Laptop => Output::LAPTOP,
         Desk::Ultrawide => Output::ULTRAWIDE,
@@ -352,7 +320,7 @@ fn time(bench: Bench, machine: &Machine, plot: PlotStyle) -> Result<(), String> 
 
     for (index, subject) in subjects.iter().enumerate() {
         // From a fresh studio: the first frame repaints everything.
-        let mut studio = Studio::new(&subjects, output, &theme, &date)?.plotting(plot);
+        let mut studio = Studio::new(&subjects, output, &theme, &date)?;
         let frames = studio.bench(index, bench.fps);
 
         print!("{:<10}", subject.name());
@@ -395,14 +363,13 @@ fn plot_stats(machine: &Machine) -> Result<(), String> {
     let date = today();
 
     println!(
-        "each sheet's plot: its strokes, and its letters and dots set at a touch; pixels inked and \
-         carried over; seconds of moves and pauses as planned; k, how much faster the moves are \
-         played to fit the plot (p, the pauses); the share of the plot drawing, carried and still; \
+        "each sheet's plot: its strokes, and the dots set at a touch; pixels inked and carried \
+         over; seconds of moves and pauses as planned; k, how much faster the moves are played \
+         to fit the plot (p, the pauses); the share of the plot drawing, carried and still; \
          letters a second; milliseconds to plan"
     );
     println!(
-        "{:<10} {:<9} {:<8} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>5} {:>4} {:>4} {:>4} {:>6} {:>5}",
-        "",
+        "{:<10} {:<9} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>5} {:>4} {:>4} {:>4} {:>6} {:>5}",
         "",
         "",
         "strokes",
@@ -421,35 +388,32 @@ fn plot_stats(machine: &Machine) -> Result<(), String> {
     );
 
     for (desk, output) in [("laptop", Output::LAPTOP), ("ultrawide", Output::ULTRAWIDE)] {
-        for style in PlotStyle::ALL {
-            let studio = Studio::new(&subjects, output, &theme, &date)?.plotting(style);
+        let studio = Studio::new(&subjects, output, &theme, &date)?;
 
-            for (index, subject) in subjects.iter().enumerate() {
-                let stats = studio.plot(index).stats;
-                let length = f64::from(style.length);
-                let share = |seconds: f64| seconds / length * 100.0;
+        for (index, subject) in subjects.iter().enumerate() {
+            let stats = studio.plot(index).stats;
+            let length = f64::from(sheet::timeline::PLOT);
+            let share = |seconds: f64| seconds / length * 100.0;
 
-                println!(
-                    "{:<10} {:<9} {:<8} {:>7} {:>7} {:>7} {:>7.0} {:>6.2} {:>6.2} {:>5.2} {:>5.2} \
-                     {:>3.0}% {:>3.0}% {:>3.0}% {:>6.0} {:>5.1}",
-                    subject.name(),
-                    desk,
-                    style.name,
-                    stats.strokes,
-                    stats.touches,
-                    stats.ink,
-                    stats.travel,
-                    stats.moving,
-                    stats.pausing,
-                    stats.k,
-                    stats.p,
-                    share(stats.drawing),
-                    share(stats.travelling),
-                    share(stats.still),
-                    stats.lettering,
-                    stats.planned.as_secs_f64() * 1e3,
-                );
-            }
+            println!(
+                "{:<10} {:<9} {:>7} {:>7} {:>7} {:>7.0} {:>6.2} {:>6.2} {:>5.2} {:>5.2} \
+                 {:>3.0}% {:>3.0}% {:>3.0}% {:>6.0} {:>5.1}",
+                subject.name(),
+                desk,
+                stats.strokes,
+                stats.touches,
+                stats.ink,
+                stats.travel,
+                stats.moving,
+                stats.pausing,
+                stats.k,
+                stats.p,
+                share(stats.drawing),
+                share(stats.travelling),
+                share(stats.still),
+                stats.lettering,
+                stats.planned.as_secs_f64() * 1e3,
+            );
         }
     }
 

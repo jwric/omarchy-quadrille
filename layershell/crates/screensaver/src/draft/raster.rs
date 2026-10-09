@@ -211,9 +211,6 @@ pub enum Piece {
     Path {
         pixels: Vec<Point<i32>>,
         stipple: Stipple,
-        /// How far along its stroke the first pixel is, for the pattern: a
-        /// stroke cut in pieces keeps its dashes where they were.
-        phase: usize,
     },
     /// The rows of an area as `(y, first x, last x)`.
     Rows {
@@ -247,44 +244,7 @@ pub const ROW_COST: usize = 2;
 impl Piece {
     /// A whole stroke's pixels.
     pub fn path(pixels: Vec<Point<i32>>, stipple: Stipple) -> Self {
-        Self::Path {
-            pixels,
-            stipple,
-            phase: 0,
-        }
-    }
-
-    /// The piece in consecutive pieces of at most `cost` each, which plot
-    /// and draw as it does: a stroke in stretches, an area in bands of rows.
-    pub fn split(self, cost: usize) -> Vec<Self> {
-        match self {
-            Self::Path {
-                pixels,
-                stipple,
-                phase,
-            } if pixels.len() > cost => pixels
-                .chunks(cost.max(1))
-                .enumerate()
-                .map(|(k, chunk)| Self::Path {
-                    pixels: chunk.to_vec(),
-                    stipple,
-                    phase: phase + k * cost.max(1),
-                })
-                .collect(),
-            Self::Rows {
-                rows,
-                texture,
-                origin,
-            } if rows.len() * ROW_COST > cost => rows
-                .chunks((cost / ROW_COST).max(1))
-                .map(|band| Self::Rows {
-                    rows: band.to_vec(),
-                    texture,
-                    origin,
-                })
-                .collect(),
-            other => vec![other],
-        }
+        Self::Path { pixels, stipple }
     }
 
     /// How long the piece takes to plot, in pixels of pen travel.
@@ -314,16 +274,12 @@ impl Piece {
         let inside = |pixel: &Point<i32>| contains(clip, *pixel);
 
         match self {
-            Self::Path {
-                pixels,
-                stipple,
-                phase,
-            } => {
+            Self::Path { pixels, stipple } => {
                 let drawn = &pixels[..budget.min(pixels.len())];
                 let lit: Vec<_> = drawn
                     .iter()
                     .enumerate()
-                    .filter(|(i, pixel)| stipple.lights(phase + i) && inside(pixel))
+                    .filter(|(i, pixel)| stipple.lights(*i) && inside(pixel))
                     .map(|(_, pixel)| *pixel)
                     .collect();
 
@@ -1770,35 +1726,6 @@ mod tests {
                 )));
             }
         }
-    }
-
-    #[test]
-    fn a_stroke_cut_in_pieces_keeps_its_pattern() {
-        let pixels = shape::line(Point::new(0, 0), Point::new(99, 0));
-        let lit = |pieces: &[Piece]| -> Vec<Point<i32>> {
-            pieces
-                .iter()
-                .flat_map(|piece| match piece {
-                    Piece::Path {
-                        pixels,
-                        stipple,
-                        phase,
-                    } => pixels
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, _)| stipple.lights(phase + i))
-                        .map(|(_, pixel)| *pixel)
-                        .collect::<Vec<_>>(),
-                    _ => Vec::new(),
-                })
-                .collect()
-        };
-        let whole = Piece::path(pixels.clone(), Stipple::of(Line::Centre));
-        let cut = whole.clone().split(7);
-
-        assert_eq!(cut.len(), 15);
-        assert_eq!(lit(&cut), lit(&[whole]));
-        assert_eq!(cut.iter().map(Piece::cost).sum::<usize>(), 100);
     }
 
     #[test]

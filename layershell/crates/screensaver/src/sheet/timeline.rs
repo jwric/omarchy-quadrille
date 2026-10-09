@@ -3,19 +3,16 @@
 //! A sheet's life is a function of the time since it began, so any moment
 //! of it can be drawn again exactly (the headless renderer relies on that):
 //!
-//! 1. the title block types itself in and the drawing is plotted, a stroke
-//!    at a time, construction first and lettering last;
+//! 1. the drawing is plotted a stroke at a time, as a drafting office draws
+//!    it, its form filling in as it goes;
 //! 2. the subject starts to move, and after a beat each part in turn is
 //!    picked out, magnified in a detail view and specified;
 //! 3. a wipe clears the sheet for the next subject.
 
-/// The title block's lettering types in over this long.
-pub const TYPING: f32 = 1.2;
-/// The plotter starts after the title block has begun...
+/// The plotter starts once the form has begun to fill in...
 pub const PLOT_START: f32 = 0.6;
-/// ...and plots the whole drawing in its style's length: this long, as it
-/// always did.
-pub const PLOT: f32 = 9.0;
+/// ...and plots the whole drawing in this long.
+pub const PLOT: f32 = 10.0;
 /// The subject runs on its own a while before the first part is picked out.
 pub const SETTLE: f32 = 2.5;
 /// Each part is documented for this long.
@@ -62,18 +59,6 @@ pub struct Focus {
 }
 
 impl Focus {
-    /// The share of the detail view plotted: all of it once it is settled.
-    /// Worked out from the time alone, the share can still be a rounding
-    /// short of one when it is, and the view kept as it is drawn then would
-    /// lack its last mark for as long as the part is in focus.
-    pub fn plotted(self) -> f32 {
-        if self.settled() {
-            1.0
-        } else {
-            ((self.time - MARK) / DETAIL_PLOT).clamp(0.0, 1.0)
-        }
-    }
-
     /// Whether everything about it has been drawn and lettered.
     pub fn settled(self) -> bool {
         self.time >= MARK + DETAIL_PLOT
@@ -113,11 +98,6 @@ impl Moment {
         };
 
         Self { phase, local, run }
-    }
-
-    /// The share of the title block's lettering typed.
-    pub fn typed(self) -> f32 {
-        (self.local / TYPING).clamp(0.0, 1.0)
     }
 
     pub fn focus(self) -> Option<Focus> {
@@ -162,21 +142,6 @@ mod tests {
         ));
         assert_eq!(at(first + 2.0 * DETAIL + 0.5), Phase::Run(None));
         assert!(matches!(at(duration(2, PLOT) - 0.1), Phase::Wipe(_)));
-    }
-
-    /// A detail is plotted whole from the moment it is settled, whichever
-    /// way that moment rounds.
-    #[test]
-    fn a_settled_detail_is_plotted_whole() {
-        let mut time = MARK + DETAIL_PLOT;
-
-        for _ in 0..64 {
-            let focus = Focus { part: 0, time };
-
-            assert!(focus.settled());
-            assert_eq!(focus.plotted(), 1.0, "{time}");
-            time = time.next_up();
-        }
     }
 
     #[test]

@@ -15,7 +15,6 @@ use iced_widget::{Widget as _, canvas};
 use quadrille::Theme;
 
 use crate::sheet::plotter::Plot;
-use crate::sheet::plotter::style::PlotStyle;
 use crate::sheet::timeline::{self, Moment, Phase, Showing};
 use crate::sheet::{self, Display, Sheet, schedule::Schedule};
 use crate::subjects::Subject;
@@ -209,7 +208,6 @@ pub struct Studio<'a> {
     output: Output,
     theme: &'a Theme,
     date: &'a str,
-    plot: PlotStyle,
 }
 
 impl<'a> Studio<'a> {
@@ -239,16 +237,7 @@ impl<'a> Studio<'a> {
             output,
             theme,
             date,
-            plot: PlotStyle::default(),
         })
-    }
-
-    /// The studio plotting its sheets in `style`.
-    pub fn plotting(self, style: PlotStyle) -> Self {
-        Self {
-            plot: style,
-            ..self
-        }
     }
 
     /// The sheets starting with subject `first`, `elapsed` seconds in, as
@@ -265,7 +254,7 @@ impl<'a> Studio<'a> {
             self.subjects.iter().map(|s| s.card().parts.len()).collect(),
             0,
             Some(first),
-            self.plot.length,
+            timeline::PLOT,
         )
         .at(0, elapsed);
 
@@ -276,7 +265,6 @@ impl<'a> Studio<'a> {
             showing,
             display: self.output.display,
             date: self.date,
-            plot: self.plot,
         }
     }
 
@@ -430,7 +418,7 @@ impl<'a> Studio<'a> {
     /// next, before it upscales that, which is not measured here).
     pub fn bench(&mut self, first: usize, fps: f32) -> Vec<Timed> {
         let parts = self.subjects[first].card().parts.len();
-        let frames = (timeline::duration(parts, self.plot.length) * fps) as usize;
+        let frames = (timeline::duration(parts, timeline::PLOT) * fps) as usize;
 
         (0..frames)
             .map(|frame| {
@@ -574,24 +562,11 @@ mod tests {
     /// Repaints a sheet frame by frame at `fps` over `seconds`, and fails at
     /// the first frame that differs from the same frame drawn whole.
     fn repaints_as_drawn(first: usize, output: Output, seconds: std::ops::Range<f32>, fps: f32) {
-        repaints_as_drawn_in(PlotStyle::default(), first, output, seconds, fps);
-    }
-
-    /// [`repaints_as_drawn`], the sheet plotted in `style`.
-    fn repaints_as_drawn_in(
-        style: PlotStyle,
-        first: usize,
-        output: Output,
-        seconds: std::ops::Range<f32>,
-        fps: f32,
-    ) {
         load_fonts();
 
         let subjects = crate::subjects::all(&Machine::fixture());
         let theme = Theme::TERMINAL;
-        let mut studio = Studio::new(&subjects, output, &theme, "2026-10-07")
-            .unwrap()
-            .plotting(style);
+        let mut studio = Studio::new(&subjects, output, &theme, "2026-10-07").unwrap();
         let frames = ((seconds.end - seconds.start) * fps) as usize;
 
         for frame in 0..frames {
@@ -608,9 +583,8 @@ mod tests {
 
             assert!(
                 wrong == 0,
-                "{}, {}, {at:.2} s in: {wrong} pixels repainted wrong",
-                subjects[first].name(),
-                style.name
+                "{}, {at:.2} s in: {wrong} pixels repainted wrong",
+                subjects[first].name()
             );
         }
     }
@@ -635,62 +609,36 @@ mod tests {
         }
     }
 
-    /// The pen's plot repaints as drawn too: its buckets kept, its strokes
-    /// drawn a stretch at a time, its head going up and down.
+    /// The pen's work repaints as drawn at a live rate: its form filling
+    /// in, its ink wet behind it and its compass, a detail plotted by it,
+    /// and the sweep of the wipe from where it parks.
     #[test]
-    fn the_pens_plot_repaints_as_drawn() {
-        repaints_as_drawn_in(PlotStyle::DRAFTING, 0, Output::LAPTOP, 0.0..12.0, 4.0);
-    }
-
-    /// Repaints the first sheet as drawn in `style` through the start of
-    /// its plot, its first detail and its wipe.
-    fn plot_detail_and_wipe_repaint_as_drawn(style: PlotStyle) {
+    fn the_pens_work_repaints_as_drawn() {
         let parts = crate::subjects::all(&Machine::fixture())[0]
             .card()
             .parts
             .len();
-        let detail = timeline::PLOT_START + style.length + timeline::SETTLE;
-        let end = timeline::duration(parts, style.length);
+        let detail = timeline::PLOT_START + timeline::PLOT + timeline::SETTLE;
+        let end = timeline::duration(parts, timeline::PLOT);
 
-        repaints_as_drawn_in(style, 0, Output::LAPTOP, 0.0..4.0, 4.0);
-        repaints_as_drawn_in(style, 0, Output::LAPTOP, detail - 0.2..detail + 2.4, 10.0);
-        repaints_as_drawn_in(style, 0, Output::LAPTOP, end - 1.6..end, 10.0);
+        repaints_as_drawn(0, Output::LAPTOP, 0.0..4.0, 4.0);
+        repaints_as_drawn(0, Output::LAPTOP, detail - 0.2..detail + 2.4, 10.0);
+        repaints_as_drawn(0, Output::LAPTOP, end - 1.6..end, 10.0);
     }
 
-    /// A carousel plotter repaints as drawn: its gantry under the ink and
-    /// its carriage's ticks through the plot, a detail plotted by its pen,
-    /// and the sweep of the wipe.
-    #[test]
-    fn a_carousel_plotter_repaints_as_drawn() {
-        plot_detail_and_wipe_repaint_as_drawn(PlotStyle::CAROUSEL);
-    }
-
-    /// A drafting office repaints as drawn: its form filling in, its ink
-    /// wet behind the pen and its compass, a detail plotted by its pen, and
-    /// the sweep of the wipe.
-    #[test]
-    fn a_drafting_office_repaints_as_drawn() {
-        plot_detail_and_wipe_repaint_as_drawn(PlotStyle::DRAFTING);
-    }
-
-    /// Every sheet's plot in every style, on both outputs, at ten frames a
-    /// second; and its first detail, where the pen plots details.
+    /// Every sheet's plot, on both outputs, at ten frames a second; and its
+    /// first detail.
     #[test]
     #[ignore = "minutes: run with --release --ignored"]
     fn every_plot_repaints_as_drawn() {
-        for style in [PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK] {
-            for first in 0..crate::subjects::all(&Machine::fixture()).len() {
-                for output in [Output::LAPTOP, Output::ULTRAWIDE] {
-                    let end = timeline::PLOT_START + style.length + 0.5;
-                    let detail = timeline::PLOT_START + style.length + timeline::SETTLE;
-                    let settled = detail + timeline::MARK + timeline::DETAIL_PLOT + 0.2;
+        for first in 0..crate::subjects::all(&Machine::fixture()).len() {
+            for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+                let end = timeline::PLOT_START + timeline::PLOT + 0.5;
+                let detail = timeline::PLOT_START + timeline::PLOT + timeline::SETTLE;
+                let settled = detail + timeline::MARK + timeline::DETAIL_PLOT + 0.2;
 
-                    repaints_as_drawn_in(style, first, output, 0.0..end, 10.0);
-
-                    if style.details {
-                        repaints_as_drawn_in(style, first, output, detail..settled, 10.0);
-                    }
-                }
+                repaints_as_drawn(first, output, 0.0..end, 10.0);
+                repaints_as_drawn(first, output, detail..settled, 10.0);
             }
         }
     }
