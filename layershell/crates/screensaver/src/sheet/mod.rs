@@ -1972,12 +1972,12 @@ mod tests {
         }
     }
 
-    /// The topology reads as well on the monitors most desks have as on
-    /// the laptop: 1920 × 1080 (or 3840 × 2160 at 2), where it is drawn at a
-    /// pixel to a unit, and 2560 × 1440, where it is drawn larger than its
-    /// details' windows are made for, so they magnify less.
+    /// The machine's sheets read as well on the monitors most desks have
+    /// as on the laptop: 1920 × 1080 (or 3840 × 2160 at 2), where a diagram
+    /// is drawn at a pixel to a unit, and 2560 × 1440, where it is drawn
+    /// larger than its details' windows are made for, so they magnify less.
     #[test]
-    fn the_topology_reads_well_on_common_monitors() {
+    fn the_machines_sheets_read_well_on_common_monitors() {
         use crate::machine::Fixture;
 
         for (width, height) in [(1920, 1080), (2560, 1440)] {
@@ -1992,9 +1992,14 @@ mod tests {
             };
             let (width, height) = output.virtual_size();
 
-            for fixture in Fixture::ALL {
+            for (fixture, name) in Fixture::ALL
+                .into_iter()
+                .flat_map(|fixture| ["topology", "cooling", "displays"].map(|name| (fixture, name)))
+            {
                 let subjects = subjects::all(&fixture.machine());
-                let index = subjects::find(&subjects, "topology").unwrap();
+                let Some(index) = subjects::find(&subjects, name) else {
+                    continue;
+                };
                 let planned = Planned::default();
 
                 for part in 0..subjects[index].card().parts.len() {
@@ -2015,7 +2020,7 @@ mod tests {
 
                     assert!(
                         faults.is_empty(),
-                        "{fixture:?} on {width} × {height} at {local:.1} s: {}",
+                        "{fixture:?} {name} on {width} × {height} at {local:.1} s: {}",
                         faults.join("; ")
                     );
                 }

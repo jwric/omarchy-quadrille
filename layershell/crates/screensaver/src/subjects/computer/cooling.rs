@@ -342,30 +342,35 @@ impl Source {
         Extent::new(corner, corner + V2::splat(CORE))
     }
 
-    /// The circle a detail of it magnifies: round its name, its gauges and
-    /// the values a detail letters after them, as a detail at twice the
-    /// view's scale or more has room for (on the laptop, a detail twice
-    /// the view's scale holds a block's width a little short of its
-    /// block's).
-    fn ring(&self) -> (V2, f32) {
+    /// What a detail of it must hold in full: its name, its gauges and
+    /// the values a detail letters after them, and its cores.
+    fn held(&self) -> Extent {
         let first = self.gauge(0);
         let bottom = match self.cores.len() {
             0 => self.foot().y,
             n => self.core(n - 1).min.y,
         };
-        let top = first.y + BULB_RADIUS + DETAIL_NAME;
-        let (left, right) = (
-            first.x - BULB_RADIUS - DETAIL_LEFT,
-            first.x + BULB_RADIUS + TUBE + DETAIL_VALUE,
-        );
-        let half = v(right - left, top - bottom) / 2.0;
+
+        Extent::new(
+            v(first.x - BULB_RADIUS - DETAIL_LEFT, bottom),
+            v(
+                first.x + BULB_RADIUS + TUBE + DETAIL_VALUE,
+                first.y + BULB_RADIUS + DETAIL_NAME,
+            ),
+        )
+    }
+
+    /// The circle a detail of it magnifies: round what the detail holds
+    /// (see [`Source::held`]), as a detail at twice the view's scale or
+    /// more has room for (on the laptop, a detail twice the view's scale
+    /// holds a block's width a little short of its block's).
+    fn ring(&self) -> (V2, f32) {
+        let held = self.held();
+        let centre = held.centre();
 
         (
-            v(
-                ((left + right) / 2.0).round(),
-                ((top + bottom) / 2.0).round(),
-            ),
-            half.length().ceil(),
+            v(centre.x.round(), centre.y.round()),
+            (v(held.width(), held.height()) / 2.0).length().ceil(),
         )
     }
 
@@ -2612,12 +2617,24 @@ impl Cooling {
             }
         };
 
-        // Its detail: the first of its blocks, or the first fan.
-        let (centre, radius) = match item {
-            Item::Fans => (self.fans[0].centre, self.rotor.ring()),
-            Item::Sources(_) => sources[0].ring(),
+        // Its detail: the first of its blocks, or the first fan; no more
+        // magnified than lets the window hold its gauges and values, or the
+        // fan's rotor, on a display that draws the view large.
+        let (centre, radius, holds) = match item {
+            Item::Fans => (
+                self.fans[0].centre,
+                self.rotor.ring(),
+                Extent::around(self.fans[0].centre, ROTOR),
+            ),
+            Item::Sources(_) => {
+                let (centre, radius) = sources[0].ring();
+
+                (centre, radius, sources[0].held())
+            }
         };
-        let mut part = Part::new(name, quantity, &fit(&value, 10)).detail(centre, radius);
+        let mut part = Part::new(name, quantity, &fit(&value, 10))
+            .detail(centre, radius)
+            .holding(holds);
 
         part.spec = spec.into_iter().take(SPEC_ROWS).collect();
         part
