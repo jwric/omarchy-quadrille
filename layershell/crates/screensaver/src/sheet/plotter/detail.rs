@@ -23,7 +23,7 @@ use iced_core::{Point, Rectangle};
 use crate::draft::Pass;
 use crate::draft::raster::{self, Inked, LETTERING, Piece, ROW_COST, Stipple};
 
-use super::motion::{HOLD, Motions, Place, Planner, REST};
+use super::motion::{DETAIL_PAUSES, HOLD, Motions, Place, Planner, REST};
 use super::pen::{Head, Pose};
 use super::strokes::{Form, Stroke};
 use crate::sheet::timeline::{DETAIL_PLOT, MARK};
@@ -133,7 +133,7 @@ impl Detail {
         plan.go(sketch.letter);
 
         let ring = Course {
-            motions: plan.fit(f64::from(MARK)),
+            motions: plan.fit(f64::from(MARK), DETAIL_PAUSES),
             strokes: vec![ring],
         };
 
@@ -207,7 +207,7 @@ impl Detail {
         Self {
             ring,
             view: Course {
-                motions: plan.fit(f64::from(DETAIL_PLOT - REST)),
+                motions: plan.fit(f64::from(DETAIL_PLOT - REST), DETAIL_PAUSES),
                 strokes,
             },
             places,

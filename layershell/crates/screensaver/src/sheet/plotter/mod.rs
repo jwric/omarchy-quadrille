@@ -6,9 +6,10 @@
 //! the one stroke that owns it in the finished drawing ([`own`]). The
 //! strokes are put in a drafting office's order ([`order`]), and the pen's
 //! moves along and between them are timed as the draughtsman's hand moves
-//! ([`hand`]) and fitted to the plot's length ([`motion`]). Each frame then
-//! looks its moment up ([`Plot::at`]): the strokes done, how far into the
-//! next the pen is, and where its head is.
+//! ([`hand`]) and fitted to the plot's length ([`motion`]): as long as they
+//! take at the hand's pace, if it is not given. Each frame then looks its
+//! moment up ([`Plot::at`]): the strokes done, how far into the next the
+//! pen is, and where its head is.
 //!
 //! The plot is drawn in buckets of consecutive strokes, each kept as a
 //! drawing of its own once it is done, so a frame draws again only the
@@ -34,7 +35,8 @@ use quadrille::draw::Pen;
 use crate::draft::Pass;
 use crate::draft::raster::{self, Inked, colour};
 
-use motion::Motions;
+use super::timeline;
+use motion::{Motions, Planner};
 use order::Meta;
 use own::Owners;
 use pen::Head;
@@ -135,6 +137,8 @@ pub struct Stats {
     /// Seconds the pen's moves and its pauses take as planned...
     pub moving: f64,
     pub pausing: f64,
+    /// ...the plot with its moves at the hand's pace, and its rest...
+    pub paced: f64,
     /// ...and how much faster than planned its moves are played to fit the
     /// plot (more than 1 is faster), and its pauses.
     pub k: f64,
@@ -157,10 +161,11 @@ pub struct Stats {
 }
 
 impl Plot {
-    /// The pen's plot of `marks` on `paper`, in `length` seconds: strokes
-    /// inking what they own, in a drafting office's order, timed as the
-    /// hand moves.
-    pub fn new(marks: &[Marked], paper: Paper, length: f32) -> Self {
+    /// The pen's plot of `marks` on `paper`, in `length` seconds if it is
+    /// given, or in as long as its work takes at the hand's pace, within
+    /// the plot's lengths: strokes inking what they own, in a drafting
+    /// office's order, timed as the hand moves.
+    pub fn new(marks: &[Marked], paper: Paper, length: Option<f32>) -> Self {
         let started = Instant::now();
         // Every piece by its number from one, in the order made...
         let ids: Vec<Vec<u32>> = marks
@@ -224,19 +229,22 @@ impl Plot {
             owners.touching(&made, |id| whose[id as usize])
         });
         let ordered = order::order(made, &metas, paper.home, touching.as_ref());
-        let motions = Motions::plan(
+        let work = Planner::sheet(
             &ordered.strokes,
             &ordered.gaps,
             paper.home,
             scale(paper.size.1),
-            length,
         );
+        let paced = work.paced();
+        let length = length.unwrap_or_else(|| timeline::plot_length(paced as f32));
+        let motions = work.fit(f64::from(length - motion::REST), motion::SHEET_PAUSES);
         let inks: Vec<usize> = ordered.strokes.iter().map(Stroke::ink).collect();
         let buckets = buckets(&inks, PLOT_BUCKET);
 
         let mut stats = Stats {
             moving: motions.moving,
             pausing: motions.pausing,
+            paced,
             k: motions.k,
             p: motions.p,
             touches: ordered
@@ -282,6 +290,11 @@ impl Plot {
             compasses,
             stats,
         }
+    }
+
+    /// Seconds the plot takes.
+    pub fn length(&self) -> f32 {
+        self.length as f32
     }
 
     /// Where the plot is with `share` of its time gone.
@@ -629,20 +642,57 @@ mod tests {
         });
     }
 
-    /// How far each plot's moves are sped up or slowed down to fit it, k,
-    /// stays in range: within a factor of a few of the hand's own pace on
-    /// every sheet.
+    /// A plot is paced by its ink: it takes as long as the pen's work does
+    /// at the hand's pace, its moves played at that pace and its pauses as
+    /// they are, unless that is shorter or longer than a plot may be, when
+    /// it takes the least or the most. Nearly every sheet of every kind of
+    /// machine, on both outputs, plots at the hand's pace, and none is
+    /// hurried by as much as a third.
     #[test]
-    fn the_plots_pace_stays_in_range() {
-        plots(|output, name, _, plot| {
-            assert!(
-                (0.3..=5.0).contains(&plot.stats.k),
-                "{name} on {}: k {:.2}",
-                output.name(),
-                plot.stats.k
-            );
-            assert!(plot.stats.p > 0.5, "{name}: p {:.2}", plot.stats.p);
-        });
+    fn a_plot_takes_as_long_as_its_work_at_the_hands_pace() {
+        use crate::machine::Fixture;
+
+        let theme = quadrille::Theme::TERMINAL;
+        let (shortest, longest) = (*timeline::PLOT.start(), *timeline::PLOT.end());
+        let (mut paced, mut sheets) = (0, 0);
+
+        for fixture in Fixture::ALL {
+            let subjects = crate::subjects::all(&fixture.machine());
+
+            for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+                let studio =
+                    Studio::new(&subjects, output, &theme, "2026-10-07").expect("A studio");
+
+                for (index, subject) in subjects.iter().enumerate() {
+                    let plot = studio.plot(index);
+                    let (length, stats) = (plot.length(), &plot.stats);
+                    let what = format!("{fixture:?} {} on {}", subject.name(), output.name());
+
+                    assert_eq!(length, studio.plot_length(index), "{what}");
+                    assert_eq!(length, timeline::plot_length(stats.paced as f32), "{what}");
+                    assert_eq!(stats.p, 1.0, "{what}");
+
+                    if (shortest..=longest).contains(&(stats.paced as f32)) {
+                        assert!((stats.k - hand::PACE).abs() < 1e-5, "{what}: k {}", stats.k);
+                        paced += 1;
+                    } else {
+                        assert!(
+                            (stats.k > hand::PACE) == (length == longest),
+                            "{what}: k {}",
+                            stats.k
+                        );
+                    }
+
+                    assert!(stats.k < hand::PACE * 4.0 / 3.0, "{what}: k {}", stats.k);
+                    sheets += 1;
+                }
+            }
+        }
+
+        assert!(
+            paced * 5 >= sheets * 4,
+            "{paced} of {sheets} sheets at the hand's pace"
+        );
     }
 
     /// A plot is worked out the same every time.

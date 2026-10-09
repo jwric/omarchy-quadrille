@@ -6,9 +6,13 @@
 //! [hand](super::hand) moves: in blocks of constant acceleration, slowing
 //! for corners by GRBL's junction deviation, a short move stepped rather
 //! than ramped. Then the moves are fitted to the plot's length: the pauses
-//! keep their time, or shrink until they take three tenths of the plot, and
-//! the moves are played faster or slower to fill the rest. A moment of the
-//! plot is then found by a binary search and worked out in closed form.
+//! keep their time, or shrink until they take a share of the plot, and the
+//! moves are played faster or slower to fill the rest. A sheet's plot is as
+//! long as its moves take at the hand's [pace](hand::PACE) with its pauses,
+//! so its moves are played at that pace, unless the plot would be too short
+//! or too long; a detail's takes as long however much it draws. A moment
+//! of the plot is then found by a binary search and worked out in closed
+//! form.
 use glam::DVec2;
 use iced_core::Point;
 use mint::Point2;
@@ -24,8 +28,13 @@ use super::strokes::{Form, Stroke};
 pub const REST: f32 = 0.1;
 /// Seconds the pen waits at home once it is parked.
 pub const HOLD: f64 = 0.2;
-/// The most of a plot its pauses may take.
-const PAUSES: f64 = 0.3;
+/// The most of a plot its pauses may take: half a sheet's, more than any
+/// sheet's pauses take at the hand's pace...
+pub const SHEET_PAUSES: f64 = 0.5;
+/// ...and three tenths of a detail's, which takes as long however much it
+/// draws: the pen settling after each move across the view would otherwise
+/// leave the moves too little time.
+pub const DETAIL_PAUSES: f64 = 0.3;
 /// How far a stroke's path may stray from its pixels' before its corners
 /// count: the stair steps of a pixel line are no corners.
 const TOLERANCE: f64 = 0.75;
@@ -337,34 +346,6 @@ pub struct Place {
 }
 
 impl Motions {
-    /// The pen's work drawing `strokes`, each after `gaps`, from home at
-    /// `home` and back, fitted to `length` seconds but its [`REST`].
-    /// Lengths and speeds are scaled by `scale`.
-    pub fn plan(
-        strokes: &[Stroke],
-        gaps: &[Gap],
-        home: Point<i32>,
-        scale: f64,
-        length: f32,
-    ) -> Self {
-        let mut plan = Planner::new(scale, home);
-
-        for (index, stroke) in strokes.iter().enumerate() {
-            let beat = match gaps[index] {
-                Gap::Stage if index > 0 => hand::STAGE_BEAT,
-                Gap::Cluster => hand::CLUSTER_BEAT,
-                _ => 0.0,
-            };
-
-            plan.still(Pose::Up, f64::from(beat));
-            plan.stroke(index, stroke);
-        }
-
-        plan.go(home);
-        plan.still(Pose::Up, HOLD);
-        plan.fit(f64::from(length - REST))
-    }
-
     /// Where the pen is `time` seconds into the plot, drawing `strokes`.
     pub fn at(&self, time: f64, strokes: &[Stroke]) -> Place {
         let done = Place {
@@ -442,6 +423,48 @@ impl Planner {
             at: point(from),
             travel: 0.0,
         }
+    }
+
+    /// The pen's work drawing a sheet's `strokes`, each after `gaps`, from
+    /// home at `home` and back, its lengths and speeds scaled by `scale`.
+    pub fn sheet(strokes: &[Stroke], gaps: &[Gap], home: Point<i32>, scale: f64) -> Self {
+        let mut plan = Self::new(scale, home);
+
+        for (index, stroke) in strokes.iter().enumerate() {
+            let beat = match gaps[index] {
+                Gap::Stage if index > 0 => hand::STAGE_BEAT,
+                Gap::Cluster => hand::CLUSTER_BEAT,
+                _ => 0.0,
+            };
+
+            plan.still(Pose::Up, f64::from(beat));
+            plan.stroke(index, stroke);
+        }
+
+        plan.go(home);
+        plan.still(Pose::Up, HOLD);
+        plan
+    }
+
+    /// Seconds its moves and its pauses take as planned.
+    fn times(&self) -> (f64, f64) {
+        self.acts
+            .iter()
+            .fold((0.0, 0.0), |(moving, pausing), (act, time, _)| {
+                if act.moves() {
+                    (moving + time, pausing)
+                } else {
+                    (moving, pausing + time)
+                }
+            })
+    }
+
+    /// Seconds the work takes with its moves played at the hand's pace,
+    /// and the [`REST`] after it: how long its plot is, if it can be.
+    pub fn paced(&self) -> f64 {
+        let (moving, pausing) = self.times();
+
+        moving / hand::PACE + pausing + f64::from(REST)
     }
 
     fn done(&self) -> usize {
@@ -560,21 +583,12 @@ impl Planner {
     }
 
     /// The work fitted to `length` seconds: pauses as planned, or shrunk
-    /// to three tenths of it, and the moves played faster or slower to fill
-    /// the rest.
-    pub fn fit(self, length: f64) -> Motions {
-        let (moving, pausing) =
-            self.acts
-                .iter()
-                .fold((0.0, 0.0), |(moving, pausing), (act, time, _)| {
-                    if act.moves() {
-                        (moving + time, pausing)
-                    } else {
-                        (moving, pausing + time)
-                    }
-                });
+    /// to `pauses` of it, and the moves played faster or slower to fill the
+    /// rest.
+    pub fn fit(self, length: f64, pauses: f64) -> Motions {
+        let (moving, pausing) = self.times();
         let p = if pausing > 0.0 {
-            (PAUSES * length / pausing).min(1.0)
+            (pauses * length / pausing).min(1.0)
         } else {
             1.0
         };

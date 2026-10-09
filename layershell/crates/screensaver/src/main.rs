@@ -364,12 +364,12 @@ fn plot_stats(machine: &Machine) -> Result<(), String> {
 
     println!(
         "each sheet's plot: its strokes, and the dots set at a touch; pixels inked and carried \
-         over; seconds of moves and pauses as planned; k, how much faster the moves are played \
-         to fit the plot (p, the pauses); the share of the plot drawing, carried and still; \
-         letters a second; milliseconds to plan"
+         over; seconds of moves and pauses as planned; seconds the plot takes at the hand's pace, \
+         and in all; k, how much faster than planned the moves are played (p, the pauses); the \
+         share of the plot drawing, carried and still; letters a second; milliseconds to plan"
     );
     println!(
-        "{:<10} {:<9} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>5} {:>4} {:>4} {:>4} {:>6} {:>5}",
+        "{:<10} {:<9} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>6} {:>6} {:>5} {:>5} {:>4} {:>4} {:>4} {:>6} {:>5}",
         "",
         "",
         "strokes",
@@ -378,6 +378,8 @@ fn plot_stats(machine: &Machine) -> Result<(), String> {
         "travel",
         "moves",
         "pauses",
+        "paced",
+        "plot",
         "k",
         "p",
         "draw",
@@ -391,13 +393,14 @@ fn plot_stats(machine: &Machine) -> Result<(), String> {
         let studio = Studio::new(&subjects, output, &theme, &date)?;
 
         for (index, subject) in subjects.iter().enumerate() {
-            let stats = studio.plot(index).stats;
-            let length = f64::from(sheet::timeline::PLOT);
+            let plot = studio.plot(index);
+            let stats = &plot.stats;
+            let length = f64::from(plot.length());
             let share = |seconds: f64| seconds / length * 100.0;
 
             println!(
-                "{:<10} {:<9} {:>7} {:>7} {:>7} {:>7.0} {:>6.2} {:>6.2} {:>5.2} {:>5.2} \
-                 {:>3.0}% {:>3.0}% {:>3.0}% {:>6.0} {:>5.1}",
+                "{:<10} {:<9} {:>7} {:>7} {:>7} {:>7.0} {:>6.2} {:>6.2} {:>6.2} {:>6.2} {:>5.2} \
+                 {:>5.2} {:>3.0}% {:>3.0}% {:>3.0}% {:>6.0} {:>5.1}",
                 subject.name(),
                 desk,
                 stats.strokes,
@@ -406,6 +409,8 @@ fn plot_stats(machine: &Machine) -> Result<(), String> {
                 stats.travel,
                 stats.moving,
                 stats.pausing,
+                stats.paced,
+                length,
                 stats.k,
                 stats.p,
                 share(stats.drawing),

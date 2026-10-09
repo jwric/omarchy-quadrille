@@ -408,7 +408,38 @@ where
 /// The plot of `sheet` on an output `size` virtual pixels across and down,
 /// worked out as its first frame works it out.
 pub fn plot_of(sheet: &Sheet<'_>, size: (i32, i32)) -> Plot {
-    Scene::new(sheet, size.0, size.1, &Planned::default()).plot(size)
+    Scene::new(sheet, size.0, size.1, &Planned::default()).plot(size, Some(sheet.showing.plot))
+}
+
+/// How long the plot of a sheet of `subject`, by its `index`, takes on an
+/// output `size` virtual pixels across and down, its virtual pixel as
+/// `display` says: as long as the pen's work takes at the hand's pace,
+/// within the plot's lengths. Worked out from the drawing as it stands
+/// when the sheet begins, for the schedule to know before it does.
+pub fn plot_length(subject: &dyn Subject, index: usize, display: Display, size: (i32, i32)) -> f32 {
+    let sheet = Sheet {
+        subject,
+        number: index + 1,
+        of: index + 1,
+        // Its first moment. How long its plot takes is what is being worked
+        // out, which nothing drawn then asks.
+        showing: Showing {
+            subject: index,
+            serial: 0,
+            plot: 0.0,
+            moment: timeline::Moment {
+                phase: Phase::Plot(0.0),
+                local: 0.0,
+                run: 0.0,
+            },
+        },
+        display,
+        date: "",
+    };
+
+    Scene::new(&sheet, size.0, size.1, &Planned::default())
+        .plot(size, None)
+        .length()
 }
 
 impl Sheet<'_> {
@@ -931,8 +962,9 @@ impl<'a> Scene<'a> {
         })
     }
 
-    /// The pen's plot of the views' marks on a sheet of `size`.
-    fn plot(&self, size: (i32, i32)) -> Plot {
+    /// The pen's plot of the views' marks on a sheet of `size`, in
+    /// `length` seconds, or at the hand's pace if none is given.
+    fn plot(&self, size: (i32, i32), length: Option<f32>) -> Plot {
         let marks: Vec<Marked> =
             self.shown_in_panes()
                 .map(|(pane, mark, projection)| {
@@ -1003,7 +1035,7 @@ impl<'a> Scene<'a> {
                 home: self.home(),
                 diagram: !self.card().scaled,
             },
-            timeline::PLOT,
+            length,
         )
     }
 
@@ -1078,8 +1110,8 @@ impl<'a> Scene<'a> {
             }
 
             let typed = (since * TYPING_RATE) as usize;
-            let ended =
-                moment.local >= timeline::PLOT_START + timeline::PLOT - plotter::motion::REST;
+            let ended = moment.local
+                >= timeline::PLOT_START + self.sheet.showing.plot - plotter::motion::REST;
 
             if typed >= letters[index] || ended {
                 let key = (
@@ -1152,8 +1184,9 @@ impl<'a> Scene<'a> {
     ) -> Rc<Plot> {
         let showing = self.sheet.showing;
 
-        kept.plot
-            .get((showing.subject, showing.serial, size), || self.plot(size))
+        kept.plot.get((showing.subject, showing.serial, size), || {
+            self.plot(size, Some(showing.plot))
+        })
     }
 
     /// The main view's marks that `layer` takes, and the circle of the
@@ -2020,7 +2053,11 @@ mod tests {
     use crate::subjects;
     use schedule::Schedule;
 
-    /// A sheet of subject `index` on `output`, `local` seconds in.
+    /// How long a sheet looked at for its layout is plotted in.
+    const LENGTH: f32 = 10.0;
+
+    /// A sheet of subject `index` on `output`, `local` seconds in, plotted
+    /// in [`LENGTH`].
     fn sheet<'a>(
         subjects: &'a [Box<dyn Subject>],
         index: usize,
@@ -2031,14 +2068,13 @@ mod tests {
             subjects.iter().map(|s| s.card().parts.len()).collect(),
             0,
             Some(index),
-            timeline::PLOT,
         );
 
         Sheet {
             subject: subjects[index].as_ref(),
             number: index + 1,
             of: subjects.len(),
-            showing: schedule.at(0, local),
+            showing: schedule.at(0, local, |_, _| LENGTH),
             display: output.display,
             date: "2026-10-07",
         }
@@ -2355,7 +2391,7 @@ mod tests {
                     // Each part in detail, settled.
                     for part in 0..parts {
                         let local = timeline::PLOT_START
-                            + timeline::PLOT
+                            + LENGTH
                             + timeline::SETTLE
                             + timeline::DETAIL * part as f32
                             + MARK
@@ -2538,7 +2574,7 @@ mod tests {
 
                 for part in 0..subjects[index].card().parts.len() {
                     let local = timeline::PLOT_START
-                        + timeline::PLOT
+                        + LENGTH
                         + timeline::SETTLE
                         + timeline::DETAIL * part as f32
                         + MARK
@@ -2643,13 +2679,12 @@ mod tests {
                     subjects.iter().map(|s| s.card().parts.len()).collect(),
                     0,
                     Some(index),
-                    timeline::PLOT,
                 );
                 let sheet = Sheet {
                     subject: subject.as_ref(),
                     number: index + 1,
                     of: subjects.len(),
-                    showing: schedule.at(0, 30.0),
+                    showing: schedule.at(0, 30.0, |_, _| LENGTH),
                     display: output.display,
                     date: "2026-10-07",
                 };
@@ -2887,7 +2922,7 @@ mod tests {
 
                 for part in 0..subjects[index].card().parts.len() {
                     let local = timeline::PLOT_START
-                        + timeline::PLOT
+                        + LENGTH
                         + timeline::SETTLE
                         + timeline::DETAIL * part as f32
                         + MARK
@@ -3045,13 +3080,15 @@ mod tests {
             let (width, height) = output.virtual_size();
             let mut studio =
                 Studio::new(&subjects, output, &theme, "2026-10-07").expect("A studio");
-            let end = timeline::PLOT_START + timeline::PLOT;
 
             for index in 0..subjects.len() {
+                let end = timeline::PLOT_START + studio.plot_length(index);
                 let last = studio.frame(index, end - 1.0 / 30.0);
                 let first = studio.frame(index, end);
+                // Its first moment draws what is still, and what moves as it
+                // is when the subject starts to run.
                 let waiting = waiting_traces(
-                    &sheet(&subjects, index, output, end),
+                    &sheet(&subjects, index, output, 0.0),
                     (width as i32, height as i32),
                 );
                 let differ = last
@@ -3094,7 +3131,7 @@ mod tests {
 
         for name in names {
             let index = subjects::find(&subjects, name).expect("A subject");
-            let frames = ((timeline::PLOT_START + timeline::PLOT) * fps) as usize;
+            let frames = ((timeline::PLOT_START + LENGTH) * fps) as usize;
             let mut before = plotted(index, 0.0);
 
             for frame in 1..frames {
@@ -3171,9 +3208,12 @@ mod tests {
                 let index = subjects::find(&subjects, name).expect("A subject");
                 // The frame the part is picked out on, counted from the
                 // sheet's first, as a surface counts them.
-                let picked = ((timeline::PLOT_START + timeline::PLOT + timeline::SETTLE) * 30.0)
-                    .round() as usize;
                 let mut watching = studio();
+                let picked = ((timeline::PLOT_START
+                    + watching.plot_length(index)
+                    + timeline::SETTLE)
+                    * 30.0)
+                    .round() as usize;
 
                 for frame in picked..=picked + frames {
                     let at = frame as f32 / 30.0;
@@ -3269,12 +3309,9 @@ mod tests {
 
         for output in [Output::LAPTOP, Output::ULTRAWIDE] {
             // The pen gone, just before the detail settles.
-            let local = timeline::PLOT_START
-                + timeline::PLOT
-                + timeline::SETTLE
-                + MARK
-                + timeline::DETAIL_PLOT
-                - plotter::motion::REST / 2.0;
+            let local =
+                timeline::PLOT_START + LENGTH + timeline::SETTLE + MARK + timeline::DETAIL_PLOT
+                    - plotter::motion::REST / 2.0;
 
             for index in 0..subjects.len() {
                 let drawn = |pen| {

@@ -2,6 +2,8 @@
 //! same canvas program, laid out and rasterized in virtual pixels by the
 //! software renderer, upscaled nearest-neighbour when asked.
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -208,6 +210,8 @@ pub struct Studio<'a> {
     output: Output,
     theme: &'a Theme,
     date: &'a str,
+    /// How long each subject's plot takes, by its index, once worked out.
+    lengths: RefCell<BTreeMap<usize, f32>>,
 }
 
 impl<'a> Studio<'a> {
@@ -237,6 +241,7 @@ impl<'a> Studio<'a> {
             output,
             theme,
             date,
+            lengths: RefCell::default(),
         })
     }
 
@@ -247,6 +252,20 @@ impl<'a> Studio<'a> {
         self.rasterize()
     }
 
+    /// How long the plot of subject `index`'s sheet takes, worked out once.
+    pub fn plot_length(&self, index: usize) -> f32 {
+        let (width, height) = self.output.virtual_size();
+
+        *self.lengths.borrow_mut().entry(index).or_insert_with(|| {
+            sheet::plot_length(
+                self.subjects[index].as_ref(),
+                index,
+                self.output.display,
+                (width as i32, height as i32),
+            )
+        })
+    }
+
     /// The sheets starting with subject `first`, `elapsed` seconds in.
     fn sheet(&self, first: usize, elapsed: f32) -> Sheet<'a> {
         // The same seed every time: a moment drawn twice is the same sheet.
@@ -254,9 +273,8 @@ impl<'a> Studio<'a> {
             self.subjects.iter().map(|s| s.card().parts.len()).collect(),
             0,
             Some(first),
-            timeline::PLOT,
         )
-        .at(0, elapsed);
+        .at(0, elapsed, |_, subject| self.plot_length(subject));
 
         Sheet {
             subject: self.subjects[showing.subject].as_ref(),
@@ -418,7 +436,7 @@ impl<'a> Studio<'a> {
     /// next, before it upscales that, which is not measured here).
     pub fn bench(&mut self, first: usize, fps: f32) -> Vec<Timed> {
         let parts = self.subjects[first].card().parts.len();
-        let frames = (timeline::duration(parts, timeline::PLOT) * fps) as usize;
+        let frames = (timeline::duration(parts, self.plot_length(first)) * fps) as usize;
 
         (0..frames)
             .map(|frame| {
@@ -609,6 +627,16 @@ mod tests {
         }
     }
 
+    /// How long the plot of subject `first`'s sheet takes on `output`.
+    fn plot_length(first: usize, output: Output) -> f32 {
+        let subjects = crate::subjects::all(&Machine::fixture());
+        let theme = Theme::TERMINAL;
+
+        Studio::new(&subjects, output, &theme, "2026-10-07")
+            .unwrap()
+            .plot_length(first)
+    }
+
     /// The pen's work repaints as drawn at a live rate: its form filling
     /// in, its ink wet behind it and its compass, a detail plotted by it,
     /// and the sweep of the wipe from where it parks.
@@ -618,8 +646,9 @@ mod tests {
             .card()
             .parts
             .len();
-        let detail = timeline::PLOT_START + timeline::PLOT + timeline::SETTLE;
-        let end = timeline::duration(parts, timeline::PLOT);
+        let length = plot_length(0, Output::LAPTOP);
+        let detail = timeline::PLOT_START + length + timeline::SETTLE;
+        let end = timeline::duration(parts, length);
 
         repaints_as_drawn(0, Output::LAPTOP, 0.0..4.0, 4.0);
         repaints_as_drawn(0, Output::LAPTOP, detail - 0.2..detail + 2.4, 10.0);
@@ -633,8 +662,9 @@ mod tests {
     fn every_plot_repaints_as_drawn() {
         for first in 0..crate::subjects::all(&Machine::fixture()).len() {
             for output in [Output::LAPTOP, Output::ULTRAWIDE] {
-                let end = timeline::PLOT_START + timeline::PLOT + 0.5;
-                let detail = timeline::PLOT_START + timeline::PLOT + timeline::SETTLE;
+                let length = plot_length(first, output);
+                let end = timeline::PLOT_START + length + 0.5;
+                let detail = timeline::PLOT_START + length + timeline::SETTLE;
                 let settled = detail + timeline::MARK + timeline::DETAIL_PLOT + 0.2;
 
                 repaints_as_drawn(first, output, 0.0..end, 10.0);

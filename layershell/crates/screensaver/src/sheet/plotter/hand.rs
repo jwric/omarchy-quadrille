@@ -5,10 +5,10 @@
 //! short move stepped rather than ramped; it is carried up faster than it
 //! draws, settles after a long move, and hovers a moment between the
 //! stages of the drawing and between its parts. The figures keep the
-//! ratios of real plotters and hands (see `docs/plotter.md`). Lengths and
-//! speeds are for the laptop's sheet, 533 virtual pixels high; a taller
-//! sheet scales them by its height, so a drawing takes as long on every
-//! output.
+//! ratios of real plotters and hands (see `docs/plotter.md`), and a plot
+//! plays the moves [`PACE`] times as fast. Lengths and speeds are for the
+//! laptop's sheet, 533 virtual pixels high; a taller sheet scales them by
+//! its height, so a drawing takes as long on every output.
 use crate::draft::Tone;
 
 /// One frame of the screensaver's 30 a second: what the timings below are
@@ -54,6 +54,13 @@ pub const CLUSTER_BEAT: f32 = 0.06;
 
 /// Touches a second: a dot, or a stroke of a letter no longer than a pixel.
 pub const TOUCHES: f32 = 45.0;
+
+/// How many times as fast as the hand's the moves are played: a plot is a
+/// time-lapse of a drafting office's work, its pauses kept as they are.
+/// A sheet's plot takes as long as its work does at this pace, within the
+/// plot's lengths (`timeline::PLOT`), so the pen moves as fast on a sparse
+/// sheet as on a dense one.
+pub const PACE: f64 = 2.25;
 
 /// Seconds the ink stays wet behind the pen, shown in the accent until it
 /// dries to its tone.
