@@ -97,9 +97,9 @@ pub struct Kept<Renderer: geometry::Renderer> {
     plot: plotter::Kept<PlotFor>,
     /// ...and of the detail showing, on its first.
     detail_plot: plotter::Kept<DetailFor, Picked>,
-    /// The entries of a sheet's form, each once it is filled in, and how
-    /// many letters each types.
-    entries: RefCell<Vec<Memo<Filled, Renderer>>>,
+    /// The entries of a sheet's form filled in so far, drawn as one, and
+    /// how many letters each types.
+    form: Memo<Filled, Renderer>,
     letters: plotter::Kept<(usize, u64, (i32, i32)), Vec<usize>>,
     /// The finished buckets of a plot, and the passed strips of a wipe.
     ///
@@ -110,9 +110,9 @@ pub struct Kept<Renderer: geometry::Renderer> {
     pieces: RefCell<Vec<Memo<Piece, Renderer>>>,
 }
 
-/// What an entry of a sheet's form is kept for: the sheet, the entry, and
-/// whether it is lit (a part's row, while the part is in detail).
-type Filled = (Key, Entry, bool);
+/// What the filled-in entries of a sheet's form are kept for: the sheet,
+/// which entries they are, and the part in detail, whose row is lit.
+type Filled = (Key, Vec<usize>, Option<usize>);
 
 /// The plan of a subject's automatic annotations at one size, worked out
 /// once and kept while the subject shows.
@@ -179,7 +179,7 @@ impl<Renderer: geometry::Renderer> Default for Kept<Renderer> {
             plan: Planned::default(),
             plot: plotter::Kept::default(),
             detail_plot: plotter::Kept::default(),
-            entries: RefCell::new(Vec::new()),
+            form: Memo::new(),
             letters: plotter::Kept::default(),
             pieces: RefCell::new(Vec::new()),
         }
@@ -280,19 +280,8 @@ where
                 }),
         );
 
-        // The furniture: a form filling in as the drawing proceeds, what is
-        // being typed a layer of its own every frame.
-        let mut typing = Frame::new(renderer, bounds.size());
-
-        layers.extend(scene.form(
-            kept,
-            renderer,
-            bounds.size(),
-            key(false),
-            &mut typing,
-            palette,
-        ));
-        layers.push(typing.into_geometry());
+        // The furniture: a form filling in as the drawing proceeds.
+        layers.push(scene.form(kept, renderer, bounds.size(), key(false), palette));
 
         // The main view: plotted in buckets of strokes, each a drawing of
         // its own once done, so a frame repaints only the bucket the pen is
@@ -1058,18 +1047,24 @@ impl<'a> Scene<'a> {
         }
     }
 
-    /// The sheet's form, filling in as its drawing proceeds: each entry a
-    /// drawing of its own once it is filled in, and those filling in drawn
-    /// in `typing`, so a frame repaints only what is being typed.
+    /// The sheet's form, filling in as its drawing proceeds, as one drawing:
+    /// the entries filled in, kept while nothing is being typed, and drawn
+    /// again each frame with what is.
+    ///
+    /// The renderer pairs a frame's drawings with the frame before's in
+    /// order, and can tell one inserted from one changed but not several.
+    /// As one drawing, the form is paired with itself however many entries
+    /// are filled in on one frame (a diagram's rows, as its drawing is
+    /// done), and so are the drawings after it: a frame repaints no more
+    /// than the form round what is being typed or has just been.
     fn form<Renderer: geometry::Renderer>(
         &self,
         kept: &Kept<Renderer>,
         renderer: &Renderer,
         size: Size,
         sheet: Key,
-        typing: &mut Frame<Renderer>,
         palette: &Palette,
-    ) -> Vec<Geometry<Renderer>> {
+    ) -> Geometry<Renderer> {
         let moment = self.sheet.showing.moment;
         let entries = self.entries();
         let plot = matches!(moment.phase, Phase::Plot(_)).then(|| self.plot_kept(kept, sheet.size));
@@ -1089,14 +1084,10 @@ impl<'a> Scene<'a> {
                     })
                     .collect::<Vec<usize>>()
             });
-        let lit = moment.focus().map(|focus| focus.part);
-        let mut pen = Pen::new(typing);
-        let mut layers = Vec::new();
-        let mut memos = kept.entries.borrow_mut();
-
-        while memos.len() < entries.len() {
-            memos.push(Memo::new());
-        }
+        let ended =
+            moment.local >= timeline::PLOT_START + self.sheet.showing.plot - plotter::motion::REST;
+        let mut filled = Vec::new();
+        let mut typing = Vec::new();
 
         for (index, &entry) in entries.iter().enumerate() {
             let since = match &plot {
@@ -1109,33 +1100,49 @@ impl<'a> Scene<'a> {
                 continue;
             }
 
-            let typed = (since * TYPING_RATE) as usize;
-            let ended = moment.local
-                >= timeline::PLOT_START + self.sheet.showing.plot - plotter::motion::REST;
-
-            if typed >= letters[index] || ended {
-                let key = (
-                    Key {
-                        focus: None,
-                        ..sheet
-                    },
-                    entry,
-                    lit.is_some_and(|part| entry == Entry::Row(part)),
-                );
-
-                layers.push(memos[index].draw(renderer, size, key, |frame| {
-                    let mut typing = Typing::new(entry, Typist::rate(f32::INFINITY, 1.0));
-
-                    self.plates(&mut Pen::new(frame), &mut typing, palette);
-                }));
+            if (since * TYPING_RATE) as usize >= letters[index] || ended {
+                filled.push(index);
             } else {
-                let mut typing = Typing::new(entry, Typist::rate(since, TYPING_RATE));
-
-                self.plates(&mut pen, &mut typing, palette);
+                typing.push((index, Typist::rate(since, TYPING_RATE)));
             }
         }
 
-        layers
+        // Each entry with a pen of its own, so it is drawn alike whatever
+        // is drawn with it.
+        let draw = |frame: &mut Frame<Renderer>, index: usize, typist: Typist| {
+            let mut typing = Typing::new(entries[index], typist);
+
+            self.plates(&mut Pen::new(frame), &mut typing, palette);
+        };
+        let whole = || Typist::rate(f32::INFINITY, 1.0);
+        let key = (
+            Key {
+                focus: None,
+                ..sheet
+            },
+            filled,
+            moment.focus().map(|focus| focus.part),
+        );
+
+        if typing.is_empty() {
+            kept.form.draw(renderer, size, key.clone(), |frame| {
+                for &index in &key.1 {
+                    draw(frame, index, whole());
+                }
+            })
+        } else {
+            let mut frame = Frame::new(renderer, size);
+
+            for &index in &key.1 {
+                draw(&mut frame, index, whole());
+            }
+
+            for (index, typist) in typing {
+                draw(&mut frame, index, typist);
+            }
+
+            frame.into_geometry()
+        }
     }
 
     /// The main view plotted `share` of the way: the buckets plotted whole,
@@ -2064,6 +2071,18 @@ mod tests {
         output: Output,
         local: f32,
     ) -> Sheet<'a> {
+        plotted_in(subjects, index, output, local, LENGTH)
+    }
+
+    /// A sheet of subject `index` on `output`, `local` seconds in, plotted
+    /// in `length` seconds.
+    fn plotted_in<'a>(
+        subjects: &'a [Box<dyn Subject>],
+        index: usize,
+        output: Output,
+        local: f32,
+        length: f32,
+    ) -> Sheet<'a> {
         let mut schedule = Schedule::new(
             subjects.iter().map(|s| s.card().parts.len()).collect(),
             0,
@@ -2074,7 +2093,7 @@ mod tests {
             subject: subjects[index].as_ref(),
             number: index + 1,
             of: subjects.len(),
-            showing: schedule.at(0, local, |_, _| LENGTH),
+            showing: schedule.at(0, local, |_, _| length),
             display: output.display,
             date: "2026-10-07",
         }
@@ -3111,40 +3130,51 @@ mod tests {
         assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
     }
 
-    /// Fails at the first frame of the plot of each of `names`, drawn `fps`
-    /// a second without the pen, that does not draw every pixel the frame
-    /// before it drew.
-    fn only_adds_ink(names: &[&str], fps: f32) {
+    /// Fails at the first frame of the plot of each of `names` on each of
+    /// `outputs`, in as long as it takes there, drawn `fps` a second
+    /// without the pen, that does not draw every pixel the frame before it
+    /// drew.
+    fn only_adds_ink(names: &[&str], outputs: &[Output], fps: f32) {
+        use crate::headless::Studio;
+
         let subjects = subjects::all(&Machine::fixture());
         let theme = Theme::TERMINAL;
         let void = theme.palette().void.into_rgba8();
-        let output = Output::LAPTOP;
-        let plotted = |index: usize, at: f32| {
-            crate::headless::screenshot(
-                Plotted {
-                    sheet: sheet(&subjects, index, output, at),
-                },
-                output.virtual_size(),
-                &theme,
-            )
-        };
 
-        for name in names {
-            let index = subjects::find(&subjects, name).expect("A subject");
-            let frames = ((timeline::PLOT_START + LENGTH) * fps) as usize;
-            let mut before = plotted(index, 0.0);
+        for &output in outputs {
+            let studio = Studio::new(&subjects, output, &theme, "2026-10-07").expect("A studio");
 
-            for frame in 1..frames {
-                let at = frame as f32 / fps;
-                let now = plotted(index, at);
-                let lost = before
-                    .chunks_exact(4)
-                    .zip(now.chunks_exact(4))
-                    .filter(|(then, now)| then[..] != void[..] && then != now)
-                    .count();
+            for name in names {
+                let index = subjects::find(&subjects, name).expect("A subject");
+                let length = studio.plot_length(index);
+                let plotted = |at: f32| {
+                    crate::headless::screenshot(
+                        Plotted {
+                            sheet: plotted_in(&subjects, index, output, at, length),
+                        },
+                        output.virtual_size(),
+                        &theme,
+                    )
+                };
+                let frames = ((timeline::PLOT_START + length) * fps) as usize;
+                let mut before = plotted(0.0);
 
-                assert!(lost == 0, "{name}, {at} s: {lost} pixels");
-                before = now;
+                for frame in 1..frames {
+                    let at = frame as f32 / fps;
+                    let now = plotted(at);
+                    let lost = before
+                        .chunks_exact(4)
+                        .zip(now.chunks_exact(4))
+                        .filter(|(then, now)| then[..] != void[..] && then != now)
+                        .count();
+
+                    assert!(
+                        lost == 0,
+                        "{name} on {}, {at} s: {lost} pixels",
+                        output.name()
+                    );
+                    before = now;
+                }
             }
         }
     }
@@ -3153,18 +3183,23 @@ mod tests {
     /// over a pixel a frame before it drew.
     #[test]
     fn ink_only_accumulates_during_the_plot() {
-        only_adds_ink(&["gears", "cooling"], 2.0);
+        only_adds_ink(&["gears", "cooling"], &[Output::LAPTOP], 2.0);
     }
 
-    /// On sheets of each kind, four frames a second.
+    /// On every sheet, on both outputs, four frames a second.
     #[test]
     #[ignore = "minutes: run with --release --ignored"]
-    fn ink_only_accumulates_on_every_kind_of_sheet() {
-        only_adds_ink(&["gears", "engine", "timer", "topology", "cooling"], 4.0);
+    fn ink_only_accumulates_on_every_sheet() {
+        let subjects = subjects::all(&Machine::fixture());
+        let names: Vec<&str> = subjects.iter().map(|subject| subject.name()).collect();
+
+        only_adds_ink(&names, &[Output::LAPTOP, Output::ULTRAWIDE], 4.0);
     }
 
     /// A plot is the same drawn by a studio that has drawn other sheets'
-    /// plots first as by a fresh one.
+    /// plots first, or a moment of the sheet's run, as by a fresh one: it is
+    /// worked out from the drawing as the plot leaves it, whichever frame
+    /// of the sheet comes first.
     #[test]
     fn a_plot_is_the_same_from_a_fresh_studio() {
         use crate::headless::Studio;
@@ -3180,6 +3215,9 @@ mod tests {
         }
 
         for first in [0, subjects.len() - 1] {
+            // Its subject moving, before its plot is drawn.
+            let _ = busy.frame(first, 30.0);
+
             for at in [2.0, 5.5] {
                 assert!(
                     busy.frame(first, at) == studio().frame(first, at),

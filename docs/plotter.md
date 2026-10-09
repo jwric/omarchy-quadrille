@@ -60,13 +60,13 @@ On a sheet's first frame, before the pen starts at 0.6 s:
    pace ([pacing](#pacing)).
 
 The plot depends only on the subject, which showing of it this is, the
-output's size and how long the schedule gave its plot, so every frame of it is
-a function of the time: there is no unseeded randomness, no iteration over a
-hash map, every sort key ends in stroke and mark indices, and time is
-accumulated in a fixed order. A frame finds its moment by a binary search over
-the pen's moves and works it out in closed form. A live sheet's drawing is
-frozen as it stood when its plot was worked out, so the kept drawings of its
-plot cannot change under it.
+output's size and calibration and how long the schedule gave its plot, so
+every frame of it is a function of the time: there is no unseeded randomness,
+no iteration over a hash map, every sort key ends in stroke and mark indices,
+and time is accumulated in a fixed order. A frame finds its moment by a binary
+search over the pen's moves and works it out in closed form. A live sheet's
+drawing is frozen as it stood when its plot was worked out, so the kept
+drawings of its plot cannot change under it.
 
 ### Ownership
 
@@ -305,8 +305,12 @@ part's row of the parts list as its balloon's number is drawn, the one
 signalling the other [33]; a view's name once its bodies are drawn; and the
 scale, sheet, date and who drew it, and the front view's name, when the
 drawing is done, as the draughtsman lays off the title and checks the drawing
-last [13]. Each entry is a drawing of its own once typed, so filling the form
-in over the whole plot repaints no more than typing it at the start would.
+last [13]. What is filled in is kept as one drawing, drawn again only as
+another entry is filled in, so filling the form in over the whole plot
+repaints no more than typing it at the start would. Kept as a drawing each,
+several entries filled in on one frame, as a diagram's rows are when its
+drawing is done, would have the renderer pair every drawing after them with
+another and repaint most of the output.
 
 ## How it fits the code
 
@@ -331,12 +335,13 @@ the screensaver works it out for each output from the size the sheet has on
 it.
 
 **Costs.** Working a plot out takes 0.2 to 3 ms on the sheet's first frame,
-and the schedule's asking how long a subject's plot takes on an output several
-milliseconds more, once for each subject and output. During the plot a frame
-draws only the bucket in progress and the pen; at the 95th percentile its
-repaint takes 0.5 to 0.9 ms and 8 to 13% of the laptop's output, and 0.8 to
-1.3 ms and 3 to 5% of the ultrawide's, within the budget of 1 ms and 15% on
-the laptop.
+and the schedule's asking how long a subject's plot takes on an output 1.5 to
+16 ms more, laying the sheet out to plot it, once for each subject and output,
+on the frame its first sheet there begins. During the plot a frame draws only
+the bucket in progress and the pen; at the 95th percentile its repaint takes
+0.5 to 0.9 ms and 8 to 13% of the laptop's output, and 0.8 to 1.3 ms and 3 to
+5% of the ultrawide's, within the budget of 1 ms and 15% on the laptop, and no
+frame of it repaints more than a quarter of either.
 
 **Tests.** The plot's tests hold, for every sheet on both outputs: that the
 last frame of the plot is the run's first, but for the traces that wait for
@@ -345,12 +350,15 @@ plot; that the plot ends on time, every stroke drawn and every bucket kept,
 the pen put away and its ink dry; that a plot takes as long as its work at the
 hand's pace, within its lengths, nearly every sheet of every kind of machine
 at that pace and none hurried by a third; that a plot is worked out alike
-every time and drawn alike by a fresh renderer; that a detail is drawn alike
-from any frame of it and ends on the settled detail; that the form fills in as
-the drawing proceeds; and that repainting what changed draws what a whole
-frame draws, through the plot, a detail and the wipe. Below them, the strokes
-ink exactly what their pieces paint, turned round or started anywhere, and the
-order and motion have tests of their own.
+every time; that a detail is drawn alike from any frame of it, but the
+cooling's, whose fans turn on from where they were last drawn, and ends on the
+settled detail; and that repainting what changed draws what a whole frame
+draws, through the plot, a detail and the wipe. On a drawing and a diagram, a
+plot is drawn alike by a fresh renderer and the form fills in as the drawing
+proceeds; on the 555, filling its rows in at once repaints less than a quarter
+of the output. Below them, the strokes ink exactly what their pieces paint,
+turned round or started anywhere, and the order and motion have tests of their
+own.
 
 **Not built.** Joining strokes whose ends touch into one motion, as vpype's
 `linemerge` and the AxiDraw do [27][4]; covering a network of lines with Euler

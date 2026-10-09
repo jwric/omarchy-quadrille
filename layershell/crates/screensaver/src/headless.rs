@@ -655,6 +655,35 @@ mod tests {
         repaints_as_drawn(0, Output::LAPTOP, end - 1.6..end, 10.0);
     }
 
+    /// Entries of the form filled in on one frame repaint the form round
+    /// them, not the sheet: the 555's rows, all filled in as its drawing is
+    /// done, leave the drawings after the form to pair with the frame
+    /// before's, as a surface draws them.
+    #[test]
+    fn filling_rows_in_at_once_repaints_only_the_form() {
+        load_fonts();
+
+        let subjects = crate::subjects::all(&Machine::fixture());
+        let theme = Theme::TERMINAL;
+        let first = crate::subjects::find(&subjects, "timer").expect("A subject");
+        let mut studio = Studio::new(&subjects, Output::LAPTOP, &theme, "2026-10-07").unwrap();
+        let end = timeline::PLOT_START + studio.plot_length(first);
+        // The last second of the plot, after a frame that repaints it all.
+        let from = ((end - 1.0) * 30.0) as usize;
+
+        for frame in from..(end * 30.0) as usize {
+            let at = frame as f32 / 30.0;
+            let _ = studio.draw(first, at);
+            let repaint = studio.present();
+
+            assert!(
+                frame == from || repaint.share < 0.25,
+                "{at:.3} s: {:.0}% repainted",
+                repaint.share * 100.0
+            );
+        }
+    }
+
     /// Every sheet's plot, on both outputs, at ten frames a second; and its
     /// first detail.
     #[test]
