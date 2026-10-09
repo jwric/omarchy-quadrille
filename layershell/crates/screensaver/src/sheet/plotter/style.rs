@@ -9,6 +9,7 @@
 use crate::draft::Tone;
 
 use super::super::timeline;
+use super::motion;
 
 /// How the pen plots a sheet.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,6 +80,10 @@ pub struct PlotStyle {
     /// Whether a compass is seen drawing a circle or an arc: an arm from
     /// its point at the centre out to the pen.
     pub compass: bool,
+    /// Seconds the pen's moves up are seen behind it, dotted in the accent
+    /// from where each began, as a plotter's preview shows them; none if
+    /// nought.
+    pub trail: f32,
     /// Whether the title block, the notes and the parts list fill in as the
     /// drawing proceeds, as a draughtsman fills in a printed form, rather
     /// than typing themselves in first.
@@ -207,6 +212,8 @@ pub enum Wipe {
     /// The pen's carriage sweeping it from where it is parked, easing in
     /// and out.
     Sweep,
+    /// A line crossing it from its edge, easing in and out.
+    Eased,
 }
 
 /// What the pen draws first.
@@ -239,6 +246,17 @@ pub enum Lining {
 const FRAME: f32 = 1.0 / 30.0;
 
 impl PlotStyle {
+    /// Seconds at the end of the plot the pen is gone: [`motion::REST`],
+    /// or longer if the ink it leaves wet, or its trail, would not
+    /// otherwise be gone by the frame before the subject's run begins, with
+    /// a moment to spare, so the plot's last frame is the run's first.
+    pub fn rest(&self) -> f32 {
+        /// The moment to spare.
+        const SPARE: f32 = 0.01;
+
+        motion::REST.max(self.wet.max(self.trail) + FRAME + SPARE)
+    }
+
     /// The plot as it was before the pen was planned.
     pub const TODAY: Self = Self {
         name: "today",
@@ -268,6 +286,7 @@ impl PlotStyle {
         grow: false,
         wet: 0.0,
         compass: false,
+        trail: 0.0,
         fills: false,
     };
 
@@ -324,6 +343,7 @@ impl PlotStyle {
         grow: false,
         wet: 0.0,
         compass: false,
+        trail: 0.0,
         fills: false,
     };
 
@@ -379,11 +399,18 @@ impl PlotStyle {
         grow: true,
         wet: 0.05,
         compass: true,
+        trail: 0.0,
         fills: true,
     };
 
-    /// A quick study: the skeleton, then each part whole in eased strokes,
-    /// its words typed in a burst.
+    /// A quick study: the skeleton, then each part whole, its lining, its
+    /// dimensions and its balloon with it, then what belongs to none (a
+    /// diagram grown from its first part along its wires); in strokes eased
+    /// as wholes, the pen hopping from one to the next and its words typed
+    /// in a burst, a comet of wet ink and dotted hops behind it. It starts
+    /// at its first stroke and lifts off its last as the subject's run
+    /// begins; it plots the details the same way, and the sheet is wiped by
+    /// a line easing across it.
     pub const QUICK: Self = Self {
         name: "quick",
         length: 6.0,
@@ -399,7 +426,7 @@ impl PlotStyle {
         lining: Lining::Diagonals,
         glyphs: Glyphs::Touched,
         circles: Circles::Seamed,
-        polish: false,
+        polish: true,
         traces_wait: true,
         lettering: 150.0,
         drop: None,
@@ -411,13 +438,17 @@ impl PlotStyle {
         from_home: false,
         park: false,
         head: true,
+        // No carriage ticks: with the comet and the hops changing round the
+        // pen, the ticks above and below it are repainted with them as one
+        // strip the height of the sheet, past the plot's share of a frame.
         ticks: false,
         gantry: false,
-        details: false,
-        wipe: Wipe::Line,
-        grow: false,
-        wet: 0.0,
+        details: true,
+        wipe: Wipe::Eased,
+        grow: true,
+        wet: 0.12,
         compass: false,
+        trail: 0.12,
         fills: false,
     };
 

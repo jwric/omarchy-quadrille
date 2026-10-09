@@ -23,7 +23,8 @@ use super::strokes::{Form, Stroke};
 use super::style::{Carousel, Easing, Glyphs, Motion, Physics, PlotStyle};
 
 /// Seconds at the end of a plot the pen is gone, so its last frames show
-/// the drawing as the subject's run begins.
+/// the drawing as the subject's run begins: at the least (see
+/// [`PlotStyle::rest`]).
 pub const REST: f32 = 0.1;
 /// Seconds the pen waits at home once it is parked.
 pub const HOLD: f64 = 0.2;
@@ -299,7 +300,8 @@ fn point(pixel: Point<i32>) -> DVec2 {
     DVec2::new(f64::from(pixel.x), f64::from(pixel.y))
 }
 
-fn pixel(point: DVec2) -> Point<i32> {
+/// The pixel nearest `point`.
+pub fn pixel(point: DVec2) -> Point<i32> {
     Point::new(point.x.round() as i32, point.y.round() as i32)
 }
 
@@ -371,9 +373,9 @@ pub struct Place {
 
 impl Motions {
     /// The pen's work drawing `strokes`, each after `gaps`, as `style`
-    /// moves, fitted to the style's length but its last [`REST`]; home, its
-    /// carousel and where it parks, is `home`. Lengths and speeds are scaled
-    /// by `scale`.
+    /// moves, fitted to the style's length but its
+    /// [rest](PlotStyle::rest); home, its carousel and where it parks, is
+    /// `home`. Lengths and speeds are scaled by `scale`.
     pub fn plan(
         style: &PlotStyle,
         strokes: &[Stroke],
@@ -441,7 +443,39 @@ impl Motions {
             plan.still(Pose::Up, HOLD);
         }
 
-        plan.fit(f64::from(style.length - REST))
+        plan.fit(f64::from(style.length - style.rest()))
+    }
+
+    /// The pen's moves up between `from` and `to` seconds into the plot:
+    /// where each began and ended, and how far along it the pen was at
+    /// `from` and at `to`, from nought to one.
+    pub fn travels(&self, from: f64, to: f64) -> Vec<(DVec2, DVec2, f64, f64)> {
+        let first = self.ops.partition_point(|op| op.start + op.time <= from);
+
+        self.ops[first..]
+            .iter()
+            .take_while(|op| op.start < to)
+            .filter_map(|op| {
+                let Act::Travel {
+                    from: start,
+                    to: end,
+                    run,
+                } = &op.act
+                else {
+                    return None;
+                };
+                let length = start.distance(*end);
+                let along = |time: f64| {
+                    if length > 0.0 {
+                        run.at((time - op.start).clamp(0.0, op.time) * self.k) / length
+                    } else {
+                        1.0
+                    }
+                };
+
+                Some((*start, *end, along(from), along(to)))
+            })
+            .collect()
     }
 
     /// Where the pen is `time` seconds into the plot, drawing `strokes`.

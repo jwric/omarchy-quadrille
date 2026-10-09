@@ -375,10 +375,10 @@ where
 
         layers.push(frame.into_geometry());
 
-        // The ink still wet behind the pen, and the compass drawing a
-        // circle with it, over what moves: each a layer of its own every
-        // frame, empty when there is none, so the others pair with the
-        // frame before's as they are.
+        // The ink still wet behind the pen, the trail of its moves up, and
+        // the compass drawing a circle with it, over what moves: each a
+        // layer of its own every frame, empty when there is none, so the
+        // others pair with the frame before's as they are.
         if self.plot.wet > 0.0 {
             let mut wet = Frame::new(renderer, bounds.size());
 
@@ -391,6 +391,20 @@ where
             }
 
             layers.push(wet.into_geometry());
+        }
+
+        if self.plot.trail > 0.0 {
+            let mut trail = Frame::new(renderer, bounds.size());
+
+            if let Some((plot, _, share)) = &plotting {
+                plotter::pen::trail(
+                    &mut Pen::new(&mut trail),
+                    &plot.trail(*share, self.plot.trail),
+                    palette,
+                );
+            }
+
+            layers.push(trail.into_geometry());
         }
 
         if self.plot.compass {
@@ -1132,7 +1146,7 @@ impl<'a> Scene<'a> {
             }
 
             let typed = (since * TYPING_RATE) as usize;
-            let ended = moment.local >= timeline::PLOT_START + style.length - plotter::motion::REST;
+            let ended = moment.local >= timeline::PLOT_START + style.length - style.rest();
 
             if typed >= letters[index] || ended {
                 let key = (
@@ -1267,15 +1281,16 @@ impl<'a> Scene<'a> {
         };
         let border = self.layout.border;
         let (left, top, height) = (border.x + 1, border.y + 1, border.height - 2);
+        let eased = share * share * (3.0 - 2.0 * share);
         let x = match self.sheet.plot.wipe {
             Wipe::Line => left + ((border.width - 2) as f32 * share) as i32,
             // From the parked pen, eased in and out.
             Wipe::Sweep => {
                 let from = self.home().x;
-                let eased = share * share * (3.0 - 2.0 * share);
 
                 from + ((left + border.width - 2 - from) as f32 * eased) as i32
             }
+            Wipe::Eased => left + ((border.width - 2) as f32 * eased) as i32,
         };
         let mut geometries = Vec::new();
 
@@ -3396,9 +3411,9 @@ mod tests {
     }
 
     /// Fails at the first frame of a plot in each of `styles`, of each of
-    /// `names`, drawn `fps` a second with the pen hidden (its head, and the
-    /// ink it leaves wet and its compass), that does not draw every pixel
-    /// the frame before it drew.
+    /// `names`, drawn `fps` a second with the pen hidden (its head, the ink
+    /// it leaves wet, its trail and its compass), that does not draw every
+    /// pixel the frame before it drew.
     fn only_adds_ink(styles: &[PlotStyle], names: &[&str], fps: f32) {
         use crate::headless::Studio;
 
@@ -3410,6 +3425,7 @@ mod tests {
             let style = PlotStyle {
                 head: false,
                 wet: 0.0,
+                trail: 0.0,
                 compass: false,
                 ..style
             };
@@ -3499,7 +3515,7 @@ mod tests {
         let subjects = subjects::all(&Machine::fixture());
         let theme = Theme::TERMINAL;
 
-        for style in [PlotStyle::CAROUSEL, PlotStyle::DRAFTING] {
+        for style in [PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK] {
             let studio = || {
                 Studio::new(&subjects, Output::LAPTOP, &theme, "2026-10-07")
                     .expect("A studio")
@@ -3577,11 +3593,11 @@ mod tests {
         let subjects = subjects::all(&Machine::fixture());
         let theme = Theme::TERMINAL;
 
-        for (style, output) in [PlotStyle::CAROUSEL, PlotStyle::DRAFTING]
+        for (style, output) in [PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK]
             .into_iter()
             .flat_map(|style| [(style, Output::LAPTOP), (style, Output::ULTRAWIDE)])
         {
-            // The pen home and gone, just before the detail settles.
+            // The pen gone, just before the detail settles.
             let local = timeline::PLOT_START
                 + style.length
                 + timeline::SETTLE

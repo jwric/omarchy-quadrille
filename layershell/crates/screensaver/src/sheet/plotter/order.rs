@@ -18,6 +18,9 @@
 //! balloon from the dot on its part outwards. A diagram it grows: from its
 //! first part along what touches it, each part drawn whole with its
 //! lettering as the pen reaches it, what joins two parts drawn on the way.
+//! A quick study ([`Order::Parts`]) lays the skeleton down and draws its
+//! balloons as a drafting office does, and grows a diagram the same way,
+//! each part with all that is said of it.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use glam::DVec2;
@@ -85,6 +88,14 @@ pub mod stage {
     pub const ANNOTATION: u8 = 3;
     pub const TRACES: u8 = 4;
     pub const BALLOONS: u8 = 5;
+}
+
+/// A quick study's stages: the skeleton as a drafting office lays it down,
+/// each part whole, and what is said of none.
+mod study {
+    pub const SKELETON: u8 = super::stage::SKELETON;
+    pub const PARTS: u8 = 1;
+    pub const REST: u8 = 2;
 }
 
 /// Pairs of marks that touch on the sheet, each the lower index first.
@@ -156,7 +167,7 @@ pub fn order(
 ) -> Ordered {
     let mut groups = group(style, strokes, marks);
 
-    if style.order == Order::Stages {
+    if matches!(style.order, Order::Stages | Order::Parts) {
         axes(&mut groups);
 
         for group in &mut groups {
@@ -166,7 +177,7 @@ pub fn order(
         }
 
         if let Some(touching) = touching {
-            grow(&mut groups, marks, touching);
+            grow(&mut groups, marks, touching, style.order);
         }
     }
 
@@ -330,12 +341,12 @@ fn key(order: Order, meta: &Meta, tone: Tone) -> Key {
             };
 
             match part {
-                _ if skeleton => (0, 0, 0, 0, 0),
-                Some(part) => (1, rank(Some(part)), 0, sub, 0),
+                _ if skeleton => (study::SKELETON, 0, 0, 0, 0),
+                Some(part) => (study::PARTS, rank(Some(part)), 0, sub, 0),
                 // What belongs to no part: its line work before the parts,
                 // what is said about it after them.
-                None if sub >= 3 => (2, meta.pane as u32, 0, sub, 0),
-                None => (1, 0, 0, sub, 0),
+                None if sub >= 3 => (study::REST, meta.pane as u32, 0, sub, 0),
+                None => (study::PARTS, 0, 0, sub, 0),
             }
         }
     }
@@ -551,32 +562,69 @@ enum Node {
 /// what led to it; a mark of no part (a wire, a junction, a legend on a
 /// wire) as it is crossed. Parts are taken by their ranks, then what joins
 /// them left to right. What the walk never reaches of the bodies is drawn
-/// after it, and the rest keeps its stage.
-fn grow(groups: &mut [Group], marks: &[Meta], touching: &Touching) {
+/// after it, and the rest keeps its stage. In a quick study, `order`
+/// [`Order::Parts`], a part is drawn with all that is said of it, its
+/// dimensions and its balloon too, though what they cross does not lead
+/// the walk on.
+fn grow(groups: &mut [Group], marks: &[Meta], touching: &Touching, order: Order) {
+    let study = order == Order::Parts;
     // What each mark is drawn as in the walk, and where in its node: a
-    // part's lines, its lining, what it traces still, its lettering; and
-    // whether it is drawn if the walk never reaches it.
-    let walked = |mark: usize, key: Key| -> Option<(Node, u32, bool)> {
+    // part's lines, its lining, what it traces still, its lettering, and in
+    // a quick study what else is said of it and its balloon; whether it is
+    // drawn if the walk never reaches it; and whether what it touches leads
+    // the walk on.
+    let walked = |mark: usize, key: Key| -> Option<(Node, u32, bool, bool)> {
         let meta = &marks[mark];
         let label = meta.pass == Pass::Annotation && meta.label;
 
+        if key.0 == stage::SKELETON {
+            return None;
+        }
+
+        if study {
+            let part = match meta.pass {
+                Pass::Balloons => meta.item.map(|item| item.saturating_sub(1)),
+                _ => meta.part,
+            };
+
+            return match (part, meta.pass) {
+                (Some(part), Pass::Construction | Pass::Edges | Pass::Hidden) => {
+                    Some((Node::Part(part), body(meta), true, true))
+                }
+                (Some(part), Pass::Areas) => Some((Node::Part(part), 4, true, true)),
+                (Some(part), Pass::Traces) => Some((Node::Part(part), 5, true, true)),
+                (Some(part), Pass::Annotation) if label => Some((Node::Part(part), 7, true, true)),
+                (Some(part), Pass::Annotation) => Some((Node::Part(part), 6, true, false)),
+                (Some(part), Pass::Balloons) => Some((Node::Part(part), 8, true, false)),
+                (None, Pass::Construction | Pass::Edges | Pass::Hidden) => {
+                    Some((Node::Mark(mark), body(meta), true, true))
+                }
+                (None, Pass::Annotation) if label => Some((Node::Mark(mark), 7, false, true)),
+                (None, Pass::Traces) if meta.line.is_none() => {
+                    Some((Node::Mark(mark), 5, false, true))
+                }
+                _ => None,
+            };
+        }
+
         match (meta.part, key.0) {
-            (_, stage::SKELETON) => None,
             (Some(part), stage::BODIES) if meta.cuts.is_none() => {
-                Some((Node::Part(part), body(meta), true))
+                Some((Node::Part(part), body(meta), true, true))
             }
-            (Some(part), stage::LINING) => Some((Node::Part(part), 4, true)),
-            (Some(part), stage::TRACES) => Some((Node::Part(part), 5, true)),
-            (Some(part), stage::ANNOTATION) if label => Some((Node::Part(part), 6, true)),
+            (Some(part), stage::LINING) => Some((Node::Part(part), 4, true, true)),
+            (Some(part), stage::TRACES) => Some((Node::Part(part), 5, true, true)),
+            (Some(part), stage::ANNOTATION) if label => Some((Node::Part(part), 6, true, true)),
             (None, stage::BODIES) if meta.cuts.is_none() => {
-                Some((Node::Mark(mark), body(meta), true))
+                Some((Node::Mark(mark), body(meta), true, true))
             }
-            (None, stage::ANNOTATION) if label => Some((Node::Mark(mark), 6, false)),
-            (None, stage::TRACES) if meta.line.is_none() => Some((Node::Mark(mark), 5, false)),
+            (None, stage::ANNOTATION) if label => Some((Node::Mark(mark), 6, false, true)),
+            (None, stage::TRACES) if meta.line.is_none() => {
+                Some((Node::Mark(mark), 5, false, true))
+            }
             _ => None,
         }
     };
-    let mut nodes: BTreeMap<usize, (Node, u32, bool)> = BTreeMap::new();
+    let mut nodes: BTreeMap<usize, (Node, u32, bool, bool)> = BTreeMap::new();
     // The top left of each node.
     let mut corners: BTreeMap<Node, (i32, i32)> = BTreeMap::new();
 
@@ -597,7 +645,7 @@ fn grow(groups: &mut [Group], marks: &[Meta], touching: &Touching) {
     let mut joins: BTreeMap<Node, BTreeSet<Node>> = BTreeMap::new();
 
     for &(a, b) in touching {
-        if let (Some(&(a, ..)), Some(&(b, ..))) = (nodes.get(&a), nodes.get(&b))
+        if let (Some(&(a, .., true)), Some(&(b, .., true))) = (nodes.get(&a), nodes.get(&b))
             && a != b
         {
             joins.entry(a).or_default().insert(b);
@@ -673,15 +721,17 @@ fn grow(groups: &mut [Group], marks: &[Meta], touching: &Touching) {
         places.insert(node, place);
     }
 
+    let walking = if study { study::PARTS } else { stage::BODIES };
+
     for group in groups.iter_mut() {
-        let Some(&(node, within, always)) = nodes.get(&group.strokes[0].mark) else {
+        let Some(&(node, within, always, _)) = nodes.get(&group.strokes[0].mark) else {
             continue;
         };
 
         match places.get(&node) {
-            Some(&(step, index)) => group.key = (stage::BODIES, 0, step, index, within),
+            Some(&(step, index)) => group.key = (walking, 0, step, index, within),
             // A line of no part the walk never reached, after it.
-            None if always => group.key = (stage::BODIES, 0, count + 2, 0, within),
+            None if always => group.key = (walking, 0, count + 2, 0, within),
             None => {}
         }
     }
@@ -1143,6 +1193,38 @@ mod tests {
         );
     }
 
+    /// A quick study lays the skeleton down, then draws each part whole in
+    /// the order of the parts (its lines, the lines hidden behind it, its
+    /// lining, what is said of it, its balloon), then what is said of no
+    /// part.
+    #[test]
+    fn a_quick_study_draws_each_part_whole() {
+        let meta = |pass, line, part, item| Meta {
+            pass,
+            line,
+            part,
+            item,
+            ..EDGE
+        };
+        let marks = [
+            meta(Pass::Annotation, None, None, None),
+            meta(Pass::Balloons, None, None, Some(2)),
+            meta(Pass::Annotation, None, Some(1), None),
+            meta(Pass::Areas, None, Some(0), None),
+            meta(Pass::Edges, Some(Line::Outline), Some(1), None),
+            meta(Pass::Balloons, None, None, Some(1)),
+            meta(Pass::Edges, Some(Line::Outline), Some(0), None),
+            meta(Pass::Construction, Some(Line::Centre), Some(1), None),
+            meta(Pass::Hidden, Some(Line::Hidden), Some(0), None),
+        ];
+        let strokes = (0..marks.len())
+            .map(|mark| line(mark, (mark as i32 * 10, 0), (mark as i32 * 10, 5)))
+            .collect();
+        let ordered = order(&PlotStyle::QUICK, strokes, &marks, Point::new(0, 0), None);
+
+        assert_eq!(drawn(&ordered), [7, 6, 8, 3, 5, 4, 2, 1, 0]);
+    }
+
     /// The pen's journey from `from` through `strokes` and on to `to`.
     fn journey(strokes: &[Stroke], from: Point<i32>, to: Option<Point<i32>>) -> f64 {
         let mut pen = place(from);
@@ -1496,5 +1578,75 @@ mod tests {
                 Gap::Cluster
             ]
         );
+    }
+
+    /// A quick study grows a diagram as a drafting office does, each part
+    /// drawn with all that is said of it; what is said of a part goes with
+    /// it but does not lead the walk on to what it crosses.
+    #[test]
+    fn a_quick_study_grows_a_diagram_with_all_said_of_each_part() {
+        let boxed = |part| Meta {
+            curved: true,
+            part: Some(part),
+            ..EDGE
+        };
+        let label = |part| Meta {
+            pass: Pass::Annotation,
+            line: None,
+            part: Some(part),
+            label: true,
+            ..EDGE
+        };
+        let dimension = Meta {
+            pass: Pass::Annotation,
+            line: None,
+            part: Some(0),
+            ..EDGE
+        };
+        let lettered = |mark, at: (i32, i32)| {
+            let mut stroke = line(mark, at, (at.0 + 4, at.1));
+            stroke.form = Form::Glyph;
+            stroke
+        };
+        let marks = [
+            boxed(0),
+            label(0),
+            EDGE,
+            boxed(1),
+            label(1),
+            EDGE,
+            boxed(2),
+            boxed(2),
+            EDGE,
+            label(2),
+            EDGE,
+            dimension,
+        ];
+        let strokes = vec![
+            square(0, (0, 0), 20),
+            lettered(1, (5, 8)),
+            line(2, (21, 10), (59, 10)),
+            square(3, (60, 0), 20),
+            lettered(4, (65, 8)),
+            line(5, (70, 21), (70, 59)),
+            square(6, (60, 60), 20),
+            square(7, (120, 60), 20),
+            line(8, (81, 70), (119, 70)),
+            lettered(9, (65, 68)),
+            line(10, (300, 300), (320, 300)),
+            line(11, (0, 25), (20, 25)),
+        ];
+        let touching: Touching = [(0, 2), (2, 3), (3, 5), (5, 6), (6, 8), (7, 8), (10, 11)]
+            .into_iter()
+            .collect();
+        let ordered = order(
+            &PlotStyle::QUICK,
+            strokes,
+            &marks,
+            Point::new(0, 0),
+            Some(&touching),
+        );
+
+        assert_eq!(drawn(&ordered), [0, 11, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 }

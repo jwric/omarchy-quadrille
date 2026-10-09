@@ -4,9 +4,11 @@
 //! round it on the view, goes to the circle's letter and letters it, then
 //! goes to the detail's window and plots the view there: its boundary
 //! circle, then the magnified marks in the style's order, nearest first;
-//! and goes home. Its work is planned once, from the drawing as it stands
-//! when the part is picked out, and fitted to the time the sheet gives the
-//! circle and the view.
+//! and goes home. A pen that does not start from home starts on the
+//! circle, where it is nearest the letter, and one that does not go home
+//! lifts off the view's last mark. Its work is planned once, from the
+//! drawing as it stands when the part is picked out, and fitted to the
+//! time the sheet gives the circle and the view.
 //!
 //! The part may move while it is plotted, and the detail with it, so the
 //! plan keeps each stroke by what it draws, not by its pixels: a piece of a
@@ -119,20 +121,33 @@ impl Detail {
         let mut ring = sketch.ring;
 
         if !matches!(ring.form, Form::Circle(_)) {
-            // Started where it is nearest the pen.
-            let home = sketch.home;
+            // Started where it is nearest the pen coming from home, or
+            // else where the pen goes on to its letter soonest.
+            let near = if style.from_home {
+                sketch.home
+            } else {
+                sketch.letter
+            };
             let seam = (0..ring.pixels.len())
                 .min_by_key(|&index| {
                     let pixel = ring.pixels[index];
 
-                    ((pixel.x - home.x).pow(2) + (pixel.y - home.y).pow(2), index)
+                    ((pixel.x - near.x).pow(2) + (pixel.y - near.y).pow(2), index)
                 })
                 .unwrap_or(0);
 
             ring.rotate(seam);
         }
 
-        let mut plan = Planner::new(style, scale, sketch.home);
+        let mut plan = Planner::new(
+            style,
+            scale,
+            if style.from_home {
+                sketch.home
+            } else {
+                ring.start()
+            },
+        );
 
         plan.stroke(0, &ring);
         plan.go(sketch.letter);
@@ -210,8 +225,10 @@ impl Detail {
             plan.stroke(index, stroke);
         }
 
-        plan.go(sketch.home);
-        plan.still(Pose::Up, HOLD);
+        if style.park {
+            plan.go(sketch.home);
+            plan.still(Pose::Up, HOLD);
+        }
 
         Self {
             ring,
@@ -531,6 +548,44 @@ mod tests {
 
         assert_eq!(settled.head, None);
         assert_eq!(settled.window, 1.0);
+        assert!(ids.iter().all(|id| detail.drawn(&settled, *id) == 1.0));
+    }
+
+    /// A pen that neither starts from home nor goes back to it starts on
+    /// the circle, where it is nearest the letter, and lifts off the view
+    /// with all of it drawn, never going home.
+    #[test]
+    fn a_quick_studys_pen_starts_on_the_circle_and_lifts_off_the_view() {
+        let style = PlotStyle::QUICK;
+        let sketch = sketch(&style);
+        let (home, letter) = (sketch.home, sketch.letter);
+        let nearest = sketch
+            .ring
+            .pixels
+            .iter()
+            .copied()
+            .min_by_key(|pixel| (pixel.x - letter.x).pow(2) + (pixel.y - letter.y).pow(2))
+            .expect("A circle");
+        let detail = Detail::new(&style, sketch, 1.0);
+        let ids = [(OUTLINE, 0, 0), (LABEL, 0, 0), (LABEL, 0, 1)];
+
+        assert_eq!(
+            detail.at(0.0).head,
+            Some(Head {
+                at: nearest,
+                pose: Pose::Down
+            })
+        );
+
+        for frame in 0..=63 {
+            let head = detail.at(frame as f32 / 30.0).head;
+
+            assert!(head.is_none_or(|head| head.at != home), "{frame}");
+        }
+
+        let settled = detail.at(MARK + DETAIL_PLOT - REST / 2.0);
+
+        assert_eq!(settled.head, None);
         assert!(ids.iter().all(|id| detail.drawn(&settled, *id) == 1.0));
     }
 

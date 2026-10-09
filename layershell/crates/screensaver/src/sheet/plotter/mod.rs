@@ -99,6 +99,10 @@ pub struct Plot {
     clip: Rectangle<i32>,
     /// The centre of each mark a compass draws, by its index.
     compasses: Vec<Option<Point<i32>>>,
+    /// The shortest move up its trail shows, in pixels, and where the
+    /// finished drawing is, which the trail keeps off.
+    trailed: f64,
+    near: Option<Near>,
     pub cues: Cues,
     pub stats: Stats,
 }
@@ -247,6 +251,8 @@ impl Plot {
             buckets,
             clip: paper.clip,
             compasses: Vec::new(),
+            trailed: 0.0,
+            near: None,
             cues: Cues::default(),
         }
     }
@@ -362,6 +368,8 @@ impl Plot {
             }
         }
 
+        // What the trail of the pen's moves up keeps off.
+        let near = (style.trail > 0.0).then(|| Near::new(&ordered.strokes, paper.size));
         let compasses = metas
             .iter()
             .map(|meta| {
@@ -381,6 +389,14 @@ impl Plot {
             buckets,
             clip: paper.clip,
             compasses,
+            // The moves the pen is seen to make, given a frame or more: not
+            // the darts between the strokes of close work, a row of small
+            // parts, whose dots would only speckle it.
+            trailed: match style.motion {
+                Motion::Eased(easing) => f64::from(easing.long) * scale,
+                Motion::Physical(_) | Motion::Reveal => 0.0,
+            },
+            near,
             stats,
         }
     }
@@ -480,6 +496,54 @@ impl Plot {
             .collect()
     }
 
+    /// Where the pen has been carried up in the last `seconds` before
+    /// `share` of the plot's time is gone, as far as it has gone: one
+    /// pixel in three of each move it is seen to make, counted from where
+    /// the move began, over the bare paper, and none within the head's
+    /// reach. They come in stretches of each move, so those it has passed
+    /// whole stay the same from frame to frame until they fade.
+    pub fn trail(&self, share: f32, seconds: f32) -> Vec<Vec<Point<i32>>> {
+        /// How many dots a stretch has, and how many pixels short of the
+        /// head the dots stop.
+        const STRETCH: usize = 8;
+        const CLEAR: usize = 3;
+
+        let Work::Pen {
+            motions, length, ..
+        } = &self.work
+        else {
+            return Vec::new();
+        };
+        let time = f64::from(share) * length;
+
+        motions
+            .travels(time - f64::from(seconds), time)
+            .into_iter()
+            .filter(|(start, end, ..)| start.distance(*end) >= self.trailed)
+            .flat_map(|(start, end, then, now)| {
+                let pixels = quadrille::draw::shape::line(motion::pixel(start), motion::pixel(end));
+                let last = (pixels.len() - 1) as f64;
+                let (tail, head) = ((then * last).ceil() as usize, (now * last).floor() as usize);
+                let dots: Vec<(usize, Point<i32>)> = pixels
+                    .into_iter()
+                    .enumerate()
+                    .skip(tail)
+                    .take_while(|(index, _)| index + CLEAR <= head)
+                    .filter(|(index, pixel)| index % 3 == 2 && self.bare(*pixel))
+                    .collect();
+
+                dots.chunk_by(|a, b| a.0 / (3 * STRETCH) == b.0 / (3 * STRETCH))
+                    .map(|stretch| stretch.iter().map(|(_, pixel)| *pixel).collect())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Whether `pixel` is bare paper, clear of the finished drawing.
+    fn bare(&self, pixel: Point<i32>) -> bool {
+        self.near.as_ref().is_none_or(|near| !near.at(pixel))
+    }
+
     /// Where the point of the compass is at `now`, if one is drawing.
     pub fn compass(&self, now: &Now) -> Option<Point<i32>> {
         let (Work::Pen { strokes, .. }, Progress::Pen { drawing, .. }) = (&self.work, now.progress)
@@ -554,6 +618,56 @@ impl Plot {
             }
             _ => unreachable!("a plot's moment is its own"),
         }
+    }
+}
+
+/// Where a sheet's finished drawing is, and the paper near it: what the
+/// trail of the pen's moves up keeps off. A dot on the drawing, or beside
+/// it, would read as part of it, and a move along a line just drawn (from
+/// one end of a dimension to the other, a row of its arrowhead apart) would
+/// draw a dotted shadow of the line.
+struct Near {
+    width: i32,
+    near: Vec<bool>,
+}
+
+impl Near {
+    /// How many pixels from the drawing count as near it.
+    const REACH: i32 = 3;
+
+    /// Where `strokes` ink on a sheet of `size`, and the paper near it.
+    fn new(strokes: &[Stroke], size: (i32, i32)) -> Self {
+        let (width, height) = (size.0.max(0), size.1.max(0));
+        let mut near = vec![false; (width * height) as usize];
+
+        for pixel in strokes
+            .iter()
+            .flat_map(|stroke| stroke.inked(0..stroke.pixels.len()))
+        {
+            for y in (pixel.y - Self::REACH).max(0)..=(pixel.y + Self::REACH).min(height - 1) {
+                let row = (y * width) as usize;
+                let (left, right) = (
+                    (pixel.x - Self::REACH).max(0),
+                    (pixel.x + Self::REACH).min(width - 1),
+                );
+
+                if left <= right {
+                    near[row + left as usize..=row + right as usize].fill(true);
+                }
+            }
+        }
+
+        Self { width, near }
+    }
+
+    /// Whether `pixel` is on the drawing or near it.
+    fn at(&self, pixel: Point<i32>) -> bool {
+        (0..self.width).contains(&pixel.x)
+            && pixel.y >= 0
+            && self
+                .near
+                .get((pixel.y * self.width + pixel.x) as usize)
+                .is_some_and(|near| *near)
     }
 }
 
@@ -761,7 +875,7 @@ mod tests {
     /// The share of the plot gone at each frame of it a surface shows at
     /// thirty frames a second, until the pen is put away.
     fn frames(style: &PlotStyle, parts: usize) -> impl Iterator<Item = (f32, f32)> {
-        let end = timeline::PLOT_START + style.length - motion::REST;
+        let end = timeline::PLOT_START + style.length - style.rest();
         let style = *style;
 
         (0..)
@@ -803,6 +917,10 @@ mod tests {
             let at = |share: f32| plot.at(share);
             let last = 1.0 - 1.0 / (30.0 * style.length);
             let what = format!("{name} on {}, {}", output.name(), style.name);
+
+            // Its ink dry, and its trail gone.
+            assert!(plot.wet(last, style.wet).is_empty(), "{what}");
+            assert!(plot.trail(last, style.trail).is_empty(), "{what}");
 
             for now in [at(1.0), at(last)] {
                 assert_eq!(now.kept, plot.buckets.len(), "{what}");
@@ -880,13 +998,13 @@ mod tests {
             .collect()
     }
 
-    /// A drafting office's sheets of each kind, plotted on the laptop.
-    fn drafted(each: impl Fn(&str, usize, &Plot)) {
+    /// Sheets of each kind plotted on the laptop in `style`.
+    fn sheets(style: PlotStyle, each: impl Fn(&str, usize, &Plot)) {
         let subjects = crate::subjects::all(&Machine::fixture());
         let theme = quadrille::Theme::TERMINAL;
         let studio = Studio::new(&subjects, Output::LAPTOP, &theme, "2026-10-07")
             .expect("A studio")
-            .plotting(PlotStyle::DRAFTING);
+            .plotting(style);
 
         for name in ["gears", "engine", "topology"] {
             let index = crate::subjects::find(&subjects, name).expect("A subject");
@@ -899,35 +1017,93 @@ mod tests {
         }
     }
 
+    /// A drafting office's sheets of each kind, plotted on the laptop.
+    fn drafted(each: impl Fn(&str, usize, &Plot)) {
+        sheets(PlotStyle::DRAFTING, each);
+    }
+
     /// The ink still wet on each frame is what the pen has inked in the
     /// style's moment before it: all it has newly inked, and nothing it has
     /// not inked (a letter's strokes may cross, inking a pixel again).
     #[test]
     fn the_wet_ink_is_what_was_inked_last() {
-        let style = PlotStyle::DRAFTING;
+        for style in [PlotStyle::DRAFTING, PlotStyle::QUICK] {
+            sheets(style, |name, parts, plot| {
+                let what = |local: f32| format!("{name}, {}, at {local} s", style.name);
+                let mut seen = 0;
 
-        drafted(|name, parts, plot| {
+                for (local, share) in frames(&style, parts) {
+                    let then = share - style.wet / style.length;
+                    let (now, before) = (inked(plot, share), inked(plot, then.max(0.0)));
+                    let fresh: Vec<&(i32, i32)> = now.difference(&before).collect();
+                    let wet: std::collections::BTreeSet<(i32, i32)> = plot
+                        .wet(share, style.wet)
+                        .into_iter()
+                        .map(|pixel| (pixel.x, pixel.y))
+                        .collect();
+
+                    assert!(
+                        fresh.iter().all(|pixel| wet.contains(pixel)),
+                        "{}",
+                        what(local)
+                    );
+                    assert!(wet.is_subset(&now), "{}", what(local));
+                    seen += usize::from(!wet.is_empty());
+                }
+
+                assert!(seen > 100, "{name}, {}: wet on {seen} frames", style.name);
+            });
+        }
+    }
+
+    /// The trail of a quick study's pen is dotted along the moves up it has
+    /// made in the style's moment before each frame, those long enough to
+    /// be seen, over the bare paper and not on the drawing or near it.
+    #[test]
+    fn the_trail_is_dotted_along_the_moves_up_over_the_paper() {
+        let style = PlotStyle::QUICK;
+
+        sheets(style, |name, parts, plot| {
+            let Work::Pen {
+                motions, length, ..
+            } = &plot.work
+            else {
+                unreachable!("the pen's plot")
+            };
             let mut seen = 0;
 
             for (local, share) in frames(&style, parts) {
-                let then = share - style.wet / style.length;
-                let (now, before) = (inked(plot, share), inked(plot, then.max(0.0)));
-                let fresh: Vec<&(i32, i32)> = now.difference(&before).collect();
-                let wet: std::collections::BTreeSet<(i32, i32)> = plot
-                    .wet(share, style.wet)
+                let time = f64::from(share) * length;
+                let hops: std::collections::BTreeSet<(i32, i32)> = motions
+                    .travels(time - f64::from(style.trail), time)
                     .into_iter()
+                    .filter(|(start, end, ..)| start.distance(*end) >= plot.trailed)
+                    .flat_map(|(start, end, ..)| {
+                        quadrille::draw::shape::line(motion::pixel(start), motion::pixel(end))
+                    })
                     .map(|pixel| (pixel.x, pixel.y))
                     .collect();
+                let trail: Vec<Point<i32>> = plot
+                    .trail(share, style.trail)
+                    .into_iter()
+                    .flatten()
+                    .collect();
 
-                assert!(
-                    fresh.iter().all(|pixel| wet.contains(pixel)),
-                    "{name} at {local} s"
-                );
-                assert!(wet.is_subset(&now), "{name} at {local} s");
-                seen += usize::from(!wet.is_empty());
+                for dot in &trail {
+                    assert!(
+                        hops.contains(&(dot.x, dot.y)),
+                        "{name} at {local} s: {dot:?}"
+                    );
+                    assert!(
+                        plot.bare(*dot),
+                        "{name} at {local} s: {dot:?} on the drawing"
+                    );
+                }
+
+                seen += usize::from(!trail.is_empty());
             }
 
-            assert!(seen > 100, "{name}: wet on {seen} frames");
+            assert!(seen > 10, "{name}: a trail on {seen} frames");
         });
     }
 
@@ -984,7 +1160,7 @@ mod tests {
 
         drafted(|name, parts, plot| {
             let cues = &plot.cues;
-            let end = f64::from(style.length - motion::REST);
+            let end = f64::from(style.length - style.rest());
 
             assert!(cues.drawn > 0.0 && cues.drawn < end, "{name}");
             assert!(cues.views.contains_key(&0), "{name}");

@@ -13,7 +13,9 @@
 //! A draughtsman's pen leaves its ink wet behind it for a moment, in the
 //! accent until it dries to its tone, a tail that is longer the faster the
 //! pen goes; and draws a circle with a compass, whose arm reaches from its
-//! point at the centre out to the pen.
+//! point at the centre out to the pen. A quick study's pen leaves a longer
+//! tail, a comet, and its hops dotted in it as a plotter's preview shows
+//! its moves up.
 //!
 //! The renderer repaints each place a frame changes, every drawing that
 //! crosses it again, so how the ticks are drawn decides what they cost: the
@@ -89,6 +91,20 @@ pub fn wet<Renderer: geometry::Renderer>(
     palette: &Palette,
 ) {
     raster::fill_pixels(pen, pixels, palette.accent);
+}
+
+/// Draws the dots of the pen's trail, `stretches` of them, each a path of
+/// its own: a stretch that stays the same from one frame to the next is
+/// not repainted.
+pub fn trail<Renderer: geometry::Renderer>(
+    pen: &mut Pen<'_, Renderer>,
+    stretches: &[Vec<Point<i32>>],
+    palette: &Palette,
+) {
+    for stretch in stretches {
+        raster::fill_pixels(pen, stretch, palette.accent);
+        pen.flush();
+    }
 }
 
 /// Draws a compass drawing round `centre` with the pen at `head`: its arm
