@@ -95,11 +95,12 @@ const TERMINAL: f32 = 2.5;
 const TERMINAL_HALF: f32 = 1.5;
 /// In a block's detail: the room over its first bulb for its name and
 /// left of its bulbs; after a tube, the gap to its temperature and the
-/// room for it, `100 °C` at twice the laptop's view.
+/// room for it, `100 °C` at the least a detail magnifies (twice the least
+/// scale a plan is drawn at, 0.8) and a unit clear of the circle.
 const DETAIL_NAME: f32 = 6.0;
 const DETAIL_LEFT: f32 = 2.0;
 const DETAIL_GAP: f32 = 4.0;
-const DETAIL_VALUE: f32 = DETAIL_GAP + 36.0 / 2.36;
+const DETAIL_VALUE: f32 = DETAIL_GAP + 36.0 / 1.6 + 1.0;
 
 /// Between blocks across and down.
 const ACROSS: f32 = 14.0;
@@ -3439,6 +3440,44 @@ mod tests {
                         for b in heights.iter().filter(|b| b.0 == a.0) {
                             assert_eq!(a.1, b.1, "{fixture:?} at {scale}: blocks differ");
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A block's detail circle holds the widest value lettered after a
+    /// tube, `100 °C`, at the least a detail magnifies (twice the least
+    /// scale a plan is drawn at), and a pixel round it, so the circle
+    /// never runs along the lettering.
+    #[test]
+    fn a_detail_circle_holds_its_values() {
+        let least = 1.6;
+        let (width, half) = (36.0 / least, (LETTERING.cap() as f32 / 2.0 + 1.0) / least);
+
+        for fixture in Fixture::ALL {
+            let Some(cooling) = Cooling::new(&fixture.machine()) else {
+                continue;
+            };
+
+            for source in cooling.sources.iter().filter(|s| s.battery.is_none()) {
+                let (centre, radius) = source.ring();
+
+                for k in 0..source.gauges.len() {
+                    let at = source.gauge(k);
+                    let left = at.x + BULB_RADIUS + TUBE + DETAIL_GAP;
+
+                    for corner in [
+                        v(left, at.y - half),
+                        v(left, at.y + half),
+                        v(left + width + 1.0 / least, at.y - half),
+                        v(left + width + 1.0 / least, at.y + half),
+                    ] {
+                        assert!(
+                            (corner - centre).length() <= radius,
+                            "{fixture:?} {}: gauge {k}",
+                            source.name
+                        );
                     }
                 }
             }
