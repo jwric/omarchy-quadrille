@@ -63,6 +63,55 @@ impl Output {
     }
 }
 
+impl std::str::FromStr for Output {
+    type Err = String;
+
+    /// An output as `WIDTHxHEIGHT[@SCALE][:MM]`: its mode in pixels, the
+    /// scale the compositor gives it (1 when left out) and its panel's
+    /// width in millimetres. With no width, a logical pixel is taken to be
+    /// a 96th of an inch, as a display with no EDID is.
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let wrong = || format!("{text:?} is not WIDTHxHEIGHT[@SCALE][:MM], like 1920x1080@1.25");
+        let (mode, mm) = match text.split_once(':') {
+            Some((mode, mm)) => (mode, Some(mm.parse::<f64>().map_err(|_| wrong())?)),
+            None => (text, None),
+        };
+        let (pixels, scale) = match mode.split_once('@') {
+            Some((pixels, scale)) => (pixels, scale.parse::<f64>().map_err(|_| wrong())?),
+            None => (mode, 1.0),
+        };
+        let (width, height) = pixels.split_once('x').ok_or_else(wrong)?;
+        let (width, height): (u32, u32) = (
+            width.parse().map_err(|_| wrong())?,
+            height.parse().map_err(|_| wrong())?,
+        );
+
+        let positive = |value: f64| value.is_finite() && value > 0.0;
+
+        if width == 0 || height == 0 || !positive(scale) || mm.is_some_and(|mm| !positive(mm)) {
+            return Err(wrong());
+        }
+
+        let mut output = Self {
+            width,
+            height,
+            scale,
+            display: Display {
+                mm_per_vpx: 0.0,
+                estimated: mm.is_none(),
+            },
+        };
+        let pixel = f64::from(output.pixel_scale());
+
+        output.display.mm_per_vpx = match mm {
+            Some(mm) => mm / f64::from(width) * pixel,
+            None => pixel / scale * 25.4 / 96.0,
+        };
+
+        Ok(output)
+    }
+}
+
 /// Makes the toolkit's fonts drawable, once.
 pub fn load_fonts() {
     let mut fonts = iced_widget::graphics::text::font_system()
@@ -363,6 +412,35 @@ impl<'a> Studio<'a> {
 mod tests {
     use super::*;
     use crate::machine::Machine;
+
+    /// Any output can be asked for by its mode: the desk's laptop as it is
+    /// written, and a monitor whose size is not given as a guess.
+    #[test]
+    fn an_output_is_read_from_its_mode() {
+        let laptop: Output = "2560x1600@1.666667:344.6".parse().unwrap();
+
+        assert_eq!(laptop.virtual_size(), Output::LAPTOP.virtual_size());
+        assert!((laptop.display.mm_per_vpx - Output::LAPTOP.display.mm_per_vpx).abs() < 1e-9);
+        assert!(!laptop.display.estimated);
+
+        let monitor: Output = "1366x768".parse().unwrap();
+
+        assert_eq!(monitor.virtual_size(), (683, 384));
+        assert!(monitor.display.estimated);
+        assert!((monitor.display.mm_per_vpx - 2.0 * 25.4 / 96.0).abs() < 1e-9);
+
+        for wrong in [
+            "",
+            "1366",
+            "1366x",
+            "x768",
+            "1366x768@",
+            "1366x768@0",
+            "1366x768:-3",
+        ] {
+            assert!(wrong.parse::<Output>().is_err(), "{wrong:?}");
+        }
+    }
 
     /// What a surface keeps from one frame to the next never leaks from one
     /// sheet into another: a studio that drew other subjects first draws a

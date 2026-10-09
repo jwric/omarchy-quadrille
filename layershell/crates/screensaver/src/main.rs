@@ -90,6 +90,11 @@ struct Render {
     at: Vec<f32>,
     #[arg(long, value_enum, default_value_t = Desk::Laptop)]
     output: Desk,
+    /// Another output than the desk's, by its mode:
+    /// `WIDTHxHEIGHT[@SCALE][:MM]`, MM its panel's width (guessed when left
+    /// out), like `1366x768` or `2880x1800@2:302`.
+    #[arg(long, conflicts_with = "output")]
+    size: Option<Output>,
     /// One of quadrille's themes (default: the current Omarchy theme).
     #[arg(long)]
     theme: Option<String>,
@@ -223,6 +228,10 @@ fn draw(render: Render, machine: &Machine) -> Result<(), String> {
     let (output, desk) = match render.output {
         Desk::Laptop => (Output::LAPTOP, "laptop"),
         Desk::Ultrawide => (Output::ULTRAWIDE, "ultrawide"),
+    };
+    let (output, desk) = match render.size {
+        Some(size) => (size, format!("{}x{}", size.width, size.height)),
+        None => (output, desk.to_owned()),
     };
     let theme = match &render.theme {
         Some(name) => theme::quadrille_theme(&format!("quadrille-{name}"))
