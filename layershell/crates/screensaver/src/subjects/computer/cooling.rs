@@ -42,7 +42,7 @@ use crate::machine::{
 };
 
 use super::super::{Card, Domain, Part, Place, Reading, Revision, Subject, Unit, View};
-use super::layout::{BUDGET, named, short};
+use super::layout::{BUDGET, named};
 use super::{SPEC_ROWS, binary, chain, counted, decimal, fit, flow, lettered, rows, set};
 
 /// A heat source's block: wide enough for its name and a temperature...
@@ -2525,11 +2525,14 @@ impl Cooling {
                             spec.extend(rows(&drive.name, &model));
                             values.push(decimal(drive.bytes));
                         }
+                        // A device by its kind on a network adapter, else
+                        // by what measures it, as the board is: its bus
+                        // address tells a reader nothing here.
                         (None, Some(device)) => {
                             spec.extend(rows(&source.name, &named(device)));
                             values.push(match kind {
                                 Kind::Network => source.name.clone(),
-                                _ => short(device.address),
+                                _ => counted(source.sensors.len(), "SENSOR", "SENSORS"),
                             });
                         }
                         // The board's monitors: an ACPI thermal zone, or
