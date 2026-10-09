@@ -64,8 +64,11 @@ const TUBE: f32 = 60.0;
 const GLASS: f32 = 2.0;
 const COLDEST: f32 = 20.0;
 const HOTTEST: f32 = 100.0;
-/// The tick over a tube at the limit its chip gives.
+/// The tick over a tube at the limit its chip gives, and the room over it
+/// to a block's lettering: clear of the ground the lettering is set on at
+/// the least scale a plan is drawn at.
 const LIMIT: f32 = 2.0;
+const OVER_LIMIT: f32 = 1.0;
 /// Between thermometers one under another, bulb to bulb: a bulb and room
 /// for a pixel or more between bulbs at any scale the view is drawn at.
 const GAUGE: f32 = 9.0;
@@ -83,8 +86,10 @@ const CORE_PITCH: f32 = 7.5;
 const CORES_ACROSS: usize = 12;
 const MOST_CORES: usize = 48;
 /// A battery's gauge: its body's length and half its height, and its
-/// terminal's length and half its height.
-const CELL: f32 = 44.0;
+/// terminal's length and half its height. Its power is lettered at the
+/// block's side, level with it: a body this long leaves room for `−12.5 W`
+/// beside it down to the least scale a plan is drawn at.
+const CELL: f32 = 36.0;
 const CELL_HALF: f32 = 3.5;
 const TERMINAL: f32 = 2.5;
 const TERMINAL_HALF: f32 = 1.5;
@@ -290,13 +295,20 @@ impl Source {
         }
     }
 
-    /// Its block's height: its name's line, its fan's, its gauges and its
-    /// cores' rows, with the same room over and under them.
+    /// Its block's height: its name's line, its fan's, room for a tick
+    /// over its first tube, its gauges and its cores' rows, with the same
+    /// room over and under them.
     fn height(&self) -> f32 {
         let fan = if self.fans.is_empty() { 0.0 } else { LINE };
         let gauges = self.gauges.len().max(1) as f32;
 
-        PAD + LINE + fan + 2.0 * BULB_RADIUS + (gauges - 1.0) * GAUGE + self.cores_height() + PAD
+        PAD + LINE
+            + fan
+            + OVER_LIMIT
+            + 2.0 * BULB_RADIUS
+            + (gauges - 1.0) * GAUGE
+            + self.cores_height()
+            + PAD
     }
 
     /// The room its cores take under its thermometer.
@@ -1753,11 +1765,16 @@ impl Cooling {
                 Tone::Live
             };
             let watts = charge.watts.filter(|w| w.is_finite());
+            // A tenth of a watt to a hundred, as many digits past that.
+            let power = |watts: f32| match watts {
+                watts if watts < 99.95 => format!("{watts:.1} W"),
+                watts => format!("{watts:.0} W"),
+            };
             let power = match (charge.state, watts) {
                 (Some(ChargeState::Full), _) => "FULL".into(),
                 (Some(ChargeState::Idle), _) => "IDLE".into(),
-                (Some(ChargeState::Charging), Some(watts)) => format!("+{watts:.1} W"),
-                (_, Some(watts)) => format!("−{watts:.1} W"),
+                (Some(ChargeState::Charging), Some(watts)) => format!("+{}", power(watts)),
+                (_, Some(watts)) => format!("−{}", power(watts)),
                 _ => String::new(),
             };
             let state = match charge.state {
@@ -1773,6 +1790,15 @@ impl Cooling {
 
             valued(d, percent.clone());
 
+            // Its power under its charge, at the block's side and level
+            // with its gauge.
+            source.set_right(d, |d| {
+                d.label(v(value.x, middle.y), power)
+                    .anchor(Anchor::RIGHT)
+                    .nudge(1, 0)
+                    .tone(Tone::Muted);
+            });
+
             source.set_foot(d, |d| {
                 d.snapped(foot, |d| {
                     d.snapped(middle, |d| {
@@ -1787,10 +1813,6 @@ impl Cooling {
                             )
                             .tone(tone);
                         }
-
-                        d.label(middle + v(CELL + TERMINAL + 6.0, 0.0), power)
-                            .anchor(Anchor::LEFT)
-                            .tone(Tone::Muted);
 
                         // What it is doing, in words, in its own detail.
                         in_its_detail(d, source, |d| {
@@ -3253,7 +3275,7 @@ mod tests {
         pixels
     }
 
-    const SCALES: [f32; 8] = [0.92, 1.0, 1.07, 1.18, 1.25, 1.37, 1.64, 2.36];
+    const SCALES: [f32; 10] = [0.8, 0.85, 0.92, 1.0, 1.07, 1.18, 1.25, 1.37, 1.64, 2.36];
 
     /// Every block of every machine is padded alike on its four sides (its
     /// name and value as far from its top and sides as its last gauge is
@@ -3368,6 +3390,49 @@ mod tests {
                             !columns.iter().any(|pixel| glass.contains(&pixel)),
                             "{at}: a column is on its glass"
                         );
+
+                        // Its limits' ticks, each as long as the next and
+                        // none under the ground of its lettering.
+                        let grounds: Vec<_> = marks
+                            .iter()
+                            .filter(|mark| matches!(mark.ink, Ink::Label { .. }))
+                            .flat_map(|mark| {
+                                let mut pieces = Vec::new();
+
+                                rasterize(mark, &projection, &mut pieces);
+                                pieces.into_iter().filter_map(|inked| match inked.piece {
+                                    Piece::Knockout(area) => Some(area),
+                                    _ => None,
+                                })
+                            })
+                            .collect();
+                        let ticks: Vec<Vec<(i32, i32)>> = marks
+                            .iter()
+                            .filter(|mark| {
+                                mark.tone == Tone::Caution
+                                    && matches!(
+                                        mark.ink,
+                                        Ink::Stroke {
+                                            line: Line::Thin,
+                                            ..
+                                        }
+                                    )
+                            })
+                            .map(|mark| inked(mark, &projection))
+                            .collect();
+
+                        for tick in &ticks {
+                            assert_eq!(tick.len(), ticks[0].len(), "{at}: ticks differ");
+                            assert!(
+                                !tick.iter().any(|&(x, y)| grounds.iter().any(|ground| {
+                                    crate::draft::raster::contains(
+                                        *ground,
+                                        iced_core::Point::new(x, y),
+                                    )
+                                })),
+                                "{at}: a tick is under lettering's ground"
+                            );
+                        }
                     }
 
                     for a in &heights {
