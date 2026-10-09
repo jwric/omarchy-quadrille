@@ -1282,9 +1282,10 @@ fn marker_letter(centre: Point<i32>, radius: i32, (x, y): (i32, i32), further: i
 /// so that it can be set on the sheet's ground without breaking one or
 /// crowding it.
 ///
-/// Clear of the edges first, then of lettering, then with room round it,
-/// then at a corner on the shortest leader, then where the least line work
-/// is, in the order of [`WAYS`].
+/// Clear of lettering and balloons first, which it would make unreadable,
+/// then of the edges, then with room round it, then at a corner on the
+/// shortest leader, then where the least line work is, in the order of
+/// [`WAYS`].
 fn letter_place(
     centre: Point<i32>,
     radius: i32,
@@ -1317,8 +1318,8 @@ fn letter_place(
                 (
                     place,
                     (
-                        within(ROOM),
                         crowding >= LETTERED,
+                        within(ROOM),
                         within(ROOMY),
                         !near,
                         crowding,
@@ -1327,7 +1328,7 @@ fn letter_place(
             })
         })
         .min_by_key(|(_, key)| *key)
-        .map(|(place, (blocked, ..))| (place, !blocked))
+        .map(|(place, (_, blocked, ..))| (place, !blocked))
         .unwrap_or((marker_letter(centre, radius, WAYS[0], 0), false))
 }
 
@@ -2240,6 +2241,20 @@ mod tests {
             ),
             (place(WAYS[4]), true)
         );
+
+        // Where the only place clear of outlines is lettered over (a
+        // balloon), it stands by an outline, without the ground behind it,
+        // rather than over the lettering.
+        let (corner, leader, at, anchor) = place(WAYS[0]);
+        let open = layout::inset(letter_area(corner, leader, "B", at, anchor), -ROOMY);
+        let crowded: HashSet<(i32, i32)> = (0..400)
+            .flat_map(|x| (0..400).map(move |y| (x, y)))
+            .filter(|&(x, y)| (x + y) % 3 == 0 && !raster::contains(open, Point::new(x, y)))
+            .collect();
+        let (chosen, clear) = choose(&[lettered(WAYS[0])], &crowded);
+
+        assert_ne!(chosen, place(WAYS[0]));
+        assert!(!clear);
     }
 
     /// A detail's letter never breaks an outline: with outlines through
