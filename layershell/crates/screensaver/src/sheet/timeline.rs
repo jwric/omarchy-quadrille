@@ -13,7 +13,8 @@
 pub const TYPING: f32 = 1.2;
 /// The plotter starts after the title block has begun...
 pub const PLOT_START: f32 = 0.6;
-/// ...and plots the whole drawing in this long.
+/// ...and plots the whole drawing in its style's length: this long, as it
+/// always did.
 pub const PLOT: f32 = 9.0;
 /// The subject runs on its own a while before the first part is picked out.
 pub const SETTLE: f32 = 2.5;
@@ -29,15 +30,16 @@ pub const MARK: f32 = 0.5;
 /// ...then the detail view plots in this long, and its specification types.
 pub const DETAIL_PLOT: f32 = 1.6;
 
-/// The length of a sheet documenting `parts` parts.
-pub fn duration(parts: usize) -> f32 {
-    PLOT_START + PLOT + SETTLE + DETAIL * parts as f32 + CODA + WIPE
+/// The length of a sheet documenting `parts` parts, plotted in `plot`
+/// seconds.
+pub fn duration(parts: usize, plot: f32) -> f32 {
+    PLOT_START + plot + running(parts)
 }
 
 /// How long the subject runs on a sheet documenting `parts` parts: from
 /// the end of the plot to the end of the wipe.
 pub fn running(parts: usize) -> f32 {
-    duration(parts) - PLOT_START - PLOT
+    SETTLE + DETAIL * parts as f32 + CODA + WIPE
 }
 
 /// Where a sheet is in its life.
@@ -82,13 +84,15 @@ pub struct Moment {
 }
 
 impl Moment {
-    pub fn at(local: f32, parts: usize) -> Self {
-        let plotted = PLOT_START + PLOT;
+    /// `local` seconds into a sheet documenting `parts` parts, plotted in
+    /// `plot` seconds.
+    pub fn at(local: f32, parts: usize, plot: f32) -> Self {
+        let plotted = PLOT_START + plot;
         let run = (local - plotted).max(0.0);
-        let wipe_from = duration(parts) - WIPE;
+        let wipe_from = duration(parts, plot) - WIPE;
 
         let phase = if local < plotted {
-            Phase::Plot(((local - PLOT_START) / PLOT).clamp(0.0, 1.0))
+            Phase::Plot(((local - PLOT_START) / plot).clamp(0.0, 1.0))
         } else if local >= wipe_from {
             Phase::Wipe(((local - wipe_from) / WIPE).clamp(0.0, 1.0))
         } else {
@@ -132,7 +136,7 @@ mod tests {
 
     #[test]
     fn a_sheet_plots_then_runs_then_documents_each_part_then_clears() {
-        let at = |local| Moment::at(local, 2).phase;
+        let at = |local| Moment::at(local, 2, PLOT).phase;
 
         assert_eq!(at(0.0), Phase::Plot(0.0));
         assert!(
@@ -150,12 +154,16 @@ mod tests {
             Phase::Run(Some(Focus { part: 1, .. }))
         ));
         assert_eq!(at(first + 2.0 * DETAIL + 0.5), Phase::Run(None));
-        assert!(matches!(at(duration(2) - 0.1), Phase::Wipe(_)));
+        assert!(matches!(at(duration(2, PLOT) - 0.1), Phase::Wipe(_)));
     }
 
     #[test]
     fn the_subject_does_not_move_until_it_is_plotted() {
-        assert_eq!(Moment::at(3.0, 4).run, 0.0);
-        assert!((Moment::at(PLOT_START + PLOT + 2.0, 4).run - 2.0).abs() < 1e-5);
+        assert_eq!(Moment::at(3.0, 4, PLOT).run, 0.0);
+        assert!((Moment::at(PLOT_START + PLOT + 2.0, 4, PLOT).run - 2.0).abs() < 1e-5);
+
+        // A shorter plot sets the subject moving sooner, for as long.
+        assert!((Moment::at(PLOT_START + 6.0 + 2.0, 4, 6.0).run - 2.0).abs() < 1e-5);
+        assert!((duration(4, 6.0) + PLOT - 6.0 - duration(4, PLOT)).abs() < 1e-5);
     }
 }

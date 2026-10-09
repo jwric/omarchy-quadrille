@@ -10,6 +10,7 @@
 //! renderer's damage is the size of what moves.
 pub mod layout;
 pub mod plates;
+pub mod plotter;
 pub mod schedule;
 pub mod timeline;
 
@@ -28,11 +29,13 @@ use crate::draft::place::{self, Plan};
 use crate::draft::raster::{self, Head, Inked, LETTERING, Projection, colour, rect};
 use crate::draft::scale::Ratio;
 use crate::draft::v;
-use crate::draft::{Draft, Extent, Ink, Line, Mark, Tone};
+use crate::draft::{Draft, Extent, Ink, Line, Mark, Shape, Tone};
 use crate::subjects::{Card, Detail, Place, Room, Subject};
 
 use layout::{CAPTION, LINE, Layout};
 use plates::Typist;
+use plotter::style::PlotStyle;
+use plotter::{Marked, Paper, Plot};
 use timeline::{Focus, MARK, Phase, Showing};
 
 /// The physical size of a virtual pixel on an output.
@@ -43,10 +46,6 @@ pub struct Display {
     pub estimated: bool,
 }
 
-/// The longest piece, in pixels of pen travel, the plot is cut into...
-const PLOT_PIECE: usize = 96;
-/// ...and the pen travel of each separately kept bucket of them.
-const PLOT_BUCKET: usize = 1536;
 /// The strips the wipe is made of.
 const WIPE_STRIPS: i32 = 32;
 
@@ -67,6 +66,8 @@ pub struct Sheet<'a> {
     pub display: Display,
     /// Today, as the title block writes it.
     pub date: &'a str,
+    /// How the pen plots it.
+    pub plot: PlotStyle,
 }
 
 /// What a kept drawing was made for.
@@ -97,6 +98,8 @@ pub struct Kept<Renderer: geometry::Renderer> {
     detail: Memo<Key, Renderer>,
     /// Where the automatic annotations of the subject showing go.
     plan: Planned,
+    /// The plot of the sheet showing, worked out on its first frame.
+    plot: plotter::Kept<PlotFor>,
     /// The finished buckets of a plot, and the passed strips of a wipe.
     ///
     /// The renderer counts a kept drawing it has seen before as unchanged,
@@ -113,6 +116,11 @@ struct Planned(RefCell<Option<(PlanFor, Rc<Vec<Plan>>)>>);
 
 /// A subject, by its index, at a size.
 type PlanFor = (usize, (i32, i32));
+
+/// A showing of a subject, by its index and serial, at a size, plotted in a
+/// style: frozen for the showing, so a live subject's marks cannot change
+/// under the buckets kept of it.
+type PlotFor = (usize, u64, (i32, i32), PlotStyle);
 
 impl Planned {
     /// The plans for subject `index` at `size`, a plan a view, worked out by
@@ -154,6 +162,7 @@ impl<Renderer: geometry::Renderer> Default for Kept<Renderer> {
             view: Memo::new(),
             detail: Memo::new(),
             plan: Planned::default(),
+            plot: plotter::Kept::default(),
             pieces: RefCell::new(Vec::new()),
         }
     }
@@ -244,69 +253,14 @@ where
             scene.furniture(&mut frame, palette);
         }
 
-        // The main view: plotted in buckets of short pieces, each a drawing
-        // of its own, so a frame repaints only the bucket the pen is in;
-        // once plotted, kept, and what moves drawn each frame.
+        // The main view: plotted in buckets of strokes, each a drawing of
+        // its own once done, so a frame repaints only the bucket the pen is
+        // in; once plotted, kept, and what moves drawn each frame.
         let mut head = if let Phase::Plot(share) = moment.phase {
-            let pieces: Vec<Inked> = scene
-                .view_pieces()
-                .into_iter()
-                .flat_map(|inked| {
-                    let tone = inked.tone;
-                    inked
-                        .piece
-                        .split(PLOT_PIECE)
-                        .into_iter()
-                        .map(move |piece| Inked { piece, tone })
-                })
-                .collect();
-            let total: usize = pieces.iter().map(|inked| inked.piece.cost()).sum();
-            let budget = (share * total as f32) as usize;
-            let clip = scene.layout.drawing();
-            let mut spent = 0;
-            let mut head = None;
+            let (plotted, head) =
+                scene.plotted(kept, renderer, bounds.size(), key(false), share, palette);
 
-            for (index, bucket) in buckets(&pieces, PLOT_BUCKET).enumerate() {
-                let cost: usize = bucket.iter().map(|inked| inked.piece.cost()).sum();
-
-                if spent + cost <= budget {
-                    // Plotted whole: kept from now on.
-                    let key = Piece {
-                        sheet: key(false),
-                        wipe: false,
-                        index,
-                    };
-
-                    layers.push(kept.piece(renderer, bounds.size(), key, |frame| {
-                        let mut whole = usize::MAX;
-                        let _ = draw_pieces(
-                            &mut Pen::new(frame),
-                            palette,
-                            bucket,
-                            clip,
-                            &mut whole,
-                            Paths::Apart,
-                        );
-                    }));
-                } else {
-                    let mut part = Frame::new(renderer, bounds.size());
-                    let mut left = budget - spent;
-
-                    head = draw_pieces(
-                        &mut Pen::new(&mut part),
-                        palette,
-                        bucket,
-                        clip,
-                        &mut left,
-                        Paths::Apart,
-                    );
-                    layers.push(part.into_geometry());
-                    break;
-                }
-
-                spent += cost;
-            }
-
+            layers.extend(plotted);
             head
         } else {
             let marked = scene.detail.as_ref().is_some_and(DetailView::marked);
@@ -317,7 +271,9 @@ where
                         scene.view(frame, palette, Layer::Fixed);
                     }),
             );
-            scene.view(&mut frame, palette, Layer::Moving)
+            scene
+                .view(&mut frame, palette, Layer::Moving)
+                .map(|Head(at)| plotter::pen::Head::down(at))
         };
 
         // The detail, once it is drawn in.
@@ -329,16 +285,20 @@ where
                             scene.detail_view(frame, palette, view, Layer::Fixed);
                         }),
                 );
-                head = head.or(scene.detail_view(&mut frame, palette, view, Layer::Moving));
+                head = head.or(scene
+                    .detail_view(&mut frame, palette, view, Layer::Moving)
+                    .map(|Head(at)| plotter::pen::Head::down(at)));
             } else {
-                head = head.or(scene.detail_view(&mut frame, palette, view, Layer::All));
+                head = head.or(scene
+                    .detail_view(&mut frame, palette, view, Layer::All)
+                    .map(|Head(at)| plotter::pen::Head::down(at)));
             }
         }
 
         scene.readings(&mut Pen::new(&mut frame), palette);
 
-        if let Some(Head(at)) = head {
-            Pen::new(&mut frame).crosshair(at, 3, 1, palette.accent);
+        if let Some(head) = head.filter(|_| self.plot.head) {
+            plotter::pen::draw(&mut Pen::new(&mut frame), head, palette);
         }
 
         layers.push(frame.into_geometry());
@@ -355,6 +315,12 @@ where
     ) -> mouse::Interaction {
         mouse::Interaction::Hidden
     }
+}
+
+/// The plot of `sheet` on an output `size` virtual pixels across and down,
+/// worked out as its first frame works it out.
+pub fn plot_of(sheet: &Sheet<'_>, size: (i32, i32)) -> Plot {
+    Scene::new(sheet, size.0, size.1, &Planned::default()).plot(&sheet.plot, size)
 }
 
 /// The sheet worked out for one size: its layout, the subject's marks at
@@ -812,7 +778,13 @@ impl<'a> Scene<'a> {
     /// The marks every view shows, each with its view's projection; a
     /// cutting plane only when the sheet shows its section.
     fn shown(&self) -> impl Iterator<Item = (&Mark, &Projection)> {
-        self.panes.iter().flat_map(|pane| {
+        self.shown_in_panes()
+            .map(|(_, mark, projection)| (mark, projection))
+    }
+
+    /// [`Self::shown`], each with the index of its view's pane.
+    fn shown_in_panes(&self) -> impl Iterator<Item = (usize, &Mark, &Projection)> {
+        self.panes.iter().enumerate().flat_map(|(index, pane)| {
             self.draft
                 .marks()
                 .iter()
@@ -823,8 +795,70 @@ impl<'a> Scene<'a> {
                     }
                     _ => true,
                 })
-                .map(|mark| (mark, &pane.projection))
+                .map(move |mark| (index, mark, &pane.projection))
         })
+    }
+
+    /// The plot of the views' marks on a sheet of `size`, as `style` plots
+    /// it.
+    fn plot(&self, style: &PlotStyle, size: (i32, i32)) -> Plot {
+        let marks: Vec<Marked> = self
+            .shown_in_panes()
+            .map(|(pane, mark, projection)| {
+                let mut pieces = Vec::new();
+                raster::rasterize(mark, projection, &mut pieces);
+
+                Marked {
+                    meta: plotter::order::Meta {
+                        pass: mark.pass(),
+                        line: match mark.ink {
+                            Ink::Stroke { line, .. } | Ink::Arrow { line, .. } => Some(line),
+                            _ => None,
+                        },
+                        curved: matches!(
+                            mark.ink,
+                            Ink::Stroke {
+                                shape: Shape::Circle { .. }
+                                    | Shape::Arc { .. }
+                                    | Shape::Keyhole { .. }
+                                    | Shape::Polyline { closed: true, .. },
+                                ..
+                            }
+                        ),
+                        part: mark.part,
+                        pane,
+                        cuts: match mark.ink {
+                            Ink::Section { view, .. } => {
+                                self.panes.iter().position(|pane| pane.view == Some(view))
+                            }
+                            _ => None,
+                        },
+                        item: match mark.ink {
+                            Ink::Balloon { item, .. } => Some(item),
+                            _ => None,
+                        },
+                    },
+                    moving: mark.moving,
+                    pieces,
+                }
+            })
+            .collect();
+        let (trim, border) = (self.layout.trim, self.layout.border);
+
+        Plot::new(
+            style,
+            &marks,
+            Paper {
+                size,
+                clip: self.layout.drawing(),
+                // The corner of the zone band at the foot on the left: off
+                // the drawing, where a plotter's origin is.
+                home: Point::new(
+                    (trim.x + border.x) / 2,
+                    (border.y + border.height - 1 + trim.y + trim.height - 1) / 2,
+                ),
+            },
+        )
     }
 
     fn scale_label(&self, ratio: Option<Ratio>) -> String {
@@ -842,6 +876,50 @@ impl<'a> Scene<'a> {
         palette: &Palette,
     ) {
         self.plates(&mut Pen::new(frame), palette);
+    }
+
+    /// The main view plotted `share` of the way, as the sheet's style plots
+    /// it: the buckets plotted whole, each kept, and then the one in
+    /// progress; and where the pen's head is.
+    fn plotted<Renderer: geometry::Renderer>(
+        &self,
+        kept: &Kept<Renderer>,
+        renderer: &Renderer,
+        size: Size,
+        sheet: Key,
+        share: f32,
+        palette: &Palette,
+    ) -> (Vec<Geometry<Renderer>>, Option<plotter::pen::Head>) {
+        let showing = self.sheet.showing;
+        let style = self.sheet.plot;
+        let plot = kept
+            .plot
+            .get((showing.subject, showing.serial, sheet.size, style), || {
+                self.plot(&style, sheet.size)
+            });
+        let now = plot.at(share);
+        let mut layers: Vec<Geometry<Renderer>> = (0..now.kept)
+            .map(|index| {
+                let key = Piece {
+                    sheet,
+                    wipe: false,
+                    index,
+                };
+
+                kept.piece(renderer, size, key, |frame| {
+                    plot.draw_bucket(&mut Pen::new(frame), palette, index);
+                })
+            })
+            .collect();
+
+        if now.live {
+            let mut part = Frame::new(renderer, size);
+
+            plot.draw_live(&mut Pen::new(&mut part), palette, &now);
+            layers.push(part.into_geometry());
+        }
+
+        (layers, now.head)
     }
 
     /// The main view's marks that `layer` takes, plotted in part while the
@@ -930,13 +1008,6 @@ impl<'a> Scene<'a> {
         geometries.push(line.into_geometry());
 
         geometries
-    }
-
-    /// The views' pieces in the plotter's order, all of them.
-    fn view_pieces(&self) -> Vec<Inked> {
-        let moment = self.sheet.showing.moment;
-
-        pieces(self.shown(), moment.focus().map(|focus| focus.part))
     }
 
     /// The title block, parts list, notes and the view's caption.
@@ -1426,30 +1497,6 @@ fn crowding(pieces: &[Inked], area: Rectangle<i32>) -> usize {
 /// line work its box could hold.
 const LETTERED: usize = 1000;
 
-/// `pieces` in consecutive buckets of about `cost` pixels of pen travel.
-fn buckets(pieces: &[Inked], cost: usize) -> impl Iterator<Item = &[Inked]> {
-    let mut rest = pieces;
-
-    std::iter::from_fn(move || {
-        if rest.is_empty() {
-            return None;
-        }
-
-        let mut travel = 0;
-        let end = rest
-            .iter()
-            .position(|inked| {
-                travel += inked.piece.cost();
-                travel >= cost
-            })
-            .map_or(rest.len(), |last| last + 1);
-        let (bucket, after) = rest.split_at(end);
-
-        rest = after;
-        Some(bucket)
-    })
-}
-
 /// The pieces of `marks`, each through its projection, in the plotter's
 /// order, the marks of part `focus` in the accent.
 fn pieces<'m>(
@@ -1557,10 +1604,22 @@ mod tests {
         output: Output,
         local: f32,
     ) -> Sheet<'a> {
+        plotted_sheet(subjects, index, output, local, PlotStyle::TODAY)
+    }
+
+    /// [`sheet`], plotted in `style`.
+    fn plotted_sheet<'a>(
+        subjects: &'a [Box<dyn Subject>],
+        index: usize,
+        output: Output,
+        local: f32,
+        style: PlotStyle,
+    ) -> Sheet<'a> {
         let mut schedule = Schedule::new(
             subjects.iter().map(|s| s.card().parts.len()).collect(),
             0,
             Some(index),
+            style.length,
         );
 
         Sheet {
@@ -1570,6 +1629,7 @@ mod tests {
             showing: schedule.at(0, local),
             display: output.display,
             date: "2026-10-07",
+            plot: style,
         }
     }
 
@@ -2172,6 +2232,7 @@ mod tests {
                     subjects.iter().map(|s| s.card().parts.len()).collect(),
                     0,
                     Some(index),
+                    timeline::PLOT,
                 );
                 let sheet = Sheet {
                     subject: subject.as_ref(),
@@ -2180,6 +2241,7 @@ mod tests {
                     showing: schedule.at(0, 30.0),
                     display: output.display,
                     date: "2026-10-07",
+                    plot: PlotStyle::TODAY,
                 };
                 let scene = Scene::new(&sheet, width as i32, height as i32, &Planned::default());
                 let scale = scene.scale_label(scene.main_ratio);
@@ -2491,5 +2553,386 @@ mod tests {
                     .map(|pixel| format!("{text:?} is within {clear} of an edge at {pixel:?}"))
             })
             .collect()
+    }
+
+    /// The plot as it was drawn before it was worked out once a sheet: the
+    /// views' pieces in the order of their passes, cut short, gathered in
+    /// buckets by their cost in pen travel and revealed by that cost, all
+    /// of it worked out again on every frame; and where the pen stopped.
+    fn plotted_as_it_was<Renderer: geometry::Renderer>(
+        scene: &Scene<'_>,
+        renderer: &Renderer,
+        size: Size,
+        share: f32,
+        palette: &Palette,
+    ) -> (Vec<Geometry<Renderer>>, Option<Head>) {
+        const PLOT_PIECE: usize = 96;
+        const PLOT_BUCKET: usize = 1536;
+
+        let pieces: Vec<Inked> = pieces(scene.shown(), None)
+            .into_iter()
+            .flat_map(|inked| {
+                let tone = inked.tone;
+
+                inked
+                    .piece
+                    .split(PLOT_PIECE)
+                    .into_iter()
+                    .map(move |piece| Inked { piece, tone })
+            })
+            .collect();
+        let total: usize = pieces.iter().map(|inked| inked.piece.cost()).sum();
+        let budget = (share * total as f32) as usize;
+        let clip = scene.layout.drawing();
+        let mut rest = pieces.as_slice();
+        let (mut spent, mut head, mut layers) = (0, None, Vec::new());
+
+        while !rest.is_empty() {
+            let mut travel = 0;
+            let end = rest
+                .iter()
+                .position(|inked| {
+                    travel += inked.piece.cost();
+                    travel >= PLOT_BUCKET
+                })
+                .map_or(rest.len(), |last| last + 1);
+            let (bucket, after) = rest.split_at(end);
+            let cost: usize = bucket.iter().map(|inked| inked.piece.cost()).sum();
+            let mut frame = Frame::new(renderer, size);
+
+            if spent + cost <= budget {
+                let mut whole = usize::MAX;
+                let _ = draw_pieces(
+                    &mut Pen::new(&mut frame),
+                    palette,
+                    bucket,
+                    clip,
+                    &mut whole,
+                    Paths::Apart,
+                );
+                layers.push(frame.into_geometry());
+            } else {
+                let mut left = budget - spent;
+                head = draw_pieces(
+                    &mut Pen::new(&mut frame),
+                    palette,
+                    bucket,
+                    clip,
+                    &mut left,
+                    Paths::Apart,
+                );
+                layers.push(frame.into_geometry());
+                break;
+            }
+
+            spent += cost;
+            rest = after;
+        }
+
+        (layers, head)
+    }
+
+    /// A sheet's main view plotted to its moment, with the pen's head: as
+    /// the sheet plots it, or as it was plotted before.
+    struct Plotted<'a> {
+        sheet: Sheet<'a>,
+        as_it_was: bool,
+    }
+
+    impl canvas::Program<(), Theme, iced_renderer::Renderer> for Plotted<'_> {
+        type State = Kept<iced_renderer::Renderer>;
+
+        fn draw(
+            &self,
+            kept: &Self::State,
+            renderer: &iced_renderer::Renderer,
+            theme: &Theme,
+            bounds: Rectangle,
+            _cursor: mouse::Cursor,
+        ) -> Vec<Geometry<iced_renderer::Renderer>> {
+            let (width, height) = (bounds.width as i32, bounds.height as i32);
+            let scene = Scene::new(&self.sheet, width, height, &kept.plan);
+            let palette = theme.palette();
+            let Phase::Plot(share) = self.sheet.showing.moment.phase else {
+                unreachable!("a moment of the plot")
+            };
+            let mut frame = Frame::new(renderer, bounds.size());
+            let mut layers = if self.as_it_was {
+                let (layers, head) =
+                    plotted_as_it_was(&scene, renderer, bounds.size(), share, palette);
+
+                if let Some(Head(at)) = head {
+                    Pen::new(&mut frame).crosshair(at, 3, 1, palette.accent);
+                }
+
+                layers
+            } else {
+                let key = Key {
+                    subject: self.sheet.showing.subject,
+                    serial: self.sheet.showing.serial,
+                    focus: None,
+                    marked: false,
+                    size: (width, height),
+                };
+                let (layers, head) =
+                    scene.plotted(kept, renderer, bounds.size(), key, share, palette);
+
+                if let Some(head) = head {
+                    plotter::pen::draw(&mut Pen::new(&mut frame), head, palette);
+                }
+
+                layers
+            };
+
+            layers.push(frame.into_geometry());
+            layers
+        }
+    }
+
+    /// Fails at the first moment of a sheet of each of `names`, on each of
+    /// `outputs`, that today's plot draws differently from the plot as it
+    /// was: `moments` moments all through the plot and its last.
+    fn plotted_as_it_was_on(names: &[&str], outputs: &[Output], moments: usize) {
+        let subjects = subjects::all(&Machine::fixture());
+        let theme = Theme::TERMINAL;
+        let end = timeline::PLOT_START + timeline::PLOT;
+
+        for name in names {
+            let index = subjects::find(&subjects, name).expect("A subject");
+
+            for &output in outputs {
+                let size = output.virtual_size();
+                let moments = (0..moments)
+                    .map(|step| step as f32 * end / moments as f32)
+                    .chain([end - 0.001]);
+
+                for local in moments {
+                    let drawn = |as_it_was| {
+                        crate::headless::screenshot(
+                            Plotted {
+                                sheet: sheet(&subjects, index, output, local),
+                                as_it_was,
+                            },
+                            size,
+                            &theme,
+                        )
+                    };
+
+                    assert!(
+                        drawn(false) == drawn(true),
+                        "{name} on {} at {local} s",
+                        output.name()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Today's plot is the plot as it was, pixel for pixel, the pen's head
+    /// with it: a sheet on each output at moments all through the plot.
+    #[test]
+    fn todays_plot_is_the_plot_as_it_was() {
+        plotted_as_it_was_on(&["gears"], &[Output::LAPTOP], 8);
+        plotted_as_it_was_on(&["topology"], &[Output::ULTRAWIDE], 8);
+    }
+
+    /// Several subjects' sheets, on both outputs, at many moments.
+    #[test]
+    #[ignore = "minutes: run with --release --ignored"]
+    fn todays_plot_is_the_plot_as_it_was_at_many_moments() {
+        plotted_as_it_was_on(
+            &["gears", "engine", "timer", "topology", "cooling"],
+            &[Output::LAPTOP, Output::ULTRAWIDE],
+            28,
+        );
+    }
+
+    /// The pixels the traces that wait for the run paint in its first
+    /// frame: what moves along the drawing's traces.
+    fn waiting_traces(
+        sheet: &Sheet<'_>,
+        size: (i32, i32),
+    ) -> std::collections::HashSet<(u32, u32)> {
+        let scene = Scene::new(sheet, size.0, size.1, &Planned::default());
+        let clip = scene.layout.drawing();
+        let mut pixels = std::collections::HashSet::new();
+
+        for (mark, projection) in scene.shown() {
+            if !(mark.moving && mark.pass() == Pass::Traces) {
+                continue;
+            }
+
+            let mut pieces = Vec::new();
+            raster::rasterize(mark, projection, &mut pieces);
+
+            for inked in pieces {
+                plotter::own::painted(&inked.piece, clip, |pixel| {
+                    pixels.insert((pixel.x as u32, pixel.y as u32));
+                });
+            }
+        }
+
+        pixels
+    }
+
+    /// Fails unless, in each of `styles`, the last frame of the plot a
+    /// surface shows at thirty frames a second is the run's first, but for
+    /// the traces that wait for the run to appear: on every sheet, on both
+    /// outputs.
+    fn ends_on_the_run(styles: &[PlotStyle]) {
+        use crate::headless::Studio;
+
+        let subjects = subjects::all(&Machine::fixture());
+        let theme = Theme::TERMINAL;
+        let mut wrong = Vec::new();
+
+        for &style in styles {
+            for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+                let (width, height) = output.virtual_size();
+                let mut studio = Studio::new(&subjects, output, &theme, "2026-10-07")
+                    .expect("A studio")
+                    .plotting(style);
+                let end = timeline::PLOT_START + style.length;
+
+                for index in 0..subjects.len() {
+                    let last = studio.frame(index, end - 1.0 / 30.0);
+                    let first = studio.frame(index, end);
+                    let waiting = if style.traces_wait {
+                        waiting_traces(
+                            &plotted_sheet(&subjects, index, output, end, style),
+                            (width as i32, height as i32),
+                        )
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+                    let differ = last
+                        .enumerate_pixels()
+                        .filter(|(x, y, pixel)| {
+                            *pixel != first.get_pixel(*x, *y) && !waiting.contains(&(*x, *y))
+                        })
+                        .count();
+
+                    if differ > 0 {
+                        wrong.push(format!(
+                            "{} on {}, {} (traces wait: {}): {differ} pixels",
+                            subjects[index].name(),
+                            output.name(),
+                            style.name,
+                            style.traces_wait
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+    }
+
+    /// The pen's plot ends on the drawing the subject's run begins with,
+    /// exactly, every trace plotted with the rest: no ink is drawn over,
+    /// none wiped, on any sheet.
+    #[test]
+    fn the_last_plot_frame_is_the_first_run_frame() {
+        ends_on_the_run(&[PlotStyle {
+            traces_wait: false,
+            ..PlotStyle::DRAFTING
+        }]);
+    }
+
+    /// In every style, and with the traces waiting for the run.
+    #[test]
+    #[ignore = "minutes: run with --release --ignored"]
+    fn every_style_ends_on_the_run() {
+        ends_on_the_run(&[PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK]);
+    }
+
+    /// Fails at the first frame of a plot in each of `styles`, of each of
+    /// `names`, drawn `fps` a second with the pen's head hidden, that does
+    /// not draw every pixel the frame before it drew.
+    fn only_adds_ink(styles: &[PlotStyle], names: &[&str], fps: f32) {
+        use crate::headless::Studio;
+
+        let subjects = subjects::all(&Machine::fixture());
+        let theme = Theme::TERMINAL;
+        let void = image::Rgba(theme.palette().void.into_rgba8());
+
+        for &style in styles {
+            let style = PlotStyle {
+                head: false,
+                ..style
+            };
+            let mut studio = Studio::new(&subjects, Output::LAPTOP, &theme, "2026-10-07")
+                .expect("A studio")
+                .plotting(style);
+
+            for name in names {
+                let index = subjects::find(&subjects, name).expect("A subject");
+                let frames = ((timeline::PLOT_START + style.length) * fps) as usize;
+                let mut before = studio.frame(index, 0.0);
+
+                for frame in 1..=frames {
+                    let at = frame as f32 / fps;
+                    let now = studio.frame(index, at);
+                    let lost = before
+                        .enumerate_pixels()
+                        .filter(|(x, y, pixel)| **pixel != void && *pixel != now.get_pixel(*x, *y))
+                        .count();
+
+                    assert!(lost == 0, "{name}, {}, {at} s: {lost} pixels", style.name);
+                    before = now;
+                }
+            }
+        }
+    }
+
+    /// The pen's plot only ever adds ink: no frame of it wipes or draws
+    /// over a pixel a frame before it drew.
+    #[test]
+    fn ink_only_accumulates_during_the_plot() {
+        only_adds_ink(&[PlotStyle::DRAFTING], &["gears", "cooling"], 2.0);
+    }
+
+    /// In every style, on sheets of each kind, four frames a second.
+    #[test]
+    #[ignore = "minutes: run with --release --ignored"]
+    fn ink_only_accumulates_in_every_style() {
+        only_adds_ink(
+            &[PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK],
+            &["gears", "engine", "timer", "topology", "cooling"],
+            4.0,
+        );
+    }
+
+    /// A plot is the same drawn by a studio that has drawn other sheets'
+    /// plots first as by a fresh one, in every style.
+    #[test]
+    fn a_plot_is_the_same_from_a_fresh_studio() {
+        use crate::headless::Studio;
+
+        let subjects = subjects::all(&Machine::fixture());
+        let theme = Theme::TERMINAL;
+
+        for style in [PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK] {
+            let studio = || {
+                Studio::new(&subjects, Output::LAPTOP, &theme, "2026-10-07")
+                    .expect("A studio")
+                    .plotting(style)
+            };
+            let mut busy = studio();
+
+            for first in 0..subjects.len() {
+                let _ = busy.frame(first, 4.0);
+            }
+
+            for first in [0, subjects.len() - 1] {
+                for at in [2.0, 5.5] {
+                    assert!(
+                        busy.frame(first, at) == studio().frame(first, at),
+                        "{}, subject {first} at {at} s",
+                        style.name
+                    );
+                }
+            }
+        }
     }
 }

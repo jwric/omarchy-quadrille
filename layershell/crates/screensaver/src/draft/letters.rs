@@ -172,6 +172,29 @@ pub fn write<Renderer: geometry::Renderer>(
     }
 }
 
+/// The pixels [`write`] lights for `text` set at `top_left`, a character at
+/// a time: a plotter sets lettering a letter at a time.
+pub fn pixels(text: &str, top_left: Point<i32>) -> Vec<Vec<Point<i32>>> {
+    let baseline = top_left.y + i32::from(LETTERING.baseline());
+    let advance = i32::from(LETTERING.advance());
+
+    text.chars()
+        .enumerate()
+        .map(|(index, character)| {
+            let left = top_left.x + index as i32 * advance;
+
+            glyph(character)
+                .iter()
+                .flat_map(|run| {
+                    (run.y..run.y + run.height).flat_map(move |y| {
+                        (run.x..run.x + run.width).map(move |x| Point::new(left + x, baseline + y))
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// Sets `text` placed by `anchor` at `at`, as `Pen::text` places it.
 pub fn set<Renderer: geometry::Renderer>(
     pen: &mut Pen<'_, Renderer>,

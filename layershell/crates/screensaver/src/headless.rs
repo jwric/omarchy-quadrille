@@ -14,8 +14,10 @@ use iced_runtime::user_interface::{self, UserInterface};
 use iced_widget::{Widget as _, canvas};
 use quadrille::Theme;
 
+use crate::sheet::plotter::Plot;
+use crate::sheet::plotter::style::PlotStyle;
 use crate::sheet::timeline::{self, Moment, Phase, Showing};
-use crate::sheet::{Display, Sheet, schedule::Schedule};
+use crate::sheet::{self, Display, Sheet, schedule::Schedule};
 use crate::subjects::Subject;
 
 /// An output to draw for.
@@ -49,6 +51,18 @@ impl Output {
             estimated: false,
         },
     };
+
+    /// What the desk calls it, if it is one of the desk's.
+    #[cfg(test)]
+    pub fn name(self) -> String {
+        if self == Self::LAPTOP {
+            "the laptop".into()
+        } else if self == Self::ULTRAWIDE {
+            "the ultrawide".into()
+        } else {
+            format!("{} × {}", self.width, self.height)
+        }
+    }
 
     /// Physical pixels to a virtual pixel, as the fork's `Auto(2)` decides.
     pub fn pixel_scale(self) -> u32 {
@@ -195,6 +209,7 @@ pub struct Studio<'a> {
     output: Output,
     theme: &'a Theme,
     date: &'a str,
+    plot: PlotStyle,
 }
 
 impl<'a> Studio<'a> {
@@ -224,7 +239,16 @@ impl<'a> Studio<'a> {
             output,
             theme,
             date,
+            plot: PlotStyle::default(),
         })
+    }
+
+    /// The studio plotting its sheets in `style`.
+    pub fn plotting(self, style: PlotStyle) -> Self {
+        Self {
+            plot: style,
+            ..self
+        }
     }
 
     /// The sheets starting with subject `first`, `elapsed` seconds in, as
@@ -234,24 +258,40 @@ impl<'a> Studio<'a> {
         self.rasterize()
     }
 
-    /// Lays out and draws the sheet into the renderer's layers.
-    fn draw(&mut self, first: usize, elapsed: f32) -> Showing {
+    /// The sheets starting with subject `first`, `elapsed` seconds in.
+    fn sheet(&self, first: usize, elapsed: f32) -> Sheet<'a> {
         // The same seed every time: a moment drawn twice is the same sheet.
         let showing = Schedule::new(
             self.subjects.iter().map(|s| s.card().parts.len()).collect(),
             0,
             Some(first),
+            self.plot.length,
         )
         .at(0, elapsed);
-        let sheet = Sheet {
+
+        Sheet {
             subject: self.subjects[showing.subject].as_ref(),
             number: showing.subject + 1,
             of: self.subjects.len(),
             showing,
             display: self.output.display,
             date: self.date,
-        };
+            plot: self.plot,
+        }
+    }
 
+    /// The plot of subject `first`'s sheet, worked out as its first frame
+    /// works it out.
+    pub fn plot(&self, first: usize) -> Plot {
+        let (width, height) = self.output.virtual_size();
+
+        sheet::plot_of(&self.sheet(first, 0.0), (width as i32, height as i32))
+    }
+
+    /// Lays out and draws the sheet into the renderer's layers.
+    fn draw(&mut self, first: usize, elapsed: f32) -> Showing {
+        let sheet = self.sheet(first, elapsed);
+        let showing = sheet.showing;
         let (width, height) = self.output.virtual_size();
         let element: iced_core::Element<'_, (), Theme, iced_renderer::Renderer> = canvas(sheet)
             .width(Length::Fill)
@@ -390,7 +430,7 @@ impl<'a> Studio<'a> {
     /// next, before it upscales that, which is not measured here).
     pub fn bench(&mut self, first: usize, fps: f32) -> Vec<Timed> {
         let parts = self.subjects[first].card().parts.len();
-        let frames = (timeline::duration(parts) * fps) as usize;
+        let frames = (timeline::duration(parts, self.plot.length) * fps) as usize;
 
         (0..frames)
             .map(|frame| {
@@ -406,6 +446,48 @@ impl<'a> Studio<'a> {
             })
             .collect()
     }
+}
+
+/// What `program` draws on a canvas `size` virtual pixels across and
+/// down in `theme`, as RGBA: a part of a sheet drawn on its own.
+#[cfg(test)]
+pub fn screenshot<P>(program: P, size: (u32, u32), theme: &Theme) -> Vec<u8>
+where
+    P: canvas::Program<(), Theme, iced_renderer::Renderer>,
+{
+    let settings = quadrille_desktop::graphics::settings();
+    let mut renderer = smol::block_on(<iced_renderer::Renderer as Headless>::new(
+        iced_core::renderer::Settings {
+            font: settings.font,
+            text_size: settings.text_size,
+            ..iced_core::renderer::Settings::default()
+        },
+        false,
+        Some("tiny-skia"),
+    ))
+    .expect("A software renderer");
+    let element: iced_core::Element<'_, (), Theme, iced_renderer::Renderer> = canvas(program)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .boxed();
+    let mut interface = UserInterface::build(
+        element,
+        Size::new(size.0 as f32, size.1 as f32),
+        user_interface::Cache::default(),
+        &mut renderer,
+    );
+    let palette = theme.palette();
+
+    interface.draw(
+        &mut renderer,
+        theme,
+        &Style {
+            text_color: palette.ink,
+        },
+        mouse::Cursor::Unavailable,
+    );
+
+    renderer.screenshot(Size::new(size.0, size.1), 1.0, palette.void)
 }
 
 #[cfg(test)]
@@ -492,11 +574,24 @@ mod tests {
     /// Repaints a sheet frame by frame at `fps` over `seconds`, and fails at
     /// the first frame that differs from the same frame drawn whole.
     fn repaints_as_drawn(first: usize, output: Output, seconds: std::ops::Range<f32>, fps: f32) {
+        repaints_as_drawn_in(PlotStyle::default(), first, output, seconds, fps);
+    }
+
+    /// [`repaints_as_drawn`], the sheet plotted in `style`.
+    fn repaints_as_drawn_in(
+        style: PlotStyle,
+        first: usize,
+        output: Output,
+        seconds: std::ops::Range<f32>,
+        fps: f32,
+    ) {
         load_fonts();
 
         let subjects = crate::subjects::all(&Machine::fixture());
         let theme = Theme::TERMINAL;
-        let mut studio = Studio::new(&subjects, output, &theme, "2026-10-07").unwrap();
+        let mut studio = Studio::new(&subjects, output, &theme, "2026-10-07")
+            .unwrap()
+            .plotting(style);
         let frames = ((seconds.end - seconds.start) * fps) as usize;
 
         for frame in 0..frames {
@@ -513,8 +608,9 @@ mod tests {
 
             assert!(
                 wrong == 0,
-                "{}, {at:.2} s in: {wrong} pixels repainted wrong",
-                subjects[first].name()
+                "{}, {}, {at:.2} s in: {wrong} pixels repainted wrong",
+                subjects[first].name(),
+                style.name
             );
         }
     }
@@ -535,6 +631,29 @@ mod tests {
         for first in 0..crate::subjects::all(&Machine::fixture()).len() {
             for output in [Output::LAPTOP, Output::ULTRAWIDE] {
                 repaints_as_drawn(first, output, 0.0..80.0, 30.0);
+            }
+        }
+    }
+
+    /// The pen's plot repaints as drawn too: its buckets kept, its strokes
+    /// drawn a stretch at a time, its head going up and down.
+    #[test]
+    fn the_pens_plot_repaints_as_drawn() {
+        repaints_as_drawn_in(PlotStyle::DRAFTING, 0, Output::LAPTOP, 0.0..12.0, 4.0);
+    }
+
+    /// Every sheet's plot in every style, on both outputs, at ten frames a
+    /// second.
+    #[test]
+    #[ignore = "minutes: run with --release --ignored"]
+    fn every_plot_repaints_as_drawn() {
+        for style in [PlotStyle::CAROUSEL, PlotStyle::DRAFTING, PlotStyle::QUICK] {
+            for first in 0..crate::subjects::all(&Machine::fixture()).len() {
+                for output in [Output::LAPTOP, Output::ULTRAWIDE] {
+                    let end = timeline::PLOT_START + style.length + 0.5;
+
+                    repaints_as_drawn_in(style, first, output, 0.0..end, 10.0);
+                }
             }
         }
     }
@@ -610,40 +729,7 @@ mod lettering {
     }
 
     fn render(specimen: Specimen, size: (u32, u32)) -> Vec<u8> {
-        let settings = quadrille_desktop::graphics::settings();
-        let mut renderer = smol::block_on(<iced_renderer::Renderer as Headless>::new(
-            iced_core::renderer::Settings {
-                font: settings.font,
-                text_size: settings.text_size,
-                ..iced_core::renderer::Settings::default()
-            },
-            false,
-            Some("tiny-skia"),
-        ))
-        .unwrap();
-        let element: iced_core::Element<'_, (), Theme, iced_renderer::Renderer> = canvas(specimen)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .boxed();
-        let mut interface = UserInterface::build(
-            element,
-            Size::new(size.0 as f32, size.1 as f32),
-            user_interface::Cache::default(),
-            &mut renderer,
-        );
-        let theme = Theme::TERMINAL;
-        let palette = theme.palette();
-
-        interface.draw(
-            &mut renderer,
-            &Theme::TERMINAL,
-            &Style {
-                text_color: palette.ink,
-            },
-            mouse::Cursor::Unavailable,
-        );
-
-        renderer.screenshot(Size::new(size.0, size.1), 1.0, palette.void)
+        screenshot(specimen, size, &Theme::TERMINAL)
     }
 
     /// The font's pixels are the renderer's text, pixel for pixel, for

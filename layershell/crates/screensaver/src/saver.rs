@@ -17,6 +17,7 @@ use quadrille::Theme;
 
 use crate::display;
 use crate::machine::Machine;
+use crate::sheet::plotter::style::PlotStyle;
 use crate::sheet::{Display, Sheet, schedule::Schedule};
 use crate::subjects::{self, Subject};
 
@@ -36,6 +37,8 @@ pub struct Options {
     pub date: String,
     /// The computer the sheets of this computer draw.
     pub machine: Machine,
+    /// How the pen plots the sheets.
+    pub plot: PlotStyle,
 }
 
 pub struct Saver {
@@ -71,6 +74,7 @@ impl Saver {
             subjects.iter().map(|s| s.card().parts.len()).collect(),
             options.seed,
             options.first,
+            options.plot.length,
         );
         let saver = Self {
             options,
@@ -162,6 +166,7 @@ impl Saver {
             showing,
             display: self.displays.get(&name).copied().unwrap_or(display::GUESS),
             date: &self.options.date,
+            plot: self.options.plot,
         };
 
         canvas(sheet)

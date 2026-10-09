@@ -18,16 +18,19 @@ pub struct Schedule {
     bags: Vec<Vec<usize>>,
     /// The subject the first output starts with, if one is asked for.
     first: Option<usize>,
+    /// Seconds a sheet's plot takes.
+    plot: f32,
 }
 
 impl Schedule {
-    pub fn new(parts: Vec<usize>, seed: u64, first: Option<usize>) -> Self {
+    pub fn new(parts: Vec<usize>, seed: u64, first: Option<usize>, plot: f32) -> Self {
         Self {
             parts,
             rng: fastrand::Rng::with_seed(seed),
             sheets: Vec::new(),
             bags: Vec::new(),
             first,
+            plot,
         }
     }
 
@@ -49,7 +52,7 @@ impl Schedule {
         Showing {
             subject,
             serial: index as u64,
-            moment: Moment::at((elapsed - start).max(0.0), self.parts[subject]),
+            moment: Moment::at((elapsed - start).max(0.0), self.parts[subject], self.plot),
         }
     }
 
@@ -94,7 +97,7 @@ impl Schedule {
     /// When `output`'s last sheet ends.
     fn end(&self, output: usize) -> f32 {
         self.sheets[output].last().map_or(0.0, |&(start, subject)| {
-            start + duration(self.parts[subject])
+            start + duration(self.parts[subject], self.plot)
         })
     }
 
@@ -142,7 +145,7 @@ mod tests {
     const PARTS: [usize; 7] = [4, 5, 4, 6, 5, 4, 5];
 
     fn schedule(seed: u64) -> Schedule {
-        Schedule::new(PARTS.to_vec(), seed, None)
+        Schedule::new(PARTS.to_vec(), seed, None, crate::sheet::timeline::PLOT)
     }
 
     /// The subjects `output` shows over `seconds`, a sheet at a time.
@@ -203,7 +206,7 @@ mod tests {
 
     #[test]
     fn a_chosen_first_subject_comes_first() {
-        let mut schedule = Schedule::new(PARTS.to_vec(), 3, Some(5));
+        let mut schedule = Schedule::new(PARTS.to_vec(), 3, Some(5), crate::sheet::timeline::PLOT);
 
         assert_eq!(schedule.at(0, 0.0).subject, 5);
         assert_ne!(schedule.at(1, 0.0).subject, 5);

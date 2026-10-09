@@ -1469,6 +1469,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "legasea_line"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02c52c7afd027647b204fffa34fd1be9d11f335b8df36439ab8733ae70310be6"
+dependencies = [
+ "mint",
+ "num-traits",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1630,6 +1640,12 @@ dependencies = [
  "adler2",
  "simd-adler32",
 ]
+
+[[package]]
+name = "mint"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 
 [[package]]
 name = "moxcms"
@@ -2052,9 +2068,11 @@ dependencies = [
  "image",
  "jiff",
  "log",
+ "mint",
  "num-complex",
  "quadrille",
  "quadrille-desktop",
+ "ramer_douglas_peucker",
  "serde_json",
  "smol",
  "tempfile",
@@ -2086,6 +2104,17 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "ramer_douglas_peucker"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "190a05d51f07ac36d6353dc72101cbb315dd94f8bf1673629420bbf9d301cf42"
+dependencies = [
+ "legasea_line",
+ "mint",
+ "num-traits",
+]
 
 [[package]]
 name = "range-alloc"

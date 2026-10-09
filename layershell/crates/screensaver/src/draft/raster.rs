@@ -191,7 +191,7 @@ impl Texture {
         }
     }
 
-    fn lights(self, x: i32, y: i32) -> bool {
+    pub fn lights(self, x: i32, y: i32) -> bool {
         const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
         match self {
@@ -312,7 +312,7 @@ impl Piece {
         let partial = budget < self.cost();
         let inside = |pixel: &Point<i32>| contains(clip, *pixel);
 
-        let head = match self {
+        match self {
             Self::Path {
                 pixels,
                 stipple,
@@ -327,10 +327,6 @@ impl Piece {
                     .collect();
 
                 fill_pixels(pen, &lit, color);
-
-                partial
-                    .then(|| drawn.last().map(|pixel| Head(*pixel)))
-                    .flatten()
             }
             Self::Rows {
                 rows,
@@ -365,40 +361,21 @@ impl Piece {
                         }
                     }
                 }
-
-                partial
-                    .then(|| {
-                        rows.get(count)
-                            .map(|&(y, from, _)| Head(Point::new(from, y)))
-                    })
-                    .flatten()
             }
             Self::Text { at, text } => {
-                let face = &LETTERING;
                 let typed = if partial {
                     budget / TEXT_COST
                 } else {
                     text.chars().count()
                 };
-                let advance = i32::from(face.advance());
-                let cap_top = at.y + i32::from(face.cap_top());
-                let baseline = at.y + i32::from(face.baseline());
 
                 // All of it, or none if it is not all inside: a value cut
                 // short reads as a different value.
-                let right = at.x + text.chars().count() as i32 * advance;
-
-                if cap_top >= clip.y
-                    && baseline <= clip.y + clip.height
-                    && at.x >= clip.x
-                    && right <= clip.x + clip.width
-                {
+                if shows(*at, text, clip) {
                     let shown: String = text.chars().take(typed).collect();
 
                     super::letters::write(pen, &shown, *at, color);
                 }
-
-                partial.then(|| Head(Point::new(at.x + advance * typed as i32, baseline - 1)))
             }
             Self::Block(bounds) | Self::Knockout(bounds) => {
                 if let Some(bounds) = intersection(*bounds, clip).filter(|_| budget > 0) {
@@ -410,12 +387,56 @@ impl Piece {
 
                     pen.fill(bounds, fill);
                 }
-                None
             }
+        }
+
+        self.head(budget, clip)
+    }
+
+    /// Where the pen is with the first `budget` of the piece's cost drawn,
+    /// if it stopped short of the end inside `clip`.
+    pub fn head(&self, budget: usize, clip: Rectangle<i32>) -> Option<Head> {
+        if budget >= self.cost() {
+            return None;
+        }
+
+        let head = match self {
+            Self::Path { pixels, .. } => pixels[..budget.min(pixels.len())]
+                .last()
+                .map(|pixel| Head(*pixel)),
+            Self::Rows { rows, .. } => rows
+                .get(budget / ROW_COST)
+                .map(|&(y, from, _)| Head(Point::new(from, y))),
+            Self::Text { at, .. } => {
+                let face = &LETTERING;
+                let typed = (budget / TEXT_COST) as i32;
+                let baseline = at.y + i32::from(face.baseline());
+
+                Some(Head(Point::new(
+                    at.x + i32::from(face.advance()) * typed,
+                    baseline - 1,
+                )))
+            }
+            Self::Block(_) | Self::Knockout(_) => None,
         };
 
-        head.filter(|Head(at)| inside(at))
+        head.filter(|Head(at)| contains(clip, *at))
     }
+}
+
+/// Whether a line of `text` with its line box's top-left corner at `at` is
+/// drawn inside `clip`: all of it, or none if it is not all inside, as a
+/// value cut short reads as a different value.
+pub fn shows(at: Point<i32>, text: &str, clip: Rectangle<i32>) -> bool {
+    let face = &LETTERING;
+    let cap_top = at.y + i32::from(face.cap_top());
+    let baseline = at.y + i32::from(face.baseline());
+    let right = at.x + text.chars().count() as i32 * i32::from(face.advance());
+
+    cap_top >= clip.y
+        && baseline <= clip.y + clip.height
+        && at.x >= clip.x
+        && right <= clip.x + clip.width
 }
 
 pub fn contains(clip: Rectangle<i32>, pixel: Point<i32>) -> bool {
@@ -435,7 +456,7 @@ pub fn intersection(a: Rectangle<i32>, b: Rectangle<i32>) -> Option<Rectangle<i3
 }
 
 /// Fills pixels as runs along whichever axis makes fewer of them.
-fn fill_pixels<Renderer>(pen: &mut Pen<'_, Renderer>, pixels: &[Point<i32>], color: Color)
+pub fn fill_pixels<Renderer>(pen: &mut Pen<'_, Renderer>, pixels: &[Point<i32>], color: Color)
 where
     Renderer: iced_widget::graphics::geometry::Renderer,
 {
