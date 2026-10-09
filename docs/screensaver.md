@@ -56,8 +56,20 @@ each pen in turn from the carousel in the sheet's corner, lightest first, and
 plots all that pen draws, nearest first, its gantry sliding across under the
 ink; circles start from their centres and letters are drawn a stroke at a
 time. The same pen plots each part's detail, the circle on the view and then
-the view, and its arm sweeps the sheet clean. `quadrille-screensaver
-plot-stats` shows how each style spends each sheet's plot.
+the view, and its arm sweeps the sheet clean. `drafting` draws as a drafting
+office does: the axes of every view first, longest first, and the rest of the
+skeleton; then each part's body in turn, its circles before its straight lines
+and circles round one centre smallest first, a cutting plane before the
+section it cuts; then the lining, the dimensions and notes, the balloons and
+the sign-off, with a beat between. A diagram grows instead, from its first part
+along its wires, each part drawn whole and lettered as the pen reaches it. The
+hand eases along long lines and steps through letters, a stroke at a time, its
+ink wet in the accent for a moment behind it, a compass arm out to it as it
+draws a circle; and the form fills in as the drawing reaches it, the notes with
+the annotation, each part's row as its balloon's number is drawn, the scale,
+sheet and date at the sign-off. It plots the details too, and the sheet is
+wiped from where it parks. `quadrille-screensaver plot-stats` shows how each
+style spends each sheet's plot.
 
 ## A drawing office's conventions
 
