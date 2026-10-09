@@ -12,9 +12,12 @@ sheets of the machine the screensaver runs on have their own notes in
 Every output shows a sheet of its own, and each sheet's life is a function of
 the time since it began, so any moment of it can be drawn again exactly:
 
-1. The title block types itself in, and the pen plots the drawing stroke by
-   stroke in a plotter's order: construction and centre lines, edges, hidden
-   lines, sections, traces, then the dimensions, notes and balloons.
+1. The pen plots the drawing stroke by stroke, as a drafting office draws:
+   the axes of every view, each part's body in turn, the lining, the
+   dimensions and notes, the balloons. The title block, notes and parts list
+   fill in as it reaches what they say. The plot takes as long as the pen's
+   work does at one pace, so a dense sheet plots for longer than a sparse
+   one.
 2. The subject starts to move. After a beat, each part in turn is picked out:
    lit in the accent, ringed on the view, magnified in a detail view (which
    follows a part that moves) and specified beside it.
@@ -44,40 +47,28 @@ what keeps the plot, the wipe and the run cheap on the software renderer.
 `quadrille-screensaver bench` times each stage headless: drawing the sheet, and
 repainting what changed as a live surface does.
 
-A sheet's plot is worked out once, on its first frame, and each frame looks
-its moment up (`sheet/plotter/`). `--plot` chooses how the pen plots. `today`,
-the default, reveals the drawing pass by pass at one rate, as it always has.
-`carousel`, `drafting` and `quick` are styles of a pen at work being tried out:
-strokes that ink only the pixels they own in the finished drawing, so nothing is
-drawn over or wiped and the plot ends on the drawing the run begins with; put
-in an order, and timed as a carriage moves, then fitted to the plot's length.
-`carousel` is a pen plotter with a carousel of pens, as HP made them: it takes
-each pen in turn from the carousel in the sheet's corner, lightest first, and
-plots all that pen draws, nearest first, its gantry sliding across under the
-ink; circles start from their centres and letters are drawn a stroke at a
-time. The same pen plots each part's detail, the circle on the view and then
-the view, and its arm sweeps the sheet clean. `drafting` draws as a drafting
-office does: the axes of every view first, longest first, and the rest of the
-skeleton; then each part's body in turn, its circles before its straight lines
-and circles round one centre smallest first, a cutting plane before the
-section it cuts; then the lining, the dimensions and notes, the balloons and
-the sign-off, with a beat between. A diagram grows instead, from its first part
-along its wires, each part drawn whole and lettered as the pen reaches it. The
-hand eases along long lines and steps through letters, a stroke at a time, its
-ink wet in the accent for a moment behind it, a compass arm out to it as it
-draws a circle; and the form fills in as the drawing reaches it, the notes with
-the annotation, each part's row as its balloon's number is drawn, the scale,
-sheet and date at the sign-off. It plots the details too, and the sheet is
-wiped from where it parks. `quick` is a quick study: the skeleton as the
-drafting office lays it down, then each part whole, its lining, its
-dimensions and its balloon with it, then what is said of no part, a diagram
-grown along its wires as the office grows it. Each stroke is eased in and out
-as a whole and the pen hops from one to the next, typing words in a burst, a
-comet of wet ink behind it and its longer hops dotted across the bare paper.
-It comes in at its first stroke and lifts off its last as the subject starts
-to run, plots each detail the same way, and a line eases across to wipe the
-sheet. `quadrille-screensaver plot-stats` shows how each style spends each
-sheet's plot.
+A sheet's plot is worked out once, on its first frame, and each frame looks its
+moment up (`sheet/plotter/`; the design, and the research behind it, is in
+[`plotter.md`](plotter.md)). The drawing's pieces become pen strokes that ink
+only the pixels they own in the finished drawing, so nothing is drawn over or
+wiped and the plot ends on the drawing the run begins with. They go down in a
+drafting office's order: the axes of every view, longest first, and the rest of
+the skeleton; then each part's body in turn, circles before straight lines and
+circles round one centre smallest first, a cutting plane before the section it
+cuts; then the lining, the dimensions and notes, the balloons and the sign-off,
+with a beat between. A diagram grows instead, from its first part along its
+wires, each part drawn whole and lettered as the pen reaches it. The pen moves
+as a hand does: it eases along long lines, slows for corners, steps through
+letters a stroke at a time and is carried up between strokes, its ink wet in
+the accent for a moment behind it and a compass arm out to it as it draws a
+circle. The form fills in as the drawing reaches it: the notes with the
+annotation, each part's row as its balloon's number is drawn, the scale, sheet
+and date at the sign-off. The plot takes as long as the pen's work at the
+hand's pace, between 5 and 15 seconds, so the pen moves as fast on a sparse
+sheet as on a dense one, and the schedule works each sheet's length out before
+it starts. The same pen plots each part's detail, the circle on the view and
+then the view, and the sheet is wiped from where it parks.
+`quadrille-screensaver plot-stats` shows how each sheet's plot spends its time.
 
 ## A drawing office's conventions
 
@@ -121,9 +112,7 @@ quadrille-screensaver render --subject gears --at 12,20 --output ultrawide --the
 quadrille-screensaver render --subject cooling --at 30 --size 1920x1080 --machine fixture-desktop
 quadrille-screensaver render --subject engine --at 24 --physical    # at the panel's own pixels
 quadrille-screensaver bench --output laptop
-quadrille-screensaver render --subject gears --at 3,6 --plot drafting --machine fixture
-quadrille-screensaver render --subject gears --at 0,13 --fps 30 --plot carousel --machine fixture   # every frame
-quadrille-screensaver render --subject topology --at 0,7 --fps 30 --plot quick --machine fixture
+quadrille-screensaver render --subject gears --at 0,10 --fps 30 --machine fixture   # every frame
 quadrille-screensaver plot-stats --machine fixture
 ```
 

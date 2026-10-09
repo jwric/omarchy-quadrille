@@ -182,10 +182,11 @@ Off/on reloads display overrides. The wallpaper watches existing overrides;
 ![Seven sheets, and the plotter at work on the gears](plugins/screenshots/screensaver-sheets.png)
 
 `quadrille-screensaver` covers every output with a drawing sheet. A pen plots
-the subject stroke by stroke while the title block types itself in; then the
-subject runs, and each part in turn is picked out, magnified in a detail view
-and specified beside it, until a wipe clears the sheet for the next. Each
-output starts on a different subject.
+the subject stroke by stroke as a drafting office draws it, the title block
+and parts list filling in as it goes; then the subject runs, and each part in
+turn is picked out, magnified in a detail view and specified beside it, until
+a wipe clears the sheet for the next. Each output starts on a different
+subject.
 
 | subject | what moves, and how it is worked out |
 |---|---|
@@ -217,8 +218,9 @@ quadrille-screensaver list                # the subjects
 
 `render` draws any moment of any sheet offscreen to PNG, as an output shows it
 (`--size 1366x768` for a display other than the author's), and `bench` times
-the drawing and the repaint. Design notes: `docs/screensaver.md`, and
-`docs/this-computer.md` for the machine's sheets.
+the drawing and the repaint. Design notes: `docs/screensaver.md`,
+`docs/plotter.md` for how the pen plots, and `docs/this-computer.md` for the
+machine's sheets.
 
 ## What is not exact
 
@@ -245,7 +247,7 @@ tools/         gen_themes.py, install.sh
 plugins/       the QML kit and plugins, NOTES.md (findings), screenshots/
 layershell/    the panel host and the screensaver: windowing shell, shared desktop crate
                (theme, calibration), bar and screensaver crates, nested-compositor tests; NOTES.md
-docs/          the screensaver's design: screensaver.md, this-computer.md
+docs/          the screensaver's design: screensaver.md, plotter.md, this-computer.md
 ```
 
 `layershell/` depends on quadrille and on the
