@@ -9,6 +9,9 @@ panels drawn by quadrille itself as Wayland layer-shell surfaces.
 Each monitor's wallpaper, APERTURE, is a calibrated technical portrait of that
 display, drawn on its own pixel grid. Its click-through cursor draws live CAD
 measurements that update as the pointer moves whenever the overlay is enabled.
+When the desktop is idle, the screensaver plots technical drawings on every
+monitor, mechanisms and the machine it runs on, and documents them part by part
+as they run.
 
 ![APERTURE on the laptop (eDP-2, 3 physical pixels per virtual pixel)](plugins/screenshots/testcard-terminal-laptop.png)
 
@@ -41,10 +44,11 @@ omarchy theme set "Quadrille Terminal"     # or Paper, Phosphor, Amber, Lcd
 omarchy font set "Departure Mono"
 
 plugins/install.sh                         # the bar, menu, OSD, notifications, CPU/MEM gauges
+plugins/install.sh idle                    # optional: start the screensaver when idle
 plugins/stock.sh                           # the stock Omarchy shell again
 
-layershell/tools/install.sh                # builds quadrille-bar into ~/.local/bin and prints
-                                           # the autostart and binding lines to add
+layershell/tools/install.sh                # builds quadrille-bar and quadrille-screensaver into
+                                           # ~/.local/bin and prints the lines to add
 ```
 
 `tools/install.sh` also sets up **foot**: a user-level `foot.desktop` runs
@@ -59,6 +63,22 @@ delete `~/.local/bin/quadrille-foot` and `~/.local/share/applications/foot.deskt
 **Measuring overlay key.** The cursor reticle and live dimension lines are off at login
 (`quadrille-bar --no-bar --no-overlay`); `SUPER + CTRL + G` runs `tools/quadrille-overlay-toggle`
 (linked to `~/.local/bin`) to turn them on and off. `quadrille-bar ctl overlay on|off|status` does the same by hand.
+
+**Screensaver.** `quadrille-screensaver-launch force` runs it now; any key,
+click or pointer movement ends it. `plugins/install.sh idle` has the desktop
+start it when idle: Omarchy's idle service, cloned with two changes, starts the
+launcher (which falls back to the stock screensaver) and counts the
+screensaver's surfaces as the stock one's window, so the lock still comes on
+time. It is opt-in, like the lock screen, because the idle service also decides
+when the screen locks. The launcher honours Omarchy's screensaver switch, runs
+as `org.omarchy.screensaver` (so `omarchy-system-lock` stops it) and logs to the
+journal (`journalctl -t quadrille-screensaver`). For the menu's *Screensaver*
+entry, add to `~/.config/omarchy/extensions/omarchy-menu.jsonc` (the icon and
+label too: the menu labels an override without them by its id):
+
+```jsonc
+"system.screensaver": {"icon":"󱄄","label":"Screensaver","action":"quadrille-screensaver-launch force"},
+```
 
 Nothing here edits your Hyprland config; the scripts print what to add. Crisper
 shell text wants one line in it: `hl.env("QML_DISABLE_DISTANCEFIELD", "1")`
@@ -161,14 +181,11 @@ Off/on reloads display overrides. The wallpaper watches existing overrides;
 
 ![Seven sheets, and the plotter at work on the gears](plugins/screenshots/screensaver-sheets.png)
 
-`quadrille-screensaver` covers every output with a drawing sheet. A pen
-plots the subject stroke by stroke (centre lines first, then edges, hidden
-lines, sections, dimensions and balloons) while the title block types itself
-in. The subject then runs, and each part in turn is picked out: lit in the
-accent, ringed on the view, magnified in a DETAIL view (which follows a moving
-part) and specified beside it. A wipe clears the sheet for the next subject.
-Each output starts on a different one. Any key, click or pointer movement ends
-it; the cursor is hidden only over its own surfaces.
+`quadrille-screensaver` covers every output with a drawing sheet. A pen plots
+the subject stroke by stroke while the title block types itself in; then the
+subject runs, and each part in turn is picked out, magnified in a detail view
+and specified beside it, until a wipe clears the sheet for the next. Each
+output starts on a different subject.
 
 | subject | what moves, and how it is worked out |
 |---|---|
@@ -179,93 +196,29 @@ it; the cursor is hidden only over its own surfaces.
 | Cooke triplet | real rays traced through six spherical surfaces by Snell's law as the field sweeps to 20° |
 | Joukowski aerofoil | potential flow with the Kutta condition; particles released together, the upper ones arrive first |
 | Hohmann transfer | LEO to GEO by Kepler's equation, the burns, the Earth turning under the satellite |
-
-![The gears at 2:1 on the laptop, a frame at the panel's own pixels](plugins/screenshots/screensaver-gears.png)
-
-![The engine at 1:1 on the ultrawide, in the paper theme: the connecting rod in detail](plugins/screenshots/screensaver-engine-paper-ultrawide.png)
+| This computer | three sheets of the machine it runs on, read from `/sys` and `/proc` without root: its topology, with traffic along the buses at the measured I/O rates; its displays side by side at their true sizes; its cooling, the fans turning at their measured speeds |
 
 ![The gears and their section A–A on the ultrawide, in the paper theme: the key in detail](plugins/screenshots/screensaver-gears-section-paper-ultrawide.png)
 
-After the seven come the sheets of the machine the screensaver runs on,
-drawn from what it reads of `/sys` and `/proc`, without root and without
-running anything: its topology as a block diagram (the processor's cores by
-kind, the memory, the PCIe tree with its bridges, graphics with the displays
-on their connectors, drives, network adapters and the USB tree), its displays
-side by side at their true sizes down to the pixel pitch, and its cooling as
-a plan whose fans turn at their measured speeds. What moves is what the
-machine is doing, sampled in the background: traffic along the buses at the
-measured I/O rates, temperatures, fan speeds, the battery. Serial numbers,
-hardware addresses, UUIDs, host and user names, Wi-Fi network names and
-mount points are never read, and a sheet the machine says too little for is
-left out. `render --machine fixture` draws a made-up laptop instead, the one
-shown here.
-
-![The topology of the made-up laptop on the ultrawide, in the paper theme: the processor in detail](plugins/screenshots/screensaver-computer-topology-paper-ultrawide.png)
-
-The sheets keep a drawing office's conventions. Views line up as first-angle
-projection places them: the gears and the Geneva drive are sectioned through
-their shafts under the front view, behind a cutting plane, with bodies lined,
-teeth, shafts, keys and pins left whole, and hidden teeth where gears mesh;
-on the laptop a view goes in only if it fits at the front view's scale.
-Dimensions carry limits and fits (`48 ±0.02`, `Ø8 H7/k6`), surfaces their
-finish (`√ Ra 0.8`), and features datums and geometric tolerances in feature
-control frames; the title block has the first-angle projection symbol and,
-where the column has room, a revision table. Balloons and notes place
-themselves: lined up beside the drawing, or just off what they point at,
-whichever hides least of the drawing and crosses least of it; a balloon on a
-moving part steps out of the way of lettering it would cover. Lettering is
-drawn whole or not at all.
-
-Drawings to scale use a preferred scale (ISO 5455, with DIN 823's 2.5) that
-is true on the display's calibration: the engine is 1:1 on both of the author's monitors
-and the gears 2:1 (on the ultrawide, with room for their section under them);
-on an estimated size the scale reads `~2:1`. Lettering,
-patterns and line types are whole virtual pixels, in the Omarchy theme's
-roles. Still parts of a settled sheet are kept and only what moves is drawn
-again, so the renderer's damage is the size of the motion
-(`quadrille-screensaver bench` times the drawing, and repainting what
-changed as a live surface does, headless).
+The sheets keep a drawing office's conventions: views and sections lined up by
+first-angle projection, limits and fits, surface finish, datums and geometric
+tolerances, and balloons that place themselves, at a preferred scale that is
+true on the display's calibration (the gears are 2:1 on both of the author's
+monitors). The machine's own sheets never read serial numbers, hardware
+addresses, UUIDs, or host and user names; `--machine fixture` draws a made-up
+laptop instead (`fixture-desktop`, `fixture-server` and `fixture-vm` the other
+kinds), and every image of them in this repository is drawn from one.
 
 ```sh
-layershell/tools/install.sh               # builds and installs it with quadrille-bar
-quadrille-screensaver-launch force        # run it now
+quadrille-screensaver --subject cooling   # start on one sheet
 quadrille-screensaver render --subject gears --at 12,20 --output ultrawide --theme paper
 quadrille-screensaver list                # the subjects
 ```
 
-`render` draws any moment of any sheet offscreen to PNG, exactly as an output
-shows it (`--physical` upscales to the panel's pixels); it is how the sheets are
-designed, with no window opened.
-
-**Starting it when the desktop is idle.** Omarchy's idle service starts its own
-screensaver by name, so `quadrille.idle` is that service cloned, with two
-changes: it starts `quadrille-screensaver-launch` (which falls back to the stock
-screensaver), and it counts the screensaver's layer surfaces as the stock
-screensaver's window, so the lock still comes on time. It is opt-in, like the
-lock screen, because it also decides when the screen locks:
-
-```sh
-plugins/install.sh idle                   # back to the stock idle service: plugins/stock.sh
-```
-
-The launcher honours Omarchy's screensaver switch, runs the screensaver as
-`org.omarchy.screensaver` (so `omarchy-system-lock` stops it, as it stops the
-stock one) and logs to the journal (`journalctl -t quadrille-screensaver`). For
-the menu's *Screensaver* entry, add to `~/.config/omarchy/extensions/omarchy-menu.jsonc`
-(with the icon and label: the menu labels an override without them by its id):
-
-```jsonc
-"system.screensaver": {"icon":"󱄄","label":"Screensaver","action":"quadrille-screensaver-launch force"},
-```
-
-A subject is one file in `layershell/crates/screensaver/src/subjects/`: it
-draws itself in its own units on a `Draft` (lines of each type, hatching,
-dimensions, notes, balloons; `schematic.rs` adds circuit symbols) at a moment
-of its motion, and fills in a card (title, notes, parts with their
-specifications and detail circles). Plotting, scale, sheet, details and
-timing are the sheet's, the same for every subject. Add the type to
-`subjects::all()`; the tests check that every part is drawn and that names fit
-the parts list.
+`render` draws any moment of any sheet offscreen to PNG, as an output shows it
+(`--size 1366x768` for a display other than the author's), and `bench` times
+the drawing and the repaint. Design notes: `docs/screensaver.md`, and
+`docs/this-computer.md` for the machine's sheets.
 
 ## What is not exact
 
@@ -278,6 +231,10 @@ the parts list.
   filter, no launch feedback).
 - Physical calibration infers nominal diagonals from rounded EDID data. Use
   measured overrides when tighter physical accuracy matters.
+- The screensaver's sheets of the machine itself are checked on a laptop and on
+  made-up desktops, servers and virtual machines, not on every machine. On a
+  view smaller than about 1366 × 768 at scale 1, the topology is drawn smaller
+  than its lettering wants. See `docs/this-computer.md`, "Limits".
 
 ## Layout
 
@@ -288,6 +245,7 @@ tools/         gen_themes.py, install.sh
 plugins/       the QML kit and plugins, NOTES.md (findings), screenshots/
 layershell/    the panel host and the screensaver: windowing shell, shared desktop crate
                (theme, calibration), bar and screensaver crates, nested-compositor tests; NOTES.md
+docs/          the screensaver's design: screensaver.md, this-computer.md
 ```
 
 `layershell/` depends on quadrille and on the
