@@ -642,12 +642,9 @@ mod tests {
         repaints_as_drawn_in(PlotStyle::DRAFTING, 0, Output::LAPTOP, 0.0..12.0, 4.0);
     }
 
-    /// A carousel plotter repaints as drawn: its gantry under the ink and
-    /// its carriage's ticks through the plot, a detail plotted by its pen,
-    /// and the sweep of the wipe.
-    #[test]
-    fn a_carousel_plotter_repaints_as_drawn() {
-        let style = PlotStyle::CAROUSEL;
+    /// Repaints the first sheet as drawn in `style` through the start of
+    /// its plot, its first detail and its wipe.
+    fn plot_detail_and_wipe_repaint_as_drawn(style: PlotStyle) {
         let parts = crate::subjects::all(&Machine::fixture())[0]
             .card()
             .parts
@@ -658,6 +655,22 @@ mod tests {
         repaints_as_drawn_in(style, 0, Output::LAPTOP, 0.0..4.0, 4.0);
         repaints_as_drawn_in(style, 0, Output::LAPTOP, detail - 0.2..detail + 2.4, 10.0);
         repaints_as_drawn_in(style, 0, Output::LAPTOP, end - 1.6..end, 10.0);
+    }
+
+    /// A carousel plotter repaints as drawn: its gantry under the ink and
+    /// its carriage's ticks through the plot, a detail plotted by its pen,
+    /// and the sweep of the wipe.
+    #[test]
+    fn a_carousel_plotter_repaints_as_drawn() {
+        plot_detail_and_wipe_repaint_as_drawn(PlotStyle::CAROUSEL);
+    }
+
+    /// A drafting office repaints as drawn: its form filling in, its ink
+    /// wet behind the pen and its compass, a detail plotted by its pen, and
+    /// the sweep of the wipe.
+    #[test]
+    fn a_drafting_office_repaints_as_drawn() {
+        plot_detail_and_wipe_repaint_as_drawn(PlotStyle::DRAFTING);
     }
 
     /// Every sheet's plot in every style, on both outputs, at ten frames a

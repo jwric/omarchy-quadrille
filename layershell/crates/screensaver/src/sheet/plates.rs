@@ -2,7 +2,9 @@
 //! list, the notes, a part's specification and the readings.
 //!
 //! Lettering goes through a [`Typist`], which can be given a budget of
-//! characters: the title block of a new sheet types itself in.
+//! characters: the title block of a new sheet types itself in. Or the
+//! furniture is a printed form a drafting office fills in as its drawing
+//! proceeds, an [`Entry`] at a time, each with its own typist ([`Typing`]).
 use iced_core::{Color, Point, Rectangle};
 use iced_widget::graphics::geometry;
 use quadrille::Palette;
@@ -17,6 +19,8 @@ use crate::subjects::Card;
 pub struct Typist {
     /// Characters still to type.
     budget: usize,
+    /// Characters it has been given to type, typed or not.
+    pub asked: usize,
 }
 
 impl Typist {
@@ -24,6 +28,7 @@ impl Typist {
     pub fn rate(seconds: f32, per_second: f32) -> Self {
         Self {
             budget: (seconds.max(0.0) * per_second) as usize,
+            asked: 0,
         }
     }
 
@@ -40,8 +45,10 @@ impl Typist {
         anchor: Anchor,
         color: Color,
     ) {
-        let shown = text.chars().count().min(self.budget);
+        let count = text.chars().count();
+        let shown = count.min(self.budget);
         self.budget -= shown;
+        self.asked += count;
 
         if shown == 0 {
             return;
@@ -52,6 +59,49 @@ impl Typist {
         let typed: String = text.chars().take(shown).collect();
 
         letters::write(pen, &typed, corner, color);
+    }
+}
+
+/// What of a sheet's form fills in at once, as a drafting office fills in
+/// its printed form while the drawing proceeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Entry {
+    /// The form as printed, with what is known of the drawing before it is
+    /// begun: its title, number, domain and unit, and its revisions.
+    Form,
+    Notes,
+    /// A part's row of the parts list.
+    Row(usize),
+    /// The name under a view other than the front view, by its pane.
+    View(usize),
+    /// What the draughtsman signs off once the drawing is done: its scale,
+    /// the sheet, the date and who drew it, and the front view's name.
+    SignOff,
+}
+
+/// Which of the furniture is drawn, and who types it.
+pub enum Typing {
+    /// All of it, by one typist in turn: a new sheet typing itself in.
+    InTurn(Typist),
+    /// Only one entry, by a typist of its own.
+    Only(Entry, Typist),
+}
+
+impl Typing {
+    /// The typist of `entry`, if it is drawn.
+    pub fn typist(&mut self, entry: Entry) -> Option<&mut Typist> {
+        match self {
+            Self::InTurn(typist) => Some(typist),
+            Self::Only(only, typist) => (*only == entry).then_some(typist),
+        }
+    }
+
+    /// Whether `entry` is drawn.
+    pub fn draws(&self, entry: Entry) -> bool {
+        match self {
+            Self::InTurn(_) => true,
+            Self::Only(only, _) => *only == entry,
+        }
     }
 }
 
@@ -184,6 +234,8 @@ pub struct Field<'a> {
     pub value: &'a str,
     pub span: i32,
     pub emphasis: bool,
+    /// What its value is filled in with, on a form.
+    pub entry: Entry,
 }
 
 impl<'a> Field<'a> {
@@ -193,12 +245,21 @@ impl<'a> Field<'a> {
             value,
             span,
             emphasis: false,
+            entry: Entry::Form,
         }
     }
 
     pub fn emphasised(self) -> Self {
         Self {
             emphasis: true,
+            ..self
+        }
+    }
+
+    /// The field signed off once the drawing is done.
+    pub fn signed(self) -> Self {
+        Self {
+            entry: Entry::SignOff,
             ..self
         }
     }
@@ -218,7 +279,7 @@ pub fn title_block<'a>(
         ],
         vec![
             Field::new("DOMAIN", card.domain.label(), 3),
-            Field::new("SCALE", scale, 2),
+            Field::new("SCALE", scale, 2).signed(),
             // The projection symbol's.
             Field::new("", "", 1),
         ],
@@ -226,9 +287,9 @@ pub fn title_block<'a>(
         // on the laptop's column.
         vec![
             Field::new("UNIT", card.unit.label(), 3),
-            Field::new("SHEET", sheet, 5),
-            Field::new("DATE", date, 6),
-            Field::new("DRAWN", "QUADRILLE", 6),
+            Field::new("SHEET", sheet, 5).signed(),
+            Field::new("DATE", date, 6).signed(),
+            Field::new("DRAWN", "QUADRILLE", 6).signed(),
         ],
     ]
 }
@@ -293,47 +354,56 @@ pub fn room(width: i32, row: &[Field<'_>]) -> Vec<usize> {
 /// by their spans, each field its name over its value.
 pub fn fields<Renderer: geometry::Renderer>(
     pen: &mut Pen<'_, Renderer>,
-    typist: &mut Typist,
+    typing: &mut Typing,
     bounds: Rectangle<i32>,
     rows: &[Vec<Field<'_>>],
     palette: &Palette,
 ) {
-    pen.outline(bounds, palette.edge);
+    let form = typing.draws(Entry::Form);
+
+    if form {
+        pen.outline(bounds, palette.edge);
+    }
 
     for (r, row) in rows.iter().enumerate() {
         let y = bounds.y + r as i32 * FIELD;
 
-        if r > 0 {
+        if r > 0 && form {
             pen.hline(bounds.x, bounds.x + bounds.width - 1, y, palette.edge);
         }
 
         let rooms = room(bounds.width, row);
 
         for (f, (field, (x, _))) in row.iter().zip(cells(bounds, row)).enumerate() {
-            if f > 0 {
+            if f > 0 && form {
                 pen.vline(x, y, y + FIELD, palette.edge);
             }
 
             let value: String = field.value.chars().take(rooms[f]).collect();
 
-            typist.text(
-                pen,
-                field.name,
-                Point::new(x + 3, y + 1),
-                Anchor::TOP_LEFT,
-                palette.faint,
-            );
-            typist.text(
-                pen,
-                &value,
-                Point::new(x + 3, y + 1 + LINE),
-                Anchor::TOP_LEFT,
-                if field.emphasis {
-                    palette.accent
-                } else {
-                    palette.ink
-                },
-            );
+            if let Some(typist) = typing.typist(Entry::Form) {
+                typist.text(
+                    pen,
+                    field.name,
+                    Point::new(x + 3, y + 1),
+                    Anchor::TOP_LEFT,
+                    palette.faint,
+                );
+            }
+
+            if let Some(typist) = typing.typist(field.entry) {
+                typist.text(
+                    pen,
+                    &value,
+                    Point::new(x + 3, y + 1 + LINE),
+                    Anchor::TOP_LEFT,
+                    if field.emphasis {
+                        palette.accent
+                    } else {
+                        palette.ink
+                    },
+                );
+            }
         }
     }
 }
@@ -391,7 +461,7 @@ pub fn caption<Renderer: geometry::Renderer>(
 /// any, shown inverse.
 pub fn parts<Renderer: geometry::Renderer>(
     pen: &mut Pen<'_, Renderer>,
-    typist: &mut Typist,
+    typing: &mut Typing,
     bounds: Rectangle<i32>,
     card: &Card,
     lit: Option<usize>,
@@ -409,12 +479,12 @@ pub fn parts<Renderer: geometry::Renderer>(
 
     table(
         pen,
-        typist,
+        typing,
         bounds,
         &[4, 12, 3, 9],
         &header,
         rows,
-        lit,
+        (lit, Entry::Row),
         palette,
     );
 }
@@ -422,11 +492,15 @@ pub fn parts<Renderer: geometry::Renderer>(
 /// The revision table: what has changed on the drawing, under a caption.
 pub fn revisions<Renderer: geometry::Renderer>(
     pen: &mut Pen<'_, Renderer>,
-    typist: &mut Typist,
+    typing: &mut Typing,
     bounds: Rectangle<i32>,
     card: &Card,
     palette: &Palette,
 ) {
+    let Some(typist) = typing.typist(Entry::Form) else {
+        return;
+    };
+
     caption(
         pen,
         typist,
@@ -446,7 +520,7 @@ pub fn revisions<Renderer: geometry::Renderer>(
 
     table(
         pen,
-        typist,
+        typing,
         rect(
             bounds.x,
             bounds.y + CAPTION,
@@ -456,22 +530,23 @@ pub fn revisions<Renderer: geometry::Renderer>(
         &[3, 15, 8],
         &["REV", "DESCRIPTION", "DATE"],
         rows,
-        None,
+        (None, |_| Entry::Form),
         palette,
     );
 }
 
 /// A table: its columns `widths` shares of the width, a row for each of
-/// `rows` under `header`, and row `lit`, if any, shown inverse.
+/// `rows` under `header`; row `lit`, if any, shown inverse, and each row
+/// filled in as the entry its index gives, on a form.
 #[allow(clippy::too_many_arguments)]
 fn table<Renderer: geometry::Renderer>(
     pen: &mut Pen<'_, Renderer>,
-    typist: &mut Typist,
+    typing: &mut Typing,
     bounds: Rectangle<i32>,
     widths: &[i32],
     header: &[&str],
     rows: impl Iterator<Item = Vec<String>>,
-    lit: Option<usize>,
+    (lit, entry): (Option<usize>, impl Fn(usize) -> Entry),
     palette: &Palette,
 ) {
     let height = LINE + 1;
@@ -484,7 +559,11 @@ fn table<Renderer: geometry::Renderer>(
         .map(|share| bounds.x + (bounds.width - 1) * share / total)
         .collect();
 
-    pen.outline(bounds, palette.edge);
+    let form = typing.draws(Entry::Form);
+
+    if form {
+        pen.outline(bounds, palette.edge);
+    }
 
     for (r, cells) in std::iter::once(header.iter().map(|name| name.to_string()).collect())
         .chain(rows)
@@ -492,11 +571,12 @@ fn table<Renderer: geometry::Renderer>(
     {
         let y = bounds.y + r as i32 * height;
         let is_lit = r > 0 && lit == Some(r - 1);
+        let row = if r > 0 { entry(r - 1) } else { Entry::Form };
 
-        if r > 0 {
+        if r > 0 && form {
             pen.hline(bounds.x, bounds.x + bounds.width - 1, y, palette.edge);
         }
-        if is_lit {
+        if is_lit && typing.draws(row) {
             pen.fill(
                 rect(bounds.x + 1, y + 1, bounds.width - 2, height - 1),
                 palette.accent,
@@ -506,7 +586,7 @@ fn table<Renderer: geometry::Renderer>(
         for (c, cell) in cells.iter().enumerate() {
             let (left, right) = (edges[c], edges[c + 1]);
 
-            if r == 0 && c > 0 {
+            if r == 0 && c > 0 && form {
                 pen.vline(left, bounds.y, bounds.y + bounds.height - 1, palette.edge);
             }
 
@@ -517,13 +597,15 @@ fn table<Renderer: geometry::Renderer>(
                 _ => palette.ink,
             };
 
-            typist.text(
-                pen,
-                &text,
-                Point::new(left + 3, y + 1),
-                Anchor::TOP_LEFT,
-                color,
-            );
+            if let Some(typist) = typing.typist(row) {
+                typist.text(
+                    pen,
+                    &text,
+                    Point::new(left + 3, y + 1),
+                    Anchor::TOP_LEFT,
+                    color,
+                );
+            }
         }
     }
 }
@@ -531,20 +613,25 @@ fn table<Renderer: geometry::Renderer>(
 /// Numbered notes under a caption, wrapped to the width.
 pub fn notes<Renderer: geometry::Renderer>(
     pen: &mut Pen<'_, Renderer>,
-    typist: &mut Typist,
+    typing: &mut Typing,
     bounds: Rectangle<i32>,
     notes: &[String],
     palette: &Palette,
 ) {
-    caption(
-        pen,
-        typist,
-        rect(bounds.x, bounds.y, bounds.width, CAPTION),
-        "NOTES",
-        "",
-        palette,
-    );
+    if let Some(typist) = typing.typist(Entry::Form) {
+        caption(
+            pen,
+            typist,
+            rect(bounds.x, bounds.y, bounds.width, CAPTION),
+            "NOTES",
+            "",
+            palette,
+        );
+    }
 
+    let Some(typist) = typing.typist(Entry::Notes) else {
+        return;
+    };
     let mut y = bounds.y + CAPTION;
     let width = columns(bounds.width - 6);
 

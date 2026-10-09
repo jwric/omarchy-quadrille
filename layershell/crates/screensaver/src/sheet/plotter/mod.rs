@@ -24,6 +24,7 @@ pub mod pen;
 pub mod strokes;
 pub mod style;
 
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -53,6 +54,16 @@ const PLOT_BUCKET: usize = 1536;
 /// The laptop's sheet height, which a style's lengths and speeds are for.
 const REFERENCE: f64 = 533.0;
 
+/// The least radius of a circle or arc a compass draws, in pixels of the
+/// laptop's sheet.
+const COMPASS: f64 = 12.0;
+
+/// Whether a compass draws a circle or an arc of `radius` pixels on a
+/// sheet `height` virtual pixels high: one too big to draw freehand.
+pub fn compasses(radius: i32, height: i32) -> bool {
+    f64::from(radius) >= COMPASS * scale(height)
+}
+
 /// How much a style's lengths and speeds are scaled on a sheet `height`
 /// virtual pixels high, so a plot takes as long on every output.
 pub fn scale(height: i32) -> f64 {
@@ -76,6 +87,8 @@ pub struct Paper {
     pub clip: Rectangle<i32>,
     /// Where the pen is kept off the drawing.
     pub home: Point<i32>,
+    /// Whether the drawing is a diagram, not drawn to scale.
+    pub diagram: bool,
 }
 
 /// A sheet's plot, worked out once.
@@ -84,7 +97,24 @@ pub struct Plot {
     /// The ranges of pieces, or strokes, kept as one drawing once plotted.
     buckets: Vec<Range<usize>>,
     clip: Rectangle<i32>,
+    /// The centre of each mark a compass draws, by its index.
+    compasses: Vec<Option<Point<i32>>>,
+    pub cues: Cues,
     pub stats: Stats,
+}
+
+/// When the pen reaches what fills a sheet's form in, in seconds of the
+/// plot: what a drafting office lists and signs as its drawing proceeds.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Cues {
+    /// When the annotation is begun.
+    pub annotation: Option<f64>,
+    /// When each balloon's number is begun, by its item.
+    pub balloons: BTreeMap<usize, f64>,
+    /// When each view's bodies are done, by its pane.
+    pub views: BTreeMap<usize, f64>,
+    /// When the last stroke is done.
+    pub drawn: f64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -216,6 +246,8 @@ impl Plot {
             },
             buckets,
             clip: paper.clip,
+            compasses: Vec::new(),
+            cues: Cues::default(),
         }
     }
 
@@ -286,7 +318,19 @@ impl Plot {
             })
             .collect();
         let metas: Vec<Meta> = marks.iter().map(|marked| marked.meta).collect();
-        let ordered = order::order(style, made, &metas, paper.home);
+        // A diagram grows along what touches.
+        let touching = (style.grow && paper.diagram).then(|| {
+            let whose: Vec<usize> = std::iter::once(0)
+                .chain(
+                    ids.iter()
+                        .enumerate()
+                        .flat_map(|(mark, ids)| ids.iter().map(move |_| mark)),
+                )
+                .collect();
+
+            owners.touching(&made, |id| whose[id as usize])
+        });
+        let ordered = order::order(style, made, &metas, paper.home, touching.as_ref());
         let scale = scale(paper.size.1);
         let motions = Motions::plan(style, &ordered.strokes, &ordered.gaps, paper.home, scale);
         let inks: Vec<usize> = ordered.strokes.iter().map(Stroke::ink).collect();
@@ -318,7 +362,17 @@ impl Plot {
             }
         }
 
+        let compasses = metas
+            .iter()
+            .map(|meta| {
+                meta.compass
+                    .filter(|&(_, radius)| compasses(radius, paper.size.1))
+                    .map(|(centre, _)| centre)
+            })
+            .collect();
+
         Self {
+            cues: cues(&ordered, &metas, &motions),
             work: Work::Pen {
                 strokes: ordered.strokes,
                 motions,
@@ -326,6 +380,7 @@ impl Plot {
             },
             buckets,
             clip: paper.clip,
+            compasses,
             stats,
         }
     }
@@ -386,6 +441,54 @@ impl Plot {
                 }
             }
         }
+    }
+
+    /// The pixels inked in the last `seconds` before `share` of the plot's
+    /// time is gone: the ink still wet.
+    pub fn wet(&self, share: f32, seconds: f32) -> Vec<Point<i32>> {
+        let Work::Pen {
+            strokes,
+            motions,
+            length,
+        } = &self.work
+        else {
+            return Vec::new();
+        };
+        let time = f64::from(share) * length;
+        // How far through the strokes the pen is: a stroke, and how many of
+        // its pixels it has passed.
+        let reached = |time: f64| {
+            let place = motions.at(time.max(0.0), strokes);
+
+            place.drawing.unwrap_or((place.done, 0))
+        };
+        let (then, now) = (reached(time - f64::from(seconds)), reached(time));
+
+        (then.0..=now.0.min(strokes.len().saturating_sub(1)))
+            .filter(|_| then != now)
+            .flat_map(|index| {
+                let stroke = &strokes[index];
+                let from = if index == then.0 { then.1 } else { 0 };
+                let to = if index == now.0 {
+                    now.1
+                } else {
+                    stroke.pixels.len()
+                };
+
+                stroke.inked(from..to.max(from))
+            })
+            .collect()
+    }
+
+    /// Where the point of the compass is at `now`, if one is drawing.
+    pub fn compass(&self, now: &Now) -> Option<Point<i32>> {
+        let (Work::Pen { strokes, .. }, Progress::Pen { drawing, .. }) = (&self.work, now.progress)
+        else {
+            return None;
+        };
+        let (index, _) = drawing?;
+
+        self.compasses.get(strokes[index].mark).copied().flatten()
     }
 
     /// Draws bucket `index` whole.
@@ -452,6 +555,56 @@ impl Plot {
             _ => unreachable!("a plot's moment is its own"),
         }
     }
+}
+
+/// When the pen reaches what fills the form in, drawing `ordered`, whose
+/// marks `metas` says what they are, as `motions` says.
+fn cues(ordered: &order::Ordered, metas: &[Meta], motions: &Motions) -> Cues {
+    use order::stage;
+
+    // Each stroke's start and end.
+    let mut times = vec![(0.0, 0.0); ordered.strokes.len()];
+
+    for op in &motions.ops {
+        if let motion::Act::Draw { stroke, .. } | motion::Act::Touch { stroke } = op.act {
+            times[stroke] = (op.start, op.start + op.time);
+        }
+    }
+
+    // A balloon's number is the last of its pieces.
+    let mut numbers: BTreeMap<usize, usize> = BTreeMap::new();
+
+    for stroke in &ordered.strokes {
+        let number = numbers.entry(stroke.mark).or_default();
+        *number = (*number).max(stroke.piece);
+    }
+
+    let mut cues = Cues::default();
+
+    for (index, stroke) in ordered.strokes.iter().enumerate() {
+        let (start, end) = times[index];
+        let meta = &metas[stroke.mark];
+
+        match ordered.stages[index] {
+            stage::ANNOTATION => {
+                cues.annotation = Some(cues.annotation.map_or(start, |cue: f64| cue.min(start)));
+            }
+            stage::BALLOONS if stroke.piece == numbers[&stroke.mark] => {
+                if let Some(item) = meta.item {
+                    cues.balloons.entry(item).or_insert(start);
+                }
+            }
+            stage::BODIES => {
+                let view = cues.views.entry(meta.pane).or_insert(end);
+                *view = view.max(end);
+            }
+            _ => {}
+        }
+
+        cues.drawn = cues.drawn.max(end);
+    }
+
+    cues
 }
 
 /// Letters a second in a plot of `marks` drawing `strokes` as `motions`
@@ -704,6 +857,151 @@ mod tests {
                 assert!(a.work == b.work && a.buckets == b.buckets, "{}", style.name);
             }
         }
+    }
+
+    /// The pixels `plot` has inked with `share` of its time gone.
+    fn inked(plot: &Plot, share: f32) -> std::collections::BTreeSet<(i32, i32)> {
+        let Work::Pen { strokes, .. } = &plot.work else {
+            unreachable!("the pen's plot")
+        };
+        let Progress::Pen { done, drawing } = plot.at(share).progress else {
+            unreachable!("the pen's plot")
+        };
+
+        strokes[..done]
+            .iter()
+            .flat_map(|stroke| stroke.inked(0..stroke.pixels.len()))
+            .chain(
+                drawing
+                    .into_iter()
+                    .flat_map(|(index, passed)| strokes[index].inked(0..passed)),
+            )
+            .map(|pixel| (pixel.x, pixel.y))
+            .collect()
+    }
+
+    /// A drafting office's sheets of each kind, plotted on the laptop.
+    fn drafted(each: impl Fn(&str, usize, &Plot)) {
+        let subjects = crate::subjects::all(&Machine::fixture());
+        let theme = quadrille::Theme::TERMINAL;
+        let studio = Studio::new(&subjects, Output::LAPTOP, &theme, "2026-10-07")
+            .expect("A studio")
+            .plotting(PlotStyle::DRAFTING);
+
+        for name in ["gears", "engine", "topology"] {
+            let index = crate::subjects::find(&subjects, name).expect("A subject");
+
+            each(
+                name,
+                subjects[index].card().parts.len(),
+                &studio.plot(index),
+            );
+        }
+    }
+
+    /// The ink still wet on each frame is what the pen has inked in the
+    /// style's moment before it: all it has newly inked, and nothing it has
+    /// not inked (a letter's strokes may cross, inking a pixel again).
+    #[test]
+    fn the_wet_ink_is_what_was_inked_last() {
+        let style = PlotStyle::DRAFTING;
+
+        drafted(|name, parts, plot| {
+            let mut seen = 0;
+
+            for (local, share) in frames(&style, parts) {
+                let then = share - style.wet / style.length;
+                let (now, before) = (inked(plot, share), inked(plot, then.max(0.0)));
+                let fresh: Vec<&(i32, i32)> = now.difference(&before).collect();
+                let wet: std::collections::BTreeSet<(i32, i32)> = plot
+                    .wet(share, style.wet)
+                    .into_iter()
+                    .map(|pixel| (pixel.x, pixel.y))
+                    .collect();
+
+                assert!(
+                    fresh.iter().all(|pixel| wet.contains(pixel)),
+                    "{name} at {local} s"
+                );
+                assert!(wet.is_subset(&now), "{name} at {local} s");
+                seen += usize::from(!wet.is_empty());
+            }
+
+            assert!(seen > 100, "{name}: wet on {seen} frames");
+        });
+    }
+
+    /// A compass is seen only while the pen draws a circle or an arc, its
+    /// point at the centre and the pen out on the circle.
+    #[test]
+    fn the_compass_is_at_the_centre_of_what_the_pen_draws() {
+        let style = PlotStyle::DRAFTING;
+
+        drafted(|name, parts, plot| {
+            let Work::Pen { strokes, .. } = &plot.work else {
+                unreachable!("the pen's plot")
+            };
+            let mut seen = 0;
+
+            for (local, share) in frames(&style, parts) {
+                let now = plot.at(share);
+                let Some(centre) = plot.compass(&now) else {
+                    continue;
+                };
+                let (
+                    Some(head),
+                    Progress::Pen {
+                        drawing: Some((index, _)),
+                        ..
+                    },
+                ) = (now.head, now.progress)
+                else {
+                    panic!("{name} at {local} s: a compass with no pen drawing");
+                };
+                let reach = |pixel: Point<i32>| {
+                    f64::from(pixel.x - centre.x).hypot(f64::from(pixel.y - centre.y))
+                };
+
+                assert!(
+                    (reach(head.at) - reach(strokes[index].pixels[0])).abs() <= 1.5,
+                    "{name} at {local} s"
+                );
+                seen += 1;
+            }
+
+            if name != "topology" {
+                assert!(seen > 3, "{name}: a compass on {seen} frames");
+            }
+        });
+    }
+
+    /// The form's cues come in the order of a drafting office's stages, the
+    /// annotation before the balloons, and all of them before the pen is
+    /// put away.
+    #[test]
+    fn the_cues_come_as_the_stages_do() {
+        let style = PlotStyle::DRAFTING;
+
+        drafted(|name, parts, plot| {
+            let cues = &plot.cues;
+            let end = f64::from(style.length - motion::REST);
+
+            assert!(cues.drawn > 0.0 && cues.drawn < end, "{name}");
+            assert!(cues.views.contains_key(&0), "{name}");
+            assert_eq!(cues.balloons.len(), parts, "{name}");
+
+            for &balloon in cues.balloons.values() {
+                assert!(
+                    cues.annotation.is_none_or(|notes| notes < balloon),
+                    "{name}"
+                );
+                assert!(balloon < cues.drawn, "{name}");
+            }
+
+            for &view in cues.views.values() {
+                assert!(view <= cues.drawn, "{name}");
+            }
+        });
     }
 
     /// Consecutive pieces are kept in buckets of at least the cost asked

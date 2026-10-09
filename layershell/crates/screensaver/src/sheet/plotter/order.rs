@@ -12,13 +12,21 @@
 //! where the pen comes to it and leaves it soonest. The rest of the key
 //! keeps clusters apart for the motion's beats: a stage from the next, a
 //! part or a view from another.
+//!
+//! A drafting office's order ([`Order::Stages`]) lays down a sheet's axes
+//! longest first, draws circles round one centre smallest first, and a
+//! balloon from the dot on its part outwards. A diagram it grows: from its
+//! first part along what touches it, each part drawn whole with its
+//! lettering as the pen reaches it, what joins two parts drawn on the way.
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
 use glam::DVec2;
 use iced_core::Point;
 
 use crate::draft::{Line, Pass, Tone};
 
 use super::strokes::{Form, Stroke};
-use super::style::{Order, PlotStyle};
+use super::style::{Circles, Order, PlotStyle};
 
 /// What the order needs to know of a mark.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,6 +47,11 @@ pub struct Meta {
     /// A circle's centre, which a plotter's circle instruction draws it
     /// from.
     pub centre: Option<Point<i32>>,
+    /// A circle's or an arc's centre and radius, which a compass draws it
+    /// round.
+    pub compass: Option<(Point<i32>, i32)>,
+    /// Whether it is lettering alone: a name, a legend.
+    pub label: bool,
 }
 
 /// What comes before a stroke in the order.
@@ -59,12 +72,27 @@ pub struct Ordered {
     pub strokes: Vec<Stroke>,
     /// What comes before each stroke.
     pub gaps: Vec<Gap>,
+    /// The stage of the order each stroke is drawn in.
+    pub stages: Vec<u8>,
     pub groups: usize,
 }
 
-/// A group's place in the order: its stage, the cluster within the stage,
-/// and what orders the cluster within.
-type Key = (u8, u32, u32, u32);
+/// A drafting office's stages, by their place in the order.
+pub mod stage {
+    pub const SKELETON: u8 = 0;
+    pub const BODIES: u8 = 1;
+    pub const LINING: u8 = 2;
+    pub const ANNOTATION: u8 = 3;
+    pub const TRACES: u8 = 4;
+    pub const BALLOONS: u8 = 5;
+}
+
+/// Pairs of marks that touch on the sheet, each the lower index first.
+pub type Touching = BTreeSet<(usize, usize)>;
+
+/// A group's place in the order: its stage, the cluster within the stage
+/// (the first two numbers after it), and what orders the cluster within.
+type Key = (u8, u32, u32, u32, u32);
 
 /// The strokes of one mark (of one pen, in a pen-sorted plot), in order.
 struct Group {
@@ -72,6 +100,8 @@ struct Group {
     key: Key,
     /// Whether it may be drawn backwards whole: an area's lining or rows.
     backwards: bool,
+    /// A circle's centre.
+    centre: Option<Point<i32>>,
 }
 
 /// How far apart, along a loop, the pen may start it.
@@ -115,9 +145,30 @@ impl Group {
 }
 
 /// `strokes`, in the order made, put in `style`'s order for a pen
-/// starting at `from`; `marks` says what their marks are.
-pub fn order(style: &PlotStyle, strokes: Vec<Stroke>, marks: &[Meta], from: Point<i32>) -> Ordered {
+/// starting at `from`; `marks` says what their marks are. A diagram grows
+/// along the marks `touching`, if it is given.
+pub fn order(
+    style: &PlotStyle,
+    strokes: Vec<Stroke>,
+    marks: &[Meta],
+    from: Point<i32>,
+    touching: Option<&Touching>,
+) -> Ordered {
     let mut groups = group(style, strokes, marks);
+
+    if style.order == Order::Stages {
+        axes(&mut groups);
+
+        for group in &mut groups {
+            if marks[group.strokes[0].mark].pass == Pass::Balloons {
+                balloon(&mut group.strokes);
+            }
+        }
+
+        if let Some(touching) = touching {
+            grow(&mut groups, marks, touching);
+        }
+    }
 
     // A stable sort: groups with the same key stay in the order made.
     groups.sort_by_key(|group| group.key);
@@ -126,6 +177,7 @@ pub fn order(style: &PlotStyle, strokes: Vec<Stroke>, marks: &[Meta], from: Poin
     let mut ordered = Ordered {
         strokes: Vec::new(),
         gaps: Vec::new(),
+        stages: Vec::new(),
         groups: count,
     };
     let mut pen = from;
@@ -151,11 +203,19 @@ pub fn order(style: &PlotStyle, strokes: Vec<Stroke>, marks: &[Meta], from: Poin
         if style.nearest {
             let start = pen;
             let end = trips.then_some(from);
+            let polished = style.polish && cluster.len() <= POLISHED;
 
             cluster = nearest(cluster, &mut pen);
 
-            if style.polish && cluster.len() <= POLISHED {
+            if polished {
                 cluster = polish(cluster, start, end);
+            }
+
+            if style.order == Order::Stages {
+                cluster = concentric(cluster);
+            }
+
+            if polished || style.order == Order::Stages {
                 reseam(&mut cluster, start, end);
                 pen = cluster.last().map_or(pen, Group::end);
             }
@@ -174,11 +234,16 @@ pub fn order(style: &PlotStyle, strokes: Vec<Stroke>, marks: &[Meta], from: Poin
             for (index, stroke) in group.strokes.into_iter().enumerate() {
                 pen = stroke.end();
                 ordered.gaps.push(if index == 0 { gap } else { Gap::None });
+                ordered.stages.push(key.0);
                 ordered.strokes.push(stroke);
             }
         }
 
         last = Some(key);
+    }
+
+    if style.circles == Circles::Onward {
+        onward(&mut ordered.strokes, from);
     }
 
     ordered
@@ -205,6 +270,7 @@ fn group(style: &PlotStyle, strokes: Vec<Stroke>, marks: &[Meta]) -> Vec<Group> 
             None => groups.push(Group {
                 key: key(style.order, meta, stroke.tone),
                 backwards: meta.pass == Pass::Areas,
+                centre: meta.centre,
                 strokes: vec![stroke],
             }),
         }
@@ -219,35 +285,36 @@ fn rank(part: Option<usize>) -> u32 {
     part.map_or(0, |part| part as u32 + 1)
 }
 
+/// Whether a mark of `meta` is the skeleton every view is built on: a
+/// centre or phantom line, or construction belonging to no part.
+fn skeleton(meta: &Meta) -> bool {
+    meta.pass == Pass::Construction && !(meta.line == Some(Line::Thin) && meta.part.is_some())
+}
+
 /// Where a mark of `meta`, in `tone`, goes in `order`.
 fn key(order: Order, meta: &Meta, tone: Tone) -> Key {
-    // Centre and phantom lines, and construction belonging to no part: the
-    // skeleton every view is built on.
-    let skeleton =
-        meta.pass == Pass::Construction && !(meta.line == Some(Line::Thin) && meta.part.is_some());
+    let skeleton = skeleton(meta);
 
     match order {
-        Order::Passes => (meta.pass as u8, 0, 0, 0),
-        Order::Pens => (pen(tone), 0, 0, 0),
+        Order::Passes => (meta.pass as u8, 0, 0, 0, 0),
+        Order::Pens => (pen(tone), 0, 0, 0, 0),
         Order::Stages => match meta.pass {
-            _ if skeleton => (0, 0, 0, 0),
-            Pass::Construction | Pass::Edges | Pass::Hidden => {
-                let sub = match meta.pass {
-                    Pass::Hidden => 3,
-                    _ if meta.curved => 1,
-                    _ => 2,
-                };
-
-                (1, meta.pane as u32, rank(meta.part) + 1, sub)
-            }
-            Pass::Areas => (2, rank(meta.part), 0, 0),
+            _ if skeleton => (stage::SKELETON, 0, 0, 0, 0),
+            Pass::Construction | Pass::Edges | Pass::Hidden => (
+                stage::BODIES,
+                meta.pane as u32,
+                rank(meta.part) + 1,
+                body(meta),
+                0,
+            ),
+            Pass::Areas => (stage::LINING, rank(meta.part), 0, 0, 0),
             Pass::Annotation => match meta.cuts {
                 // A cutting plane before the section it cuts.
-                Some(section) => (1, section as u32, 0, 0),
-                None => (3, meta.pane as u32, 0, 0),
+                Some(section) => (stage::BODIES, section as u32, 0, 0, 0),
+                None => (stage::ANNOTATION, meta.pane as u32, 0, 0, 0),
             },
-            Pass::Traces => (4, 0, 0, 0),
-            Pass::Balloons => (5, meta.item.unwrap_or(0) as u32, 0, 0),
+            Pass::Traces => (stage::TRACES, 0, 0, 0, 0),
+            Pass::Balloons => (stage::BALLOONS, meta.item.unwrap_or(0) as u32, 0, 0, 0),
         },
         Order::Parts => {
             let part = match meta.pass {
@@ -263,12 +330,421 @@ fn key(order: Order, meta: &Meta, tone: Tone) -> Key {
             };
 
             match part {
-                _ if skeleton => (0, 0, 0, 0),
-                Some(part) => (1, rank(Some(part)), 0, sub),
+                _ if skeleton => (0, 0, 0, 0, 0),
+                Some(part) => (1, rank(Some(part)), 0, sub, 0),
                 // What belongs to no part: its line work before the parts,
                 // what is said about it after them.
-                None if sub >= 3 => (2, meta.pane as u32, 0, sub),
-                None => (1, 0, 0, sub),
+                None if sub >= 3 => (2, meta.pane as u32, 0, sub, 0),
+                None => (1, 0, 0, sub, 0),
+            }
+        }
+    }
+}
+
+/// Where a part's body line of `meta` goes within the part: its circles,
+/// arcs and closed outlines first, then its straight lines, then the lines
+/// hidden behind it.
+fn body(meta: &Meta) -> u32 {
+    match meta.pass {
+        Pass::Hidden => 3,
+        _ if meta.curved => 1,
+        _ => 2,
+    }
+}
+
+/// How many pixels the pen passes over drawing `group`.
+fn length(group: &Group) -> usize {
+    group.strokes.iter().map(|stroke| stroke.pixels.len()).sum()
+}
+
+/// The skeleton's axes first, longest first: its straight lines at least
+/// half as long as the longest, each a cluster of its own; the rest of it
+/// after them, nearest first.
+fn axes(groups: &mut [Group]) {
+    let axis = |group: &Group| {
+        group.key.0 == stage::SKELETON
+            && group.strokes.len() == 1
+            && group.strokes[0].form == Form::Line
+    };
+    let longest = groups
+        .iter()
+        .filter(|group| axis(group))
+        .map(length)
+        .max()
+        .unwrap_or(0);
+    let mut lines: Vec<(usize, usize)> = groups
+        .iter()
+        .enumerate()
+        .filter(|(_, group)| axis(group) && 2 * length(group) >= longest)
+        .map(|(index, group)| (index, length(group)))
+        .collect();
+
+    lines.sort_by_key(|&(index, length)| (std::cmp::Reverse(length), index));
+
+    for group in groups.iter_mut() {
+        if group.key.0 == stage::SKELETON {
+            group.key = (stage::SKELETON, 0, 0, 1, 0);
+        }
+    }
+
+    for (rank, (index, _)) in lines.into_iter().enumerate() {
+        groups[index].key = (stage::SKELETON, 0, 0, 0, rank as u32);
+    }
+}
+
+/// A balloon's strokes as a draughtsman draws them: the dot on the part,
+/// the leader out from it, the circle from where the leader meets it, then
+/// the number.
+fn balloon(strokes: &mut [Stroke]) {
+    // Its pieces as they are made: the leader, the dot, the ground the
+    // number clears, the circle and the number.
+    let rank = |piece: usize| match piece {
+        1 => 0,
+        0 => 1,
+        _ => piece,
+    };
+
+    strokes.sort_by_key(|stroke| rank(stroke.piece));
+
+    let Some(dot) = strokes
+        .iter()
+        .find(|stroke| stroke.piece == 1)
+        .map(Stroke::start)
+    else {
+        return;
+    };
+    let mut pen = dot;
+
+    for stroke in strokes.iter_mut() {
+        match (stroke.piece, stroke.form) {
+            (0, Form::Line) => {
+                if distance(stroke.end(), pen) < distance(stroke.start(), pen) {
+                    stroke.reverse();
+                }
+
+                pen = stroke.end();
+            }
+            (_, Form::Loop) => {
+                let seam = (0..stroke.pixels.len())
+                    .min_by_key(|&index| (distance(stroke.pixels[index], pen), index))
+                    .unwrap_or(0);
+
+                stroke.rotate(seam);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `cluster` with the circles round each centre it has more than one round
+/// drawn one after another, smallest first, where the first of them was:
+/// as a compass is opened out.
+fn concentric(cluster: Vec<Group>) -> Vec<Group> {
+    let round = |group: &Group| {
+        group
+            .centre
+            .filter(|_| group.strokes[0].closed())
+            .map(|centre| (centre.x, centre.y))
+    };
+    let mut counts: BTreeMap<(i32, i32), usize> = BTreeMap::new();
+
+    for group in &cluster {
+        if let Some(centre) = round(group) {
+            *counts.entry(centre).or_default() += 1;
+        }
+    }
+
+    // Each group in its place, or a centre's circles where the first was.
+    let mut places: Vec<Result<Group, (i32, i32)>> = Vec::with_capacity(cluster.len());
+    let mut sets: BTreeMap<(i32, i32), Vec<Group>> = BTreeMap::new();
+
+    for group in cluster {
+        match round(&group).filter(|centre| counts[centre] > 1) {
+            Some(centre) => {
+                if !sets.contains_key(&centre) {
+                    places.push(Err(centre));
+                }
+
+                sets.entry(centre).or_default().push(group);
+            }
+            None => places.push(Ok(group)),
+        }
+    }
+
+    places
+        .into_iter()
+        .flat_map(|place| match place {
+            Ok(group) => vec![group],
+            Err(centre) => {
+                let mut set = sets.remove(&centre).unwrap_or_default();
+                let at = Point::new(centre.0, centre.1);
+
+                set.sort_by_key(|group| distance(at, group.strokes[0].pixels[0]));
+                set
+            }
+        })
+        .collect()
+}
+
+/// Turns each loop of `strokes`, drawn in order by a pen starting at
+/// `from`, to go round the way the pen was heading as it came to it: as a
+/// hand carries a stroke on rather than doubling back.
+fn onward(strokes: &mut [Stroke], from: Point<i32>) {
+    /// How many pixels along a stroke its heading is taken over.
+    const ALONG: usize = 3;
+
+    let towards = |from: Point<i32>, to: Point<i32>| place(to) - place(from);
+    let mut pen = from;
+    let mut heading = DVec2::ZERO;
+
+    for stroke in strokes.iter_mut() {
+        let hop = towards(pen, stroke.start());
+
+        if hop.length() >= 2.0 {
+            heading = hop.normalize();
+        }
+
+        let count = stroke.pixels.len();
+
+        if stroke.form == Form::Loop && count > 2 * ALONG {
+            let ahead = towards(stroke.pixels[0], stroke.pixels[ALONG]);
+            let behind = towards(stroke.pixels[0], stroke.pixels[count - ALONG]);
+
+            if heading.dot(behind) > heading.dot(ahead) + 1e-9 {
+                stroke.reverse();
+            }
+        }
+
+        let last = match stroke.form {
+            Form::Loop => Some((stroke.pixels[count.saturating_sub(ALONG)], stroke.pixels[0])),
+            Form::Line | Form::Glyph if count > 1 => {
+                Some((stroke.pixels[count.saturating_sub(1 + ALONG)], stroke.end()))
+            }
+            _ => None,
+        };
+
+        if let Some((before, end)) = last {
+            let way = towards(before, end);
+
+            if way.length() > 0.0 {
+                heading = way.normalize();
+            }
+        }
+
+        pen = stroke.end();
+    }
+}
+
+/// What a diagram's growth walks over: a part, all of it, or a mark
+/// belonging to none that joins parts (a wire, a junction) or labels what
+/// joins them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Node {
+    Part(usize),
+    Mark(usize),
+}
+
+/// Gives the groups of a diagram the keys of its growth: from its first
+/// part outwards along the marks `touching` each other, breadth first. A
+/// part is drawn whole as the walk reaches it (its body and the wiring
+/// that joins it only to itself, its lining, its lettering), straight after
+/// what led to it; a mark of no part (a wire, a junction, a legend on a
+/// wire) as it is crossed. Parts are taken by their ranks, then what joins
+/// them left to right. What the walk never reaches of the bodies is drawn
+/// after it, and the rest keeps its stage.
+fn grow(groups: &mut [Group], marks: &[Meta], touching: &Touching) {
+    // What each mark is drawn as in the walk, and where in its node: a
+    // part's lines, its lining, what it traces still, its lettering; and
+    // whether it is drawn if the walk never reaches it.
+    let walked = |mark: usize, key: Key| -> Option<(Node, u32, bool)> {
+        let meta = &marks[mark];
+        let label = meta.pass == Pass::Annotation && meta.label;
+
+        match (meta.part, key.0) {
+            (_, stage::SKELETON) => None,
+            (Some(part), stage::BODIES) if meta.cuts.is_none() => {
+                Some((Node::Part(part), body(meta), true))
+            }
+            (Some(part), stage::LINING) => Some((Node::Part(part), 4, true)),
+            (Some(part), stage::TRACES) => Some((Node::Part(part), 5, true)),
+            (Some(part), stage::ANNOTATION) if label => Some((Node::Part(part), 6, true)),
+            (None, stage::BODIES) if meta.cuts.is_none() => {
+                Some((Node::Mark(mark), body(meta), true))
+            }
+            (None, stage::ANNOTATION) if label => Some((Node::Mark(mark), 6, false)),
+            (None, stage::TRACES) if meta.line.is_none() => Some((Node::Mark(mark), 5, false)),
+            _ => None,
+        }
+    };
+    let mut nodes: BTreeMap<usize, (Node, u32, bool)> = BTreeMap::new();
+    // The top left of each node.
+    let mut corners: BTreeMap<Node, (i32, i32)> = BTreeMap::new();
+
+    for group in groups.iter() {
+        let mark = group.strokes[0].mark;
+
+        if let Some(walk) = walked(mark, group.key) {
+            nodes.insert(mark, walk);
+
+            for pixel in group.strokes.iter().flat_map(|stroke| &stroke.pixels) {
+                let corner = corners.entry(walk.0).or_insert((pixel.x, pixel.y));
+
+                *corner = (corner.0.min(pixel.x), corner.1.min(pixel.y));
+            }
+        }
+    }
+
+    let mut joins: BTreeMap<Node, BTreeSet<Node>> = BTreeMap::new();
+
+    for &(a, b) in touching {
+        if let (Some(&(a, ..)), Some(&(b, ..))) = (nodes.get(&a), nodes.get(&b))
+            && a != b
+        {
+            joins.entry(a).or_default().insert(b);
+            joins.entry(b).or_default().insert(a);
+        }
+    }
+
+    // Parts by rank, then marks of no part left to right.
+    let joins: BTreeMap<Node, Vec<Node>> = joins
+        .into_iter()
+        .map(|(node, next)| {
+            let mut next: Vec<Node> = next.into_iter().collect();
+
+            next.sort_by_key(|node| match node {
+                Node::Part(part) => (0, *part as i32, 0, 0),
+                Node::Mark(mark) => (1, corners[node].0, corners[node].1, *mark as i32),
+            });
+
+            (node, next)
+        })
+        .collect();
+    let mut walk = Walk::default();
+    let roots: Vec<Node> = corners
+        .keys()
+        .filter(|node| matches!(node, Node::Part(_)))
+        .copied()
+        .collect();
+
+    // From the first part, and from any part the walk never reaches.
+    for root in roots {
+        if walk.seen.contains(&root) {
+            continue;
+        }
+
+        walk.part(root, &joins);
+
+        while let Some(node) = walk.queue.pop_front() {
+            for &next in joins.get(&node).into_iter().flatten() {
+                match next {
+                    _ if walk.seen.contains(&next) => {}
+                    Node::Part(_) => walk.part(next, &joins),
+                    Node::Mark(_) => {
+                        walk.mark(next, None);
+
+                        // What it leads to, straight after it.
+                        for &part in joins.get(&next).into_iter().flatten() {
+                            if matches!(part, Node::Part(_)) && !walk.seen.contains(&part) {
+                                walk.part(part, &joins);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Each part a cluster of the stage, and what leads to it with it.
+    let mut places: BTreeMap<Node, (u32, u32)> = BTreeMap::new();
+    let mut count = 0;
+
+    for (index, &(node, within)) in walk.order.iter().enumerate() {
+        if let Node::Part(_) = node {
+            count += 1;
+        }
+
+        let place = match (node, within) {
+            (Node::Part(_), _) => (count, index as u32),
+            // Wiring a part's own, with the part.
+            (Node::Mark(_), Some(part)) => places[&part],
+            (Node::Mark(_), None) => (count + 1, index as u32),
+        };
+
+        places.insert(node, place);
+    }
+
+    for group in groups.iter_mut() {
+        let Some(&(node, within, always)) = nodes.get(&group.strokes[0].mark) else {
+            continue;
+        };
+
+        match places.get(&node) {
+            Some(&(step, index)) => group.key = (stage::BODIES, 0, step, index, within),
+            // A line of no part the walk never reached, after it.
+            None if always => group.key = (stage::BODIES, 0, count + 2, 0, within),
+            None => {}
+        }
+    }
+}
+
+/// A diagram's growth as it is walked.
+#[derive(Default)]
+struct Walk {
+    seen: BTreeSet<Node>,
+    /// What is reached, in order, each mark of no part with the part whose
+    /// own wiring it is, if it is.
+    order: Vec<(Node, Option<Node>)>,
+    /// What is still to be gone on from.
+    queue: VecDeque<Node>,
+}
+
+impl Walk {
+    /// Reaches `node`, a mark of no part, as part `of`'s own wiring if it
+    /// is.
+    fn mark(&mut self, node: Node, of: Option<Node>) {
+        self.seen.insert(node);
+        self.order.push((node, of));
+        self.queue.push_back(node);
+    }
+
+    /// Reaches `part`, and with it the wiring that joins it only to itself
+    /// or to what is drawn: every mark of no part it touches from which
+    /// marks of no part lead to no part not yet reached.
+    fn part(&mut self, part: Node, joins: &BTreeMap<Node, Vec<Node>>) {
+        self.seen.insert(part);
+        self.order.push((part, None));
+        self.queue.push_back(part);
+
+        for &start in joins.get(&part).into_iter().flatten() {
+            if !matches!(start, Node::Mark(_)) || self.seen.contains(&start) {
+                continue;
+            }
+
+            // The wiring from `start`, as far as marks of no part go.
+            let mut wiring = vec![start];
+            let mut found = BTreeSet::from([start]);
+            let mut own = true;
+            let mut index = 0;
+
+            while index < wiring.len() {
+                for &next in joins.get(&wiring[index]).into_iter().flatten() {
+                    match next {
+                        Node::Part(_) if next != part && !self.seen.contains(&next) => own = false,
+                        Node::Mark(_) if !self.seen.contains(&next) && found.insert(next) => {
+                            wiring.push(next);
+                        }
+                        _ => {}
+                    }
+                }
+
+                index += 1;
+            }
+
+            if own {
+                for node in wiring {
+                    self.seen.insert(node);
+                    self.order.push((node, Some(part)));
+                }
             }
         }
     }
@@ -597,6 +1073,8 @@ mod tests {
         cuts: None,
         item: None,
         centre: None,
+        compass: None,
+        label: false,
     };
 
     /// The pen goes to the nearest line next, and draws it from its nearer
@@ -613,7 +1091,7 @@ mod tests {
             nearest: true,
             ..PlotStyle::DRAFTING
         };
-        let ordered = order(&style, strokes, &[EDGE; 3], Point::new(0, 0));
+        let ordered = order(&style, strokes, &[EDGE; 3], Point::new(0, 0), None);
         let marks: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
 
         assert_eq!(marks, [1, 2, 0]);
@@ -643,7 +1121,13 @@ mod tests {
         let strokes = (0..marks.len())
             .map(|mark| line(mark, (mark as i32 * 10, 0), (mark as i32 * 10, 5)))
             .collect();
-        let ordered = order(&PlotStyle::DRAFTING, strokes, &marks, Point::new(0, 0));
+        let ordered = order(
+            &PlotStyle::DRAFTING,
+            strokes,
+            &marks,
+            Point::new(0, 0),
+            None,
+        );
         let drawn: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
 
         assert_eq!(drawn, [4, 3, 1, 2, 0]);
@@ -701,8 +1185,8 @@ mod tests {
             ..PlotStyle::CAROUSEL
         };
         let metas = [EDGE; 120];
-        let greedy = order(&style(false), scattered(120), &metas, home);
-        let polished = order(&style(true), scattered(120), &metas, home);
+        let greedy = order(&style(false), scattered(120), &metas, home, None);
+        let polished = order(&style(true), scattered(120), &metas, home, None);
         let marks = |ordered: &Ordered| {
             let mut marks: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
             marks.sort_unstable();
@@ -737,7 +1221,7 @@ mod tests {
         strokes[2].tone = Tone::Faint;
         strokes[3].tone = Tone::Ink;
 
-        let ordered = order(&PlotStyle::CAROUSEL, strokes, &[EDGE; 4], home);
+        let ordered = order(&PlotStyle::CAROUSEL, strokes, &[EDGE; 4], home, None);
         let marks: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
         // Out to the far end of the far line, back along the near one.
         let shortest = 800f64.sqrt() + 200f64.sqrt() + 200f64.sqrt();
@@ -761,9 +1245,256 @@ mod tests {
             vec![letter, circle],
             &[EDGE; 2],
             Point::new(7, 10),
+            None,
         );
 
         assert_eq!(ordered.strokes[0].mark, 0);
         assert_eq!(ordered.strokes[1].start(), Point::new(0, 10));
+    }
+
+    /// A closed square loop of side `side` with its top left at `at`.
+    fn square(mark: usize, at: (i32, i32), side: i32) -> Stroke {
+        let (x, y) = at;
+        let mut pixels = quadrille::draw::shape::polyline(&[
+            Point::new(x, y),
+            Point::new(x + side, y),
+            Point::new(x + side, y + side),
+            Point::new(x, y + side),
+            Point::new(x, y),
+        ]);
+
+        pixels.dedup();
+        pixels.pop();
+
+        Stroke {
+            lit: vec![true; pixels.len()],
+            pixels,
+            tone: Tone::Ink,
+            form: Form::Loop,
+            mark,
+            piece: 0,
+        }
+    }
+
+    /// A circle round `centre` of `radius`, a loop from its top.
+    fn circle(mark: usize, centre: (i32, i32), radius: i32) -> Stroke {
+        let pixels = crate::draft::raster::ordered_circle(Point::new(centre.0, centre.1), radius);
+
+        Stroke {
+            lit: vec![true; pixels.len()],
+            pixels,
+            tone: Tone::Ink,
+            form: Form::Loop,
+            mark,
+            piece: 0,
+        }
+    }
+
+    /// The marks of `ordered`'s strokes, each once, in the order drawn.
+    fn drawn(ordered: &Ordered) -> Vec<usize> {
+        let mut marks: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.mark).collect();
+        marks.dedup();
+        marks
+    }
+
+    /// A drafting office lays down the axes of every view first, the
+    /// longest first, then the rest of the skeleton nearest first.
+    #[test]
+    fn the_axes_go_down_longest_first() {
+        let centre = Meta {
+            pass: Pass::Construction,
+            line: Some(Line::Centre),
+            ..EDGE
+        };
+        let strokes = vec![
+            line(0, (10, 10), (30, 10)),
+            line(1, (0, 100), (400, 100)),
+            line(2, (200, 0), (200, 250)),
+            circle(3, (200, 100), 60),
+            line(4, (350, 0), (350, 210)),
+        ];
+        let ordered = order(
+            &PlotStyle::DRAFTING,
+            strokes,
+            &[centre; 5],
+            Point::new(0, 0),
+            None,
+        );
+
+        assert_eq!(drawn(&ordered)[..3], [1, 2, 4]);
+        assert_eq!(ordered.gaps[1..], [Gap::Group; 4]);
+    }
+
+    /// Circles round one centre are drawn one after another, smallest
+    /// first, as a compass is opened out; a circle round another centre
+    /// keeps its place.
+    #[test]
+    fn concentric_circles_are_drawn_smallest_first() {
+        let round = |centre: (i32, i32)| Meta {
+            curved: true,
+            part: Some(0),
+            centre: Some(Point::new(centre.0, centre.1)),
+            ..EDGE
+        };
+        let strokes = vec![
+            circle(0, (100, 100), 40),
+            circle(1, (100, 100), 12),
+            circle(2, (300, 100), 20),
+            circle(3, (100, 100), 25),
+        ];
+        let marks = [
+            round((100, 100)),
+            round((100, 100)),
+            round((300, 100)),
+            round((100, 100)),
+        ];
+        let ordered = order(
+            &PlotStyle::DRAFTING,
+            strokes,
+            &marks,
+            Point::new(0, 100),
+            None,
+        );
+        let marks = drawn(&ordered);
+        let first = marks
+            .iter()
+            .position(|&mark| mark == 1)
+            .expect("The smallest");
+
+        assert_eq!(marks[first..first + 3], [1, 3, 0]);
+    }
+
+    /// A balloon is drawn from the dot on its part: the dot, the leader out
+    /// from it, the circle from where the leader meets it, the number.
+    #[test]
+    fn a_balloon_is_drawn_from_its_dot_outwards() {
+        let target = Point::new(40, 40);
+        let centre = Point::new(100, 20);
+        let mut leader = line(0, (93, 22), (40, 40));
+        let mut dot = line(0, (40, 40), (40, 40));
+        let mut ring = circle(0, (100, 20), 7);
+        let mut number = line(0, (99, 17), (99, 23));
+
+        dot.form = Form::Touch(target);
+        dot.pixels = vec![target];
+        dot.lit = vec![true];
+        number.form = Form::Glyph;
+        (leader.piece, dot.piece, ring.piece, number.piece) = (0, 1, 3, 4);
+
+        let balloon = Meta {
+            pass: Pass::Balloons,
+            item: Some(1),
+            ..EDGE
+        };
+        let ordered = order(
+            &PlotStyle::DRAFTING,
+            vec![leader, dot, ring, number],
+            &[balloon],
+            Point::new(0, 0),
+            None,
+        );
+        let pieces: Vec<usize> = ordered.strokes.iter().map(|stroke| stroke.piece).collect();
+        let leader = &ordered.strokes[1];
+        let ring = &ordered.strokes[2];
+
+        assert_eq!(pieces, [1, 0, 3, 4]);
+        assert_eq!(leader.start(), target);
+        assert!(distance(ring.start(), leader.end()) <= 2);
+        assert!(distance(ring.start(), centre) > distance(leader.end(), centre) - 2);
+    }
+
+    /// A loop goes round the way the pen was heading as it came to it.
+    #[test]
+    fn a_loop_goes_round_the_way_the_pen_is_heading() {
+        for (from, clockwise) in [((0, 60), true), ((200, 60), false)] {
+            // Coming to the circle's top from the left, or the right.
+            let mut strokes = vec![circle(0, (100, 100), 40)];
+
+            onward(&mut strokes, Point::new(from.0, from.1));
+
+            let second = strokes[0].pixels[3];
+
+            assert_eq!(strokes[0].pixels[0], Point::new(100, 60));
+            assert_eq!(second.x > 100, clockwise, "from {from:?}");
+        }
+    }
+
+    /// A diagram grows from its first part along what touches: each part
+    /// drawn whole, its own wiring with its lines and its lettering last,
+    /// straight after the wire that leads to it; a beat before each part
+    /// and what leads to it; a line nothing reaches after the walk.
+    #[test]
+    fn a_diagram_grows_from_its_first_part_along_its_wires() {
+        let boxed = |part| Meta {
+            curved: true,
+            part: Some(part),
+            ..EDGE
+        };
+        let label = |part| Meta {
+            pass: Pass::Annotation,
+            line: None,
+            part: Some(part),
+            label: true,
+            ..EDGE
+        };
+        let lettered = |mark, at: (i32, i32)| {
+            let mut stroke = line(mark, at, (at.0 + 4, at.1));
+            stroke.form = Form::Glyph;
+            stroke
+        };
+        let marks = [
+            boxed(0),
+            label(0),
+            EDGE,
+            boxed(1),
+            label(1),
+            EDGE,
+            boxed(2),
+            boxed(2),
+            EDGE,
+            label(2),
+            EDGE,
+        ];
+        let strokes = vec![
+            square(0, (0, 0), 20),
+            lettered(1, (5, 8)),
+            line(2, (21, 10), (59, 10)),
+            square(3, (60, 0), 20),
+            lettered(4, (65, 8)),
+            line(5, (70, 21), (70, 59)),
+            square(6, (60, 60), 20),
+            square(7, (120, 60), 20),
+            line(8, (81, 70), (119, 70)),
+            lettered(9, (65, 68)),
+            line(10, (300, 300), (320, 300)),
+        ];
+        let touching: Touching = [(0, 2), (2, 3), (3, 5), (5, 6), (6, 8), (7, 8)]
+            .into_iter()
+            .collect();
+        let ordered = order(
+            &PlotStyle::DRAFTING,
+            strokes,
+            &marks,
+            Point::new(0, 0),
+            Some(&touching),
+        );
+
+        assert_eq!(drawn(&ordered), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(
+            ordered.gaps,
+            [
+                Gap::Stage,
+                Gap::Group,
+                Gap::Cluster,
+                Gap::Group,
+                Gap::Group,
+                Gap::Cluster,
+                Gap::Group,
+                Gap::Group,
+                Gap::Group,
+                Gap::Group,
+                Gap::Cluster
+            ]
+        );
     }
 }

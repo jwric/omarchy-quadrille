@@ -6,24 +6,28 @@
 //! lit for the frame the pen settles after a long move; and round a swatch
 //! of the pen it takes up at the carousel.
 //!
-//! The carriage the head rides on shows as a tick in each of the sheet's
-//! zone bands, level with the head; on a gantry plotter as its arm, a
-//! hairline across the sheet under the ink, with a tick at each end.
+//! The carriage the head rides on shows as a tick in the sheet's zone bands
+//! above and below the head; on a gantry plotter as its arm, a hairline
+//! across the sheet under the ink, with a tick at each end.
+//!
+//! A draughtsman's pen leaves its ink wet behind it for a moment, in the
+//! accent until it dries to its tone, a tail that is longer the faster the
+//! pen goes; and draws a circle with a compass, whose arm reaches from its
+//! point at the centre out to the pen.
 //!
 //! The renderer repaints each place a frame changes, every drawing that
 //! crosses it again, so how the ticks are drawn decides what they cost: the
-//! two at a gantry's ends as one path, the same column as the arm, and the
-//! two either side of a head each on its own, not the width of the sheet
-//! between them. A gantry plotter draws no ticks either side of its head,
-//! which its arm shows the place of; two more places to repaint every
-//! frame would take the plot past its share of the frame.
+//! two at a gantry's ends as one path, the same column as the arm; with no
+//! arm, each on its own, not the height of the sheet between them. There
+//! are no ticks either side of the head as well: two more places to repaint
+//! every frame would take the plot past its share of the frame.
 use iced_core::{Point, Rectangle};
 use iced_widget::graphics::geometry;
 use quadrille::Palette;
 use quadrille::draw::Pen;
 
 use crate::draft::Tone;
-use crate::draft::raster::{colour, rect};
+use crate::draft::raster::{self, colour, rect};
 
 /// Where the pen's head is, and how it stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +82,27 @@ pub fn draw<Renderer: geometry::Renderer>(
     }
 }
 
+/// Draws the ink still wet, `pixels`.
+pub fn wet<Renderer: geometry::Renderer>(
+    pen: &mut Pen<'_, Renderer>,
+    pixels: &[Point<i32>],
+    palette: &Palette,
+) {
+    raster::fill_pixels(pen, pixels, palette.accent);
+}
+
+/// Draws a compass drawing round `centre` with the pen at `head`: its arm
+/// a faint hairline, its point a dot in the accent.
+pub fn compass<Renderer: geometry::Renderer>(
+    pen: &mut Pen<'_, Renderer>,
+    centre: Point<i32>,
+    head: Point<i32>,
+    palette: &Palette,
+) {
+    pen.line(centre, head, palette.faint);
+    pen.pixel(centre, palette.accent);
+}
+
 /// How long a carriage tick is.
 const TICK: i32 = 3;
 
@@ -101,23 +126,24 @@ pub fn ticks_across<Renderer: geometry::Renderer>(
     }
 }
 
-/// Draws the carriage's ticks either side of a head at `y`, in the zone
-/// bands as [`ticks_across`] draws them above and below it, each a path of
-/// its own.
-pub fn ticks_down<Renderer: geometry::Renderer>(
+/// Draws the carriage's ticks above and below a head at `x` on a plotter
+/// with no arm to show where it is: in the zone bands as [`ticks_across`]
+/// draws them, each a path of its own, so each is repainted alone and not
+/// the height of the sheet between them.
+pub fn ticks<Renderer: geometry::Renderer>(
     pen: &mut Pen<'_, Renderer>,
-    y: i32,
+    x: i32,
     trim: Rectangle<i32>,
     border: Rectangle<i32>,
     palette: &Palette,
 ) {
-    let right = border.x + border.width - 1;
+    let bottom = border.y + border.height - 1;
 
-    if y > trim.y && y < trim.y + trim.height - 1 {
+    if x > trim.x && x < trim.x + trim.width - 1 {
         pen.flush();
-        pen.hline(border.x - TICK, border.x - 1, y, palette.accent);
+        pen.vline(x, border.y - TICK, border.y - 1, palette.accent);
         pen.flush();
-        pen.hline(right + 1, right + TICK, y, palette.accent);
+        pen.vline(x, bottom + 1, bottom + TICK, palette.accent);
         pen.flush();
     }
 }

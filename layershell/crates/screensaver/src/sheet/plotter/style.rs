@@ -58,8 +58,8 @@ pub struct PlotStyle {
     /// Whether the pen's head is shown, and the carriage with it.
     pub head: bool,
     /// Whether the carriage is shown riding its rails: a tick in the
-    /// sheet's zone bands level with the head, above and below it, and
-    /// either side of it but on a gantry, whose arm shows that.
+    /// sheet's zone bands above and below the head while it plots the
+    /// sheet, and at the ends of a gantry's arm as it wipes the sheet too.
     pub ticks: bool,
     /// Whether the carriage's arm is shown across the sheet, under the ink,
     /// at the head: a gantry plotter's.
@@ -69,6 +69,20 @@ pub struct PlotStyle {
     pub details: bool,
     /// How the sheet is wiped.
     pub wipe: Wipe,
+    /// Whether a diagram, a sheet not drawn to scale, grows from its first
+    /// part along what joins it to the others, each part drawn whole with
+    /// its lettering as the pen reaches it, rather than part by part.
+    pub grow: bool,
+    /// Seconds the ink stays wet behind the pen, shown in the accent until
+    /// it dries to its tone; none if nought.
+    pub wet: f32,
+    /// Whether a compass is seen drawing a circle or an arc: an arm from
+    /// its point at the centre out to the pen.
+    pub compass: bool,
+    /// Whether the title block, the notes and the parts list fill in as the
+    /// drawing proceeds, as a draughtsman fills in a printed form, rather
+    /// than typing themselves in first.
+    pub fills: bool,
 }
 
 /// How the pen moves.
@@ -180,6 +194,9 @@ pub enum Circles {
     /// centre, goes out to the right, round anticlockwise, and back to the
     /// centre.
     Centred,
+    /// Wherever is nearest the pen, and round whichever way carries on the
+    /// way it was going, as a hand does.
+    Onward,
 }
 
 /// How the sheet is wiped.
@@ -248,6 +265,10 @@ impl PlotStyle {
         gantry: false,
         details: false,
         wipe: Wipe::Line,
+        grow: false,
+        wet: 0.0,
+        compass: false,
+        fills: false,
     };
 
     /// A carousel plotter at work, after HP's: pen by pen, lightest first,
@@ -300,11 +321,20 @@ impl PlotStyle {
         gantry: true,
         details: true,
         wipe: Wipe::Sweep,
+        grow: false,
+        wet: 0.0,
+        compass: false,
+        fills: false,
     };
 
-    /// A drafting office's order and a hand-like carriage: the skeleton,
-    /// then each part's body, its lining, the annotation, the balloons,
-    /// with a beat between.
+    /// A drafting office: the skeleton of every view, then each part's
+    /// body in turn (a diagram grown from its first part along its wires),
+    /// its lining, the annotation, the balloons each with its row of the
+    /// parts list, and the sign-off, with a beat between; a hand-like
+    /// carriage lettering a stroke at a time, its ink wet behind it and a
+    /// compass drawing its circles; the form filling in as it goes, the
+    /// details plotted by the same pen and the sheet wiped from where it
+    /// parks.
     pub const DRAFTING: Self = Self {
         name: "drafting",
         length: 10.0,
@@ -325,9 +355,9 @@ impl PlotStyle {
         order: Order::Stages,
         nearest: true,
         lining: Lining::Diagonals,
-        glyphs: Glyphs::Touched,
-        circles: Circles::Seamed,
-        polish: false,
+        glyphs: Glyphs::Traced,
+        circles: Circles::Onward,
+        polish: true,
         traces_wait: true,
         lettering: 45.0,
         drop: Some(Drop {
@@ -342,10 +372,14 @@ impl PlotStyle {
         from_home: true,
         park: true,
         head: true,
-        ticks: false,
+        ticks: true,
         gantry: false,
-        details: false,
-        wipe: Wipe::Line,
+        details: true,
+        wipe: Wipe::Sweep,
+        grow: true,
+        wet: 0.05,
+        compass: true,
+        fills: true,
     };
 
     /// A quick study: the skeleton, then each part whole in eased strokes,
@@ -381,6 +415,10 @@ impl PlotStyle {
         gantry: false,
         details: false,
         wipe: Wipe::Line,
+        grow: false,
+        wet: 0.0,
+        compass: false,
+        fills: false,
     };
 
     /// Every preset, today's first.
