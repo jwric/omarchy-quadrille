@@ -68,8 +68,16 @@ ink wet in the accent for a moment behind it, a compass arm out to it as it
 draws a circle; and the form fills in as the drawing reaches it, the notes with
 the annotation, each part's row as its balloon's number is drawn, the scale,
 sheet and date at the sign-off. It plots the details too, and the sheet is
-wiped from where it parks. `quadrille-screensaver plot-stats` shows how each
-style spends each sheet's plot.
+wiped from where it parks. `quick` is a quick study: the skeleton as the
+drafting office lays it down, then each part whole, its lining, its
+dimensions and its balloon with it, then what is said of no part, a diagram
+grown along its wires as the office grows it. Each stroke is eased in and out
+as a whole and the pen hops from one to the next, typing words in a burst, a
+comet of wet ink behind it and its longer hops dotted across the bare paper.
+It comes in at its first stroke and lifts off its last as the subject starts
+to run, plots each detail the same way, and a line eases across to wipe the
+sheet. `quadrille-screensaver plot-stats` shows how each style spends each
+sheet's plot.
 
 ## A drawing office's conventions
 
@@ -115,6 +123,7 @@ quadrille-screensaver render --subject engine --at 24 --physical    # at the pan
 quadrille-screensaver bench --output laptop
 quadrille-screensaver render --subject gears --at 3,6 --plot drafting --machine fixture
 quadrille-screensaver render --subject gears --at 0,13 --fps 30 --plot carousel --machine fixture   # every frame
+quadrille-screensaver render --subject topology --at 0,7 --fps 30 --plot quick --machine fixture
 quadrille-screensaver plot-stats --machine fixture
 ```
 
