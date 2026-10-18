@@ -114,7 +114,7 @@ Tested, not assumed.
 | Replace a first-party service, panel or menu | `omarchy plugin clone`, or a manifest with `omarchy.clonedFrom`; IPC and `summon` routing follow the clone | yes: OSD, notifications, menu |
 | Add a bar widget | `kind: bar-widget`, `barWidget` entry | yes: `quadrille.sysmon` |
 | Carry theme data of its own | extra table in `shell.toml`, read from `Color.shellValues` | yes: `[quadrille]` |
-| Read host singletons | `import qs.Commons`, `qs.Ui` from a plugin directory works; singletons are the host's (live theme) | yes |
+| Read host singletons | `import qs.Commons`, `qs.Ui` from a plugin directory works; singletons are the host's (live theme). Reach the colour singleton as `Commons.Color` (`import qs.Commons as Commons`), never a bare `Color`: see the Qt 6.12 quirk below | yes |
 
 | Cannot (without a worse trade) | Why |
 |---|---|
@@ -140,6 +140,16 @@ Quirks met on the way, all outside our code:
 * **A notification daemon must not be hot-swapped**: two `NotificationServer`s
   contend for the D-Bus name and the loser never retries. Enable or disable the
   notification clone and restart the shell.
+* **Qt 6.12 has a `Color` singleton of its own** (`QtQuick`: `rgba`, `hsla`,
+  `fromString`, `transparent`...), and it wins over `qs.Commons`'s `Color` for a
+  bare `Color` even when `qs.Commons` is imported last. `Color.shellValues`,
+  `Color.menu`, `Color.accent` were all `undefined`, silently: every `Role` came
+  out empty (the bar, the theme picker and the popups drew nothing sensible) and
+  the log filled with `Cannot read property ... of undefined`. Omarchy's own shell
+  already says `Commons.Color` everywhere (257 uses, no bare one), so a clone does
+  the same: `import qs.Commons as Commons` beside the plain import. `Style`, `Util`
+  and `Border` are not shadowed. (Seen on the update to Qt 6.12.0 and quickshell
+  0.3.2; the same trap as `Palette`, below.)
 * The plugin watcher is `inotifywait -r` on `~/.config/omarchy/plugins`, which
   does not follow symlinks: editing files in this repo does not reload anything.
   `omarchy-shell shell rescanPlugins` does, for non-`keepLoaded` plugins.

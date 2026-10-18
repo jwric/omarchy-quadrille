@@ -3,6 +3,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import "ImagePickerModel.js" as ImagePickerModel
 import "Q"
 
@@ -33,11 +34,11 @@ Item {
   // Bound to the central [image-picker] section in shell.toml via Color.qml.
   // `dimColor` tints unselected slices and text outlines on top of the scrim;
   // it intentionally tracks the foundational background, not a surface role.
-  property color dimColor: Color.background
-  property color foreground: Color.imagePicker.text
-  property color scrim: Color.imagePicker.scrim
-  property color selectedBorder: Color.imagePicker.selectedBorder
-  property color unselectedBorder: Color.imagePicker.unselectedBorder
+  property color dimColor: Commons.Color.background
+  property color foreground: Commons.Color.imagePicker.text
+  property color scrim: Commons.Color.imagePicker.scrim
+  property color selectedBorder: Commons.Color.imagePicker.selectedBorder
+  property color unselectedBorder: Commons.Color.imagePicker.unselectedBorder
   // The grid, in vpx: thumbnails of 112 x 48 (a wallpaper's 2.4 : 1), three to a
   // row, the name under each when it fits.
   readonly property var g: Px.forWindow(panel)

@@ -3,6 +3,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 
 // quadrille's palette, as roles (`Role.ink`, `Role.ground`, ...). Nothing in the
 // kit names a hex. (Not called Palette: QtQuick has a type of that name.)
@@ -17,7 +18,7 @@ import qs.Commons
 QtObject {
   id: root
 
-  readonly property var sv: Color.shellValues
+  readonly property var sv: Commons.Color.shellValues
 
   // Role `key` as stated by the theme, or `fallback`.
   function stated(key, fallback) {
@@ -36,20 +37,20 @@ QtObject {
   function shellColor(key, fallback) {
     var v = sv[key]
     if (typeof v !== "string" || v.length === 0) return fallback
-    return opaque(Color.flatColor(v, fallback))
+    return opaque(Commons.Color.flatColor(v, fallback))
   }
 
   // colors.toml, for the hues shell.toml does not carry.
   property var terminal: ({})
   property FileView colorsFile: FileView {
-    path: Color.currentThemePath + "/colors.toml"
+    path: Commons.Color.currentThemePath + "/colors.toml"
     watchChanges: false
     printErrors: false
     onLoaded: root.terminal = root.parseColors(text())
     onLoadFailed: root.terminal = ({})
   }
   property Connections themeWatch: Connections {
-    target: Color
+    target: Commons.Color
     function onShellValuesChanged() { root.colorsFile.reload() }
   }
   function parseColors(raw) {
@@ -66,8 +67,8 @@ QtObject {
     return typeof v === "string" ? Qt.color(v) : fallback
   }
 
-  readonly property color void_: stated("void", opaque(Color.background))
-  readonly property color ground: stated("ground", opaque(Color.bar.background))
+  readonly property color void_: stated("void", opaque(Commons.Color.background))
+  readonly property color ground: stated("ground", opaque(Commons.Color.bar.background))
   readonly property color raised: stated("raised", shellColor("tooltip.background", ground))
   // The next step along the surfaces, from the two before it.
   readonly property color hover: stated("hover", Qt.rgba(
@@ -75,14 +76,14 @@ QtObject {
     Math.max(0, Math.min(1, 2 * raised.g - ground.g)),
     Math.max(0, Math.min(1, 2 * raised.b - ground.b)), 1))
   readonly property color edge: stated("edge", shellColor("controls.normal-border", muted))
-  readonly property color ink: stated("ink", opaque(Color.foreground))
-  readonly property color muted: stated("muted", opaque(Color.muted))
+  readonly property color ink: stated("ink", opaque(Commons.Color.foreground))
+  readonly property color muted: stated("muted", opaque(Commons.Color.muted))
   readonly property color faint: stated("faint", mix(muted, ground, 0.5))
   readonly property color line: stated("line", terminalColor("brown", mix(muted, ground, 0.35)))
-  readonly property color accent: stated("accent", opaque(Color.accent))
+  readonly property color accent: stated("accent", opaque(Commons.Color.accent))
   readonly property color onAccent: stated("on_accent", shellColor("menu.selected-text", void_))
   readonly property color highlight: stated("highlight", mix(ink, ground, 0.7))
   readonly property color live: stated("live", terminalColor("green", ink))
   readonly property color caution: stated("caution", terminalColor("yellow", accent))
-  readonly property color alarm: stated("alarm", opaque(Color.urgent))
+  readonly property color alarm: stated("alarm", opaque(Commons.Color.urgent))
 }

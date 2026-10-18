@@ -2,6 +2,7 @@ import Quickshell
 import Quickshell.Wayland
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import "ReminderFlowModel.js" as ReminderFlowModel
 import "Q"
 
@@ -119,8 +120,8 @@ Item {
 
     Scrim {
       visible: settle.ready
-      tone: Qt.rgba(Color.menu.scrim.r, Color.menu.scrim.g, Color.menu.scrim.b, 1)
-      density: Color.menu.scrim.a
+      tone: Qt.rgba(Commons.Color.menu.scrim.r, Commons.Color.menu.scrim.g, Commons.Color.menu.scrim.b, 1)
+      density: Commons.Color.menu.scrim.a
     }
 
     MouseArea {

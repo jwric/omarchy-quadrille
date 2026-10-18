@@ -3,6 +3,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Hyprland
 import qs.Commons
+import qs.Commons as Commons
 
 // The pixel grid, per window.
 //
@@ -30,7 +31,7 @@ QtObject {
 
   // Logical px per vpx the theme was made for.
   readonly property int target: {
-    var stated = parseInt(Color.shellValues["quadrille.unit"], 10)
+    var stated = parseInt(Commons.Color.shellValues["quadrille.unit"], 10)
     if (isFinite(stated) && stated > 0) return stated
     return Math.max(1, Math.round(Style.font.body / 11))
   }

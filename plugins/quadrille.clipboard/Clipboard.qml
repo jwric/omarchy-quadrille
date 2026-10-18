@@ -3,6 +3,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "ClipboardHistory.js" as ClipboardHistory
 import "Q"
@@ -33,7 +34,7 @@ Item {
   readonly property int rowVpx: 14
   readonly property int innerVpx: listVpx + 4 + 1 + 4 + previewVpx
   // theme tokens the logic below still reads
-  property color scrim: Color.menu.scrim
+  property color scrim: Commons.Color.menu.scrim
   property int historyLimit: 300
 
   function open(payloadJson) {

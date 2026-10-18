@@ -5,6 +5,7 @@ import Quickshell.Wayland
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "BarModel.js" as BarModel
 import "Q"
@@ -95,8 +96,8 @@ Item {
   // Bound to the central Color singleton so the bar tracks shell.toml's
   // [bar] section. Property names kept for the rest of this file's bindings.
   property color themeForeground: Role.ink
-  property color themeContrastForeground: Color.background
-  property color transparentForeground: Color.bar.text
+  property color themeContrastForeground: Commons.Color.background
+  property color transparentForeground: Commons.Color.bar.text
   property color foreground: themeForeground
   property color barForeground: useTransparentForeground ? transparentForeground : themeForeground
   // Nothing tweens. Stock widgets ask for this flag before easing a colour.
